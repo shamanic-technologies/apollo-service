@@ -1,5 +1,4 @@
 import { Router } from "express";
-import { db } from "../db/index.js";
 import { sql } from "drizzle-orm";
 
 const router = Router();
@@ -11,13 +10,18 @@ router.get("/health", (req, res) => {
 router.get("/health/debug", async (req, res) => {
   const keysServiceUrl = process.env.KEYS_SERVICE_URL || "not set";
   const dbUrl = process.env.APOLLO_SERVICE_DATABASE_URL;
-  
+
   let dbStatus = "unknown";
-  try {
-    await db.execute(sql`SELECT 1`);
-    dbStatus = "connected";
-  } catch (e: any) {
-    dbStatus = `error: ${e.message}`;
+  if (dbUrl) {
+    try {
+      const { db } = await import("../db/index.js");
+      await db.execute(sql`SELECT 1`);
+      dbStatus = "connected";
+    } catch (e: any) {
+      dbStatus = `error: ${e.message}`;
+    }
+  } else {
+    dbStatus = "not configured";
   }
 
   let keysServiceStatus = "unknown";

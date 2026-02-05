@@ -3,8 +3,9 @@ import "./instrument.js";
 import * as Sentry from "@sentry/node";
 import express from "express";
 import cors from "cors";
+import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
-import { db } from "./db/index.js";
+import { getSql } from "./db/index.js";
 import healthRoutes from "./routes/health.js";
 import searchRoutes from "./routes/search.js";
 import referenceRoutes from "./routes/reference.js";
@@ -37,17 +38,29 @@ app.use((err: Error, req: express.Request, res: express.Response, next: express.
 
 // Only start server if not in test environment
 if (process.env.NODE_ENV !== "test") {
-  migrate(db, { migrationsFolder: "./drizzle" })
-    .then(() => {
-      console.log("Migrations complete");
-      app.listen(Number(PORT), "::", () => {
-        console.log(`Apollo service running on port ${PORT}`);
-      });
-    })
-    .catch((err) => {
-      console.error("Migration failed:", err);
-      process.exit(1);
+  const dbUrl = process.env.APOLLO_SERVICE_DATABASE_URL;
+
+  const startServer = () => {
+    app.listen(Number(PORT), "::", () => {
+      console.log(`Apollo service running on port ${PORT}`);
     });
+  };
+
+  if (dbUrl) {
+    const migrateDb = drizzle(getSql());
+    migrate(migrateDb, { migrationsFolder: "./drizzle" })
+      .then(() => {
+        console.log("Migrations complete");
+        startServer();
+      })
+      .catch((err) => {
+        console.error("Migration failed:", err);
+        process.exit(1);
+      });
+  } else {
+    console.warn("APOLLO_SERVICE_DATABASE_URL not set, skipping migrations");
+    startServer();
+  }
 }
 
 export default app;
