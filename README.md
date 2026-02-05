@@ -1,2 +1,117 @@
-# apollo-service
-Open Source service to manage Apollo
+# Apollo Service
+
+Apollo.io integration service for lead finding and enrichment.
+
+## Features
+
+- Search for people via Apollo API
+- Store and track enrichment data
+- Integration with runs-service for cost tracking
+- Reference data caching (industries, employee ranges)
+
+## Setup
+
+### Prerequisites
+
+- Node.js 20+
+- pnpm
+- PostgreSQL database
+
+### Environment Variables
+
+```bash
+# Copy example env file
+cp .env.example .env
+```
+
+Required variables:
+- `APOLLO_SERVICE_DATABASE_URL` - PostgreSQL connection string
+- `KEYS_SERVICE_URL` - URL for keys-service (BYOK key retrieval)
+- `RUNS_SERVICE_URL` - URL for runs-service (cost tracking)
+- `RUNS_SERVICE_API_KEY` - API key for runs-service
+
+Optional:
+- `SENTRY_DSN` - Sentry error tracking
+- `PORT` - Server port (default: 3004)
+
+### Installation
+
+```bash
+pnpm install
+```
+
+### Database Setup
+
+```bash
+# Generate migrations
+pnpm db:generate
+
+# Run migrations
+pnpm db:migrate
+
+# Or push schema directly (dev only)
+pnpm db:push
+```
+
+### Development
+
+```bash
+pnpm dev
+```
+
+### Production
+
+```bash
+pnpm build
+pnpm start
+```
+
+## API Endpoints
+
+### Search
+
+- `POST /search` - Search for people via Apollo
+- `GET /searches/:runId` - Get all searches for a run
+- `GET /enrichments/:runId` - Get all enrichments for a run
+- `POST /stats` - Get aggregated stats for multiple run IDs
+
+### Reference Data
+
+- `GET /reference/industries` - Get Apollo industries list (24h cached)
+- `GET /reference/employee-ranges` - Get employee range options
+
+### Health
+
+- `GET /health` - Basic health check
+- `GET /health/debug` - Debug endpoint with service status
+
+## Authentication
+
+All endpoints (except health) require `x-clerk-org-id` header for organization context.
+
+## Testing
+
+```bash
+# Run all tests
+pnpm test
+
+# Run unit tests only
+pnpm test:unit
+
+# Run integration tests only
+pnpm test:integration
+
+# Watch mode
+pnpm test:watch
+```
+
+## Docker
+
+```bash
+docker build -t apollo-service .
+docker run -p 3004:3004 --env-file .env apollo-service
+```
+
+## Railway Deployment
+
+The service includes a `railway.json` configuration for easy deployment to Railway.
