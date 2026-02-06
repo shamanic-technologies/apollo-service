@@ -26,7 +26,7 @@ cp .env.example .env
 
 Required variables:
 - `APOLLO_SERVICE_DATABASE_URL` - PostgreSQL connection string
-- `KEYS_SERVICE_URL` - URL for keys-service (BYOK key retrieval)
+- `KEY_SERVICE_URL` - URL for key-service (BYOK key retrieval)
 - `RUNS_SERVICE_URL` - URL for runs-service (cost tracking)
 - `RUNS_SERVICE_API_KEY` - API key for runs-service
 
