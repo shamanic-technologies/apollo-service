@@ -205,6 +205,12 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
       peopleCount: result.people.length,
       totalEntries,
       people: transformedPeople,
+      pagination: {
+        page: apolloParams.page ?? 1,
+        perPage: apolloParams.per_page ?? 25,
+        totalEntries,
+        totalPages: Math.ceil(totalEntries / (apolloParams.per_page ?? 25)),
+      },
     });
   } catch (error) {
     console.error("[Apollo Service][POST /search] ERROR:", error);
