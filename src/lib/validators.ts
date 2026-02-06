@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { getIndustries, getEmployeeRanges } from "./reference-cache.js";
 
 /**
  * Valid Apollo employee range values (comma-separated min,max format)
@@ -19,8 +18,9 @@ const VALID_EMPLOYEE_RANGES = [
 ] as const;
 
 /**
- * Static Zod schema for people search params (camelCase input format).
- * Industry tag IDs require async validation — handled separately.
+ * Zod schema for people search params (camelCase input format).
+ * Industry tag IDs are passed through to Apollo's API without local validation
+ * (no public API exists to fetch valid tag IDs).
  */
 export const peopleSearchSchema = z.object({
   personTitles: z.array(z.string().min(1)).optional(),
@@ -85,69 +85,25 @@ function formatZodErrors(error: z.ZodError, input: unknown): ValidationError[] {
 }
 
 /**
- * Validate industry tag IDs against Apollo's live /industries endpoint.
- * Returns errors for any invalid IDs.
- */
-async function validateIndustryTagIds(
-  tagIds: string[],
-  apiKey: string,
-  orgId: string
-): Promise<ValidationError[]> {
-  const industries = await getIndustries(apiKey, orgId);
-  const validTagIds = new Set(industries.map((i) => i.tag_id));
-
-  return tagIds
-    .filter((id) => !validTagIds.has(id))
-    .map((id) => ({
-      field: "qOrganizationIndustryTagIds",
-      message: `Invalid industry tag ID: "${id}"`,
-      value: id,
-    }));
-}
-
-/**
  * Validate a batch of items against the specified endpoint schema.
- * Includes async industry tag ID validation for search endpoint.
  */
-export async function validateBatch(
+export function validateBatch(
   endpoint: EndpointType,
-  items: unknown[],
-  apiKey: string,
-  orgId: string
-): Promise<ValidationResult[]> {
+  items: unknown[]
+): ValidationResult[] {
   const schema = schemaByEndpoint[endpoint];
 
-  const results: ValidationResult[] = [];
-
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
+  return items.map((item, i) => {
     const parsed = schema.safeParse(item);
-    const errors: ValidationError[] = [];
+    const errors: ValidationError[] = parsed.success
+      ? []
+      : formatZodErrors(parsed.error, item);
 
-    if (!parsed.success) {
-      errors.push(...formatZodErrors(parsed.error, item));
-    }
-
-    // Async: validate industry tag IDs for search endpoint
-    if (endpoint === "search" && parsed.success) {
-      const data = parsed.data as z.infer<typeof peopleSearchSchema>;
-      if (data.qOrganizationIndustryTagIds?.length) {
-        const industryErrors = await validateIndustryTagIds(
-          data.qOrganizationIndustryTagIds,
-          apiKey,
-          orgId
-        );
-        errors.push(...industryErrors);
-      }
-    }
-
-    results.push({
+    return {
       index: i,
       valid: errors.length === 0,
       endpoint,
       errors,
-    });
-  }
-
-  return results;
+    };
+  });
 }
