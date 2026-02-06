@@ -75,6 +75,45 @@ pnpm start
 - `GET /enrichments/:runId` - Get all enrichments for a run
 - `POST /stats` - Get aggregated stats for multiple run IDs
 
+### Validation
+
+- `POST /validate` - Validate a batch of items against Apollo's expected format
+
+**Body:**
+```json
+{
+  "endpoint": "search" | "enrich" | "bulk-enrich",
+  "items": [...]
+}
+```
+
+**Response:**
+```json
+{
+  "results": [
+    {
+      "index": 0,
+      "valid": true,
+      "endpoint": "search",
+      "errors": []
+    },
+    {
+      "index": 1,
+      "valid": false,
+      "endpoint": "search",
+      "errors": [
+        { "field": "organizationNumEmployeesRanges.0", "message": "Invalid enum value...", "value": "bad" }
+      ]
+    }
+  ]
+}
+```
+
+Validates:
+- **search**: employee ranges (exact enum), industry tag IDs (live validation against Apollo API), pagination limits (page 1-500, perPage 1-100), non-empty strings
+- **enrich**: requires Apollo person `id`
+- **bulk-enrich**: requires `personIds` array (1-10 items)
+
 ### Reference Data
 
 - `GET /reference/industries` - Get Apollo industries list (24h cached)
