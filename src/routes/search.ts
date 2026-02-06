@@ -24,7 +24,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
       searchParams,
     });
 
-    // Get Apollo API key from keys-service
+    // Get Apollo API key from key-service
     const apolloApiKey = await getByokKey(req.clerkOrgId!, "apollo");
 
     // Call Apollo API
