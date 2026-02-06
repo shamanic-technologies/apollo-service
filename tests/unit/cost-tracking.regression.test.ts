@@ -21,7 +21,7 @@ const mockCreateRun = vi.fn();
 const mockUpdateRun = vi.fn().mockResolvedValue({});
 const mockAddCosts = vi.fn().mockResolvedValue({ costs: [] });
 
-vi.mock("@mcpfactory/runs-client", () => ({
+vi.mock("../../src/lib/runs-client.js", () => ({
   ensureOrganization: (...args: unknown[]) => mockEnsureOrganization(...args),
   createRun: (...args: unknown[]) => mockCreateRun(...args),
   updateRun: (...args: unknown[]) => mockUpdateRun(...args),
