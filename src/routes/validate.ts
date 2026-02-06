@@ -36,7 +36,7 @@ router.post("/validate", serviceAuth, async (req: AuthenticatedRequest, res) => 
 
     res.json({ results });
   } catch (error) {
-    console.error("Validation error:", error);
+    console.error("[Apollo Service] Validation error:", error);
     res.status(500).json({
       error: error instanceof Error ? error.message : "Internal server error",
     });
