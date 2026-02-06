@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloPeopleSearches, apolloPeopleEnrichments } from "../db/schema.js";
 import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
-import { searchPeople, ApolloSearchParams, ApolloPerson } from "../lib/apollo-client.js";
+import { searchPeople, enrichPerson, ApolloSearchParams, ApolloPerson } from "../lib/apollo-client.js";
 import { getByokKey } from "../lib/keys-client.js";
 import { ensureOrganization, createRun, updateRun, addCosts } from "../lib/runs-client.js";
 
@@ -214,6 +214,105 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
     });
   } catch (error) {
     console.error("[Apollo Service][POST /search] ERROR:", error);
+    res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
+  }
+});
+
+/**
+ * POST /enrich - Enrich a single person via Apollo to reveal their email
+ * Body: { apolloPersonId: string, runId?: string }
+ */
+router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { apolloPersonId, runId } = req.body;
+
+    if (!apolloPersonId) {
+      return res.status(400).json({ error: "apolloPersonId is required" });
+    }
+
+    console.log("[Apollo Service][POST /enrich] called", {
+      orgId: req.orgId,
+      clerkOrgId: req.clerkOrgId,
+      apolloPersonId,
+      runId: runId ?? "(none)",
+    });
+
+    const apolloApiKey = await getByokKey(req.clerkOrgId!, "apollo");
+    const result = await enrichPerson(apolloApiKey, apolloPersonId);
+    const person = result.person;
+
+    console.log("[Apollo Service][POST /enrich] Apollo API response", {
+      orgId: req.orgId,
+      apolloPersonId,
+      hasEmail: !!person?.email,
+      emailStatus: person?.email_status,
+    });
+
+    // Store enrichment record and track costs if runId provided
+    let enrichmentId: string | null = null;
+    if (runId && person) {
+      const [enrichment] = await db.insert(apolloPeopleEnrichments).values({
+        orgId: req.orgId!,
+        runId,
+        apolloPersonId: person.id,
+        firstName: person.first_name,
+        lastName: person.last_name,
+        email: person.email,
+        emailStatus: person.email_status,
+        title: person.title,
+        linkedinUrl: person.linkedin_url,
+        organizationName: person.organization?.name,
+        organizationDomain: person.organization?.primary_domain,
+        organizationIndustry: person.organization?.industry,
+        organizationSize: person.organization?.estimated_num_employees?.toString(),
+        organizationRevenueUsd: person.organization?.annual_revenue?.toString(),
+        responseRaw: person,
+      }).returning();
+
+      enrichmentId = enrichment.id;
+
+      // Track cost in runs-service
+      try {
+        const runsOrgId = await ensureOrganization(req.clerkOrgId!);
+        const enrichRun = await createRun({
+          organizationId: runsOrgId,
+          serviceName: "apollo-service",
+          taskName: "enrichment",
+          parentRunId: runId,
+        });
+
+        await db.update(apolloPeopleEnrichments)
+          .set({ enrichmentRunId: enrichRun.id })
+          .where(eq(apolloPeopleEnrichments.id, enrichment.id));
+
+        await addCosts(enrichRun.id, [{ costName: "apollo-enrichment-credit", quantity: 1 }]);
+        await updateRun(enrichRun.id, "completed");
+      } catch (err) {
+        console.error("[Apollo Service] COST TRACKING FAILED for enrichment", {
+          runId,
+          apolloPersonId,
+          error: err instanceof Error ? err.message : err,
+        });
+      }
+    }
+
+    const transformed = person ? {
+      id: person.id,
+      firstName: person.first_name,
+      lastName: person.last_name,
+      email: person.email,
+      emailStatus: person.email_status,
+      title: person.title,
+      linkedinUrl: person.linkedin_url,
+      organizationName: person.organization?.name,
+      organizationDomain: person.organization?.primary_domain,
+      organizationIndustry: person.organization?.industry,
+      organizationSize: person.organization?.estimated_num_employees?.toString(),
+    } : null;
+
+    res.json({ enrichmentId, person: transformed });
+  } catch (error) {
+    console.error("[Apollo Service][POST /enrich] ERROR:", error);
     res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
   }
 });
