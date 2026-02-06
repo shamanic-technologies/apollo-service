@@ -9,6 +9,7 @@ import { getSql } from "./db/index.js";
 import healthRoutes from "./routes/health.js";
 import searchRoutes from "./routes/search.js";
 import referenceRoutes from "./routes/reference.js";
+import validateRoutes from "./routes/validate.js";
 
 const app = express();
 const PORT = process.env.PORT || 3004;
@@ -21,6 +22,7 @@ app.use(express.json());
 app.use(healthRoutes);
 app.use(searchRoutes);
 app.use(referenceRoutes);
+app.use(validateRoutes);
 
 // 404 handler
 app.use((req, res) => {
