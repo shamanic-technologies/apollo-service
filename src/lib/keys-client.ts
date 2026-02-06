@@ -22,6 +22,7 @@ export async function getByokKey(
       throw new Error(`${provider} key not configured for this organization`);
     }
     const error = await response.text();
+    console.error(`[Apollo Service] getByokKey failed: status=${response.status} url=${keyServiceUrl} apiKeySet=${!!process.env.KEY_SERVICE_API_KEY} apiKeyLen=${keyServiceApiKey.length}`);
     throw new Error(`Failed to fetch ${provider} key: ${error}`);
   }
 
