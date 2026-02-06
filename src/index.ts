@@ -34,7 +34,7 @@ Sentry.setupExpressErrorHandler(app);
 
 // Fallback error handler
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error("Unhandled error:", err);
+  console.error("[Apollo Service] Unhandled error:", err);
   res.status(500).json({ error: "Internal server error" });
 });
 
@@ -44,7 +44,7 @@ if (process.env.NODE_ENV !== "test") {
 
   const startServer = () => {
     app.listen(Number(PORT), "::", () => {
-      console.log(`Apollo service running on port ${PORT}`);
+      console.log(`[Apollo Service] running on port ${PORT}`);
     });
   };
 
@@ -52,15 +52,15 @@ if (process.env.NODE_ENV !== "test") {
     const migrateDb = drizzle(getSql());
     migrate(migrateDb, { migrationsFolder: "./drizzle" })
       .then(() => {
-        console.log("Migrations complete");
+        console.log("[Apollo Service] Migrations complete");
         startServer();
       })
       .catch((err) => {
-        console.error("Migration failed:", err);
+        console.error("[Apollo Service] Migration failed:", err);
         process.exit(1);
       });
   } else {
-    console.warn("APOLLO_SERVICE_DATABASE_URL not set, skipping migrations");
+    console.warn("[Apollo Service] APOLLO_SERVICE_DATABASE_URL not set, skipping migrations");
     startServer();
   }
 }

@@ -17,7 +17,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
     const { runId, ...searchParams } = req.body;
 
-    console.log("[apollo][POST /search] called", {
+    console.log("[Apollo Service][POST /search] called", {
       orgId: req.orgId,
       clerkOrgId: req.clerkOrgId,
       runId: runId ?? "(none - results will NOT be stored in DB)",
@@ -52,7 +52,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
         });
         searchRunId = searchRun.id;
       } catch (err) {
-        console.warn("[apollo] Failed to create search run in runs-service:", err);
+        console.warn("[Apollo Service] Failed to create search run in runs-service:", err);
       }
     }
 
@@ -61,7 +61,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
     // Get total entries (new API format has it at root level)
     const totalEntries = result.total_entries ?? result.pagination?.total_entries ?? 0;
 
-    console.log("[apollo][POST /search] Apollo API response", {
+    console.log("[Apollo Service][POST /search] Apollo API response", {
       orgId: req.orgId,
       runId,
       peopleReturned: result.people?.length ?? 0,
@@ -71,7 +71,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
     });
 
     if (!result.people || result.people.length === 0) {
-      console.warn("[apollo][POST /search] ⚠ Apollo returned 0 people", {
+      console.warn("[Apollo Service][POST /search] ⚠ Apollo returned 0 people", {
         orgId: req.orgId,
         runId,
         apolloParams,
@@ -98,7 +98,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
       searchId = search.id;
 
-      console.log("[apollo][POST /search] search record stored in DB", {
+      console.log("[Apollo Service][POST /search] search record stored in DB", {
         searchId: search.id,
         orgId: req.orgId,
         runId,
@@ -147,7 +147,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
             await addCosts(enrichRun.id, [{ costName: "apollo-enrichment-credit", quantity: 1 }]);
             await updateRun(enrichRun.id, "completed");
           } catch (err) {
-            console.error("[apollo] COST TRACKING FAILED for enrichment — costs will be missing from campaign totals.", {
+            console.error("[Apollo Service] COST TRACKING FAILED for enrichment — costs will be missing from campaign totals.", {
               runId,
               searchRunId,
               personId: person.id,
@@ -164,7 +164,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
           await addCosts(searchRunId, [{ costName: "apollo-search-credit", quantity: 1 }]);
           await updateRun(searchRunId, "completed");
         } catch (err) {
-          console.error("[apollo] COST TRACKING FAILED for search — costs will be missing from campaign totals.", {
+          console.error("[Apollo Service] COST TRACKING FAILED for search — costs will be missing from campaign totals.", {
             runId,
             searchRunId,
             costName: "apollo-search-credit",
@@ -175,7 +175,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
     }
 
     if (!runId) {
-      console.warn("[apollo][POST /search] ⚠ No runId provided — results returned but NOT stored in DB. GET /enrichments will return 0 for this search.");
+      console.warn("[Apollo Service][POST /search] ⚠ No runId provided — results returned but NOT stored in DB. GET /enrichments will return 0 for this search.");
     }
 
     // Transform to camelCase for worker consumption
@@ -193,7 +193,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
       organizationSize: person.organization?.estimated_num_employees?.toString(),
     }));
 
-    console.log("[apollo][POST /search] responding", {
+    console.log("[Apollo Service][POST /search] responding", {
       searchId,
       peopleCount: result.people.length,
       totalEntries,
@@ -207,7 +207,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
       people: transformedPeople,
     });
   } catch (error) {
-    console.error("[apollo][POST /search] ERROR:", error);
+    console.error("[Apollo Service][POST /search] ERROR:", error);
     res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
   }
 });
@@ -219,7 +219,7 @@ router.get("/searches/:runId", serviceAuth, async (req: AuthenticatedRequest, re
   try {
     const { runId } = req.params;
 
-    console.log("[apollo][GET /searches] query", {
+    console.log("[Apollo Service][GET /searches] query", {
       runId,
       orgId: req.orgId,
       clerkOrgId: req.clerkOrgId,
@@ -233,7 +233,7 @@ router.get("/searches/:runId", serviceAuth, async (req: AuthenticatedRequest, re
         ),
     });
 
-    console.log("[apollo][GET /searches] found", {
+    console.log("[Apollo Service][GET /searches] found", {
       runId,
       orgId: req.orgId,
       count: searches.length,
@@ -241,7 +241,7 @@ router.get("/searches/:runId", serviceAuth, async (req: AuthenticatedRequest, re
 
     res.json({ searches });
   } catch (error) {
-    console.error("[apollo][GET /searches] ERROR:", error);
+    console.error("[Apollo Service][GET /searches] ERROR:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -253,7 +253,7 @@ router.get("/enrichments/:runId", serviceAuth, async (req: AuthenticatedRequest,
   try {
     const { runId } = req.params;
 
-    console.log("[apollo][GET /enrichments] query", {
+    console.log("[Apollo Service][GET /enrichments] query", {
       runId,
       orgId: req.orgId,
       clerkOrgId: req.clerkOrgId,
@@ -268,13 +268,13 @@ router.get("/enrichments/:runId", serviceAuth, async (req: AuthenticatedRequest,
     });
 
     if (enrichments.length === 0) {
-      console.warn("[apollo][GET /enrichments] ⚠ returned 0 enrichments", {
+      console.warn("[Apollo Service][GET /enrichments] ⚠ returned 0 enrichments", {
         runId,
         orgId: req.orgId,
         hint: "Check: was POST /search called with this runId? Was x-clerk-org-id the same?",
       });
     } else {
-      console.log("[apollo][GET /enrichments] found", {
+      console.log("[Apollo Service][GET /enrichments] found", {
         runId,
         orgId: req.orgId,
         count: enrichments.length,
@@ -283,7 +283,7 @@ router.get("/enrichments/:runId", serviceAuth, async (req: AuthenticatedRequest,
 
     res.json({ enrichments });
   } catch (error) {
-    console.error("[apollo][GET /enrichments] ERROR:", error);
+    console.error("[Apollo Service][GET /enrichments] ERROR:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -296,7 +296,7 @@ router.post("/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
     const { runIds } = req.body as { runIds: string[] };
 
-    console.log("[apollo][POST /stats] called", {
+    console.log("[Apollo Service][POST /stats] called", {
       orgId: req.orgId,
       clerkOrgId: req.clerkOrgId,
       runIdsCount: runIds?.length ?? 0,
@@ -308,7 +308,7 @@ router.post("/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
     }
 
     if (runIds.length === 0) {
-      console.warn("[apollo][POST /stats] ⚠ empty runIds array — returning 0");
+      console.warn("[Apollo Service][POST /stats] ⚠ empty runIds array — returning 0");
       return res.json({ stats: { leadsFound: 0, searchesCount: 0 } });
     }
 
@@ -334,7 +334,7 @@ router.post("/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
     const totalPeopleFromSearches = searches.reduce((sum, s) => sum + (s.peopleCount || 0), 0);
 
-    console.log("[apollo][POST /stats] results", {
+    console.log("[Apollo Service][POST /stats] results", {
       orgId: req.orgId,
       leadsFound: enrichments.length,
       searchesCount: searches.length,
@@ -342,7 +342,7 @@ router.post("/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
     });
 
     if (enrichments.length === 0) {
-      console.warn("[apollo][POST /stats] ⚠ 0 leads found for runIds", {
+      console.warn("[Apollo Service][POST /stats] ⚠ 0 leads found for runIds", {
         orgId: req.orgId,
         runIds: runIds.slice(0, 10),
         searchesCount: searches.length,
@@ -358,7 +358,7 @@ router.post("/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
       },
     });
   } catch (error) {
-    console.error("[apollo][POST /stats] ERROR:", error);
+    console.error("[Apollo Service][POST /stats] ERROR:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });

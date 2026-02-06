@@ -40,7 +40,7 @@ export async function serviceAuth(
     req.clerkOrgId = clerkOrgId;
     next();
   } catch (error) {
-    console.error("Auth error:", error);
+    console.error("[Apollo Service] Auth error:", error);
     return res.status(401).json({ error: "Authentication failed" });
   }
 }
