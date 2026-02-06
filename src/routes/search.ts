@@ -17,6 +17,13 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
     const { runId, ...searchParams } = req.body;
 
+    console.log("[apollo][POST /search] called", {
+      orgId: req.orgId,
+      clerkOrgId: req.clerkOrgId,
+      runId: runId ?? "(none - results will NOT be stored in DB)",
+      searchParams,
+    });
+
     // Get Apollo API key from keys-service
     const apolloApiKey = await getByokKey(req.clerkOrgId!, "apollo");
 
@@ -54,6 +61,25 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
     // Get total entries (new API format has it at root level)
     const totalEntries = result.total_entries ?? result.pagination?.total_entries ?? 0;
 
+    console.log("[apollo][POST /search] Apollo API response", {
+      orgId: req.orgId,
+      runId,
+      peopleReturned: result.people?.length ?? 0,
+      totalEntries,
+      haspeople: !!result.people,
+      rawPeopleType: typeof result.people,
+    });
+
+    if (!result.people || result.people.length === 0) {
+      console.warn("[apollo][POST /search] ⚠ Apollo returned 0 people", {
+        orgId: req.orgId,
+        runId,
+        apolloParams,
+        totalEntries,
+        rawResponseKeys: Object.keys(result),
+      });
+    }
+
     // Only store records if runId is provided (campaign workflow)
     let searchId: string | null = null;
     if (runId) {
@@ -71,6 +97,13 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
         .returning();
 
       searchId = search.id;
+
+      console.log("[apollo][POST /search] search record stored in DB", {
+        searchId: search.id,
+        orgId: req.orgId,
+        runId,
+        peopleToStore: result.people.length,
+      });
 
       // Store enrichment records and track each in runs-service
       const runsOrgId = await ensureOrganization(req.clerkOrgId!);
@@ -141,6 +174,10 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
       }
     }
 
+    if (!runId) {
+      console.warn("[apollo][POST /search] ⚠ No runId provided — results returned but NOT stored in DB. GET /enrichments will return 0 for this search.");
+    }
+
     // Transform to camelCase for worker consumption
     const transformedPeople = result.people.map((person: ApolloPerson) => ({
       id: person.id,
@@ -156,6 +193,13 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
       organizationSize: person.organization?.estimated_num_employees?.toString(),
     }));
 
+    console.log("[apollo][POST /search] responding", {
+      searchId,
+      peopleCount: result.people.length,
+      totalEntries,
+      storedInDb: !!runId,
+    });
+
     res.json({
       searchId,
       peopleCount: result.people.length,
@@ -163,7 +207,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
       people: transformedPeople,
     });
   } catch (error) {
-    console.error("Search error:", error);
+    console.error("[apollo][POST /search] ERROR:", error);
     res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
   }
 });
@@ -175,6 +219,12 @@ router.get("/searches/:runId", serviceAuth, async (req: AuthenticatedRequest, re
   try {
     const { runId } = req.params;
 
+    console.log("[apollo][GET /searches] query", {
+      runId,
+      orgId: req.orgId,
+      clerkOrgId: req.clerkOrgId,
+    });
+
     const searches = await db.query.apolloPeopleSearches.findMany({
       where: (searches, { eq, and }) =>
         and(
@@ -183,9 +233,15 @@ router.get("/searches/:runId", serviceAuth, async (req: AuthenticatedRequest, re
         ),
     });
 
+    console.log("[apollo][GET /searches] found", {
+      runId,
+      orgId: req.orgId,
+      count: searches.length,
+    });
+
     res.json({ searches });
   } catch (error) {
-    console.error("Get searches error:", error);
+    console.error("[apollo][GET /searches] ERROR:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -197,6 +253,12 @@ router.get("/enrichments/:runId", serviceAuth, async (req: AuthenticatedRequest,
   try {
     const { runId } = req.params;
 
+    console.log("[apollo][GET /enrichments] query", {
+      runId,
+      orgId: req.orgId,
+      clerkOrgId: req.clerkOrgId,
+    });
+
     const enrichments = await db.query.apolloPeopleEnrichments.findMany({
       where: (enrichments, { eq, and }) =>
         and(
@@ -205,9 +267,23 @@ router.get("/enrichments/:runId", serviceAuth, async (req: AuthenticatedRequest,
         ),
     });
 
+    if (enrichments.length === 0) {
+      console.warn("[apollo][GET /enrichments] ⚠ returned 0 enrichments", {
+        runId,
+        orgId: req.orgId,
+        hint: "Check: was POST /search called with this runId? Was x-clerk-org-id the same?",
+      });
+    } else {
+      console.log("[apollo][GET /enrichments] found", {
+        runId,
+        orgId: req.orgId,
+        count: enrichments.length,
+      });
+    }
+
     res.json({ enrichments });
   } catch (error) {
-    console.error("Get enrichments error:", error);
+    console.error("[apollo][GET /enrichments] ERROR:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -220,11 +296,19 @@ router.post("/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
     const { runIds } = req.body as { runIds: string[] };
 
+    console.log("[apollo][POST /stats] called", {
+      orgId: req.orgId,
+      clerkOrgId: req.clerkOrgId,
+      runIdsCount: runIds?.length ?? 0,
+      runIds: runIds?.slice(0, 10), // log first 10 max
+    });
+
     if (!runIds || !Array.isArray(runIds)) {
       return res.status(400).json({ error: "runIds array required" });
     }
 
     if (runIds.length === 0) {
+      console.warn("[apollo][POST /stats] ⚠ empty runIds array — returning 0");
       return res.json({ stats: { leadsFound: 0, searchesCount: 0 } });
     }
 
@@ -250,6 +334,22 @@ router.post("/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
     const totalPeopleFromSearches = searches.reduce((sum, s) => sum + (s.peopleCount || 0), 0);
 
+    console.log("[apollo][POST /stats] results", {
+      orgId: req.orgId,
+      leadsFound: enrichments.length,
+      searchesCount: searches.length,
+      totalPeopleFromSearches,
+    });
+
+    if (enrichments.length === 0) {
+      console.warn("[apollo][POST /stats] ⚠ 0 leads found for runIds", {
+        orgId: req.orgId,
+        runIds: runIds.slice(0, 10),
+        searchesCount: searches.length,
+        hint: "If searchesCount > 0 but leadsFound = 0, enrichments may not have been stored (missing runId on POST /search?)",
+      });
+    }
+
     res.json({
       stats: {
         leadsFound: enrichments.length,
@@ -258,7 +358,7 @@ router.post("/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
       },
     });
   } catch (error) {
-    console.error("Get stats error:", error);
+    console.error("[apollo][POST /stats] ERROR:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
