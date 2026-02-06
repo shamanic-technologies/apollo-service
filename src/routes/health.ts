@@ -8,7 +8,7 @@ router.get("/health", (req, res) => {
 });
 
 router.get("/health/debug", async (req, res) => {
-  const keysServiceUrl = process.env.KEYS_SERVICE_URL || "not set";
+  const keyServiceUrl = process.env.KEY_SERVICE_URL || "not set";
   const dbUrl = process.env.APOLLO_SERVICE_DATABASE_URL;
 
   let dbStatus = "unknown";
@@ -24,19 +24,19 @@ router.get("/health/debug", async (req, res) => {
     dbStatus = "not configured";
   }
 
-  let keysServiceStatus = "unknown";
+  let keyServiceStatus = "unknown";
   try {
-    const resp = await fetch(`${keysServiceUrl}/health`);
-    keysServiceStatus = resp.ok ? "connected" : `status: ${resp.status}`;
+    const resp = await fetch(`${keyServiceUrl}/health`);
+    keyServiceStatus = resp.ok ? "connected" : `status: ${resp.status}`;
   } catch (e: any) {
-    keysServiceStatus = `error: ${e.message}`;
+    keyServiceStatus = `error: ${e.message}`;
   }
 
   res.json({
-    keysServiceUrl,
+    keyServiceUrl,
     dbConfigured: !!dbUrl,
     dbStatus,
-    keysServiceStatus,
+    keyServiceStatus,
   });
 });
 

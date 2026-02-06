@@ -1,15 +1,15 @@
 /**
- * Client for fetching BYOK keys from keys-service
+ * Client for fetching BYOK keys from key-service
  * Uses Railway private networking - no auth required
  */
 export async function getByokKey(
   clerkOrgId: string,
   provider: string
 ): Promise<string> {
-  const keysServiceUrl = process.env.KEYS_SERVICE_URL || "http://localhost:3001";
+  const keyServiceUrl = process.env.KEY_SERVICE_URL || "http://localhost:3001";
 
   const response = await fetch(
-    `${keysServiceUrl}/internal/keys/${provider}/decrypt?clerkOrgId=${clerkOrgId}`
+    `${keyServiceUrl}/internal/keys/${provider}/decrypt?clerkOrgId=${clerkOrgId}`
   );
 
   if (!response.ok) {
