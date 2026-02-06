@@ -1,17 +1,15 @@
 import { Router } from "express";
 import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
 import { getIndustries, getEmployeeRanges } from "../lib/reference-cache.js";
-import { getByokKey } from "../lib/keys-client.js";
 
 const router = Router();
 
 /**
- * GET /reference/industries - Get Apollo industries list (24h cached)
+ * GET /reference/industries - Get Apollo industries list (static)
  */
 router.get("/reference/industries", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const apolloApiKey = await getByokKey(req.clerkOrgId!, "apollo");
-    const industries = await getIndustries(apolloApiKey, req.orgId!);
+    const industries = getIndustries();
     res.json({ industries });
   } catch (error) {
     console.error("[Apollo Service] Get industries error:", error);
@@ -24,7 +22,7 @@ router.get("/reference/industries", serviceAuth, async (req: AuthenticatedReques
  */
 router.get("/reference/employee-ranges", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const ranges = await getEmployeeRanges(req.orgId!);
+    const ranges = getEmployeeRanges();
     res.json({ ranges });
   } catch (error) {
     console.error("[Apollo Service] Get employee ranges error:", error);

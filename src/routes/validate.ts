@@ -1,6 +1,5 @@
 import { Router } from "express";
 import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
-import { getByokKey } from "../lib/keys-client.js";
 import { validateBatch, EndpointType } from "../lib/validators.js";
 
 const router = Router();
@@ -29,10 +28,7 @@ router.post("/validate", serviceAuth, async (req: AuthenticatedRequest, res) => 
       return res.status(400).json({ error: "items must be a non-empty array" });
     }
 
-    // Get Apollo API key for industry tag validation
-    const apiKey = await getByokKey(req.clerkOrgId!, "apollo");
-
-    const results = await validateBatch(endpoint, items, apiKey, req.orgId!);
+    const results = validateBatch(endpoint, items);
 
     res.json({ results });
   } catch (error) {
