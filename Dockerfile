@@ -32,9 +32,10 @@ COPY package.json pnpm-lock.yaml* ./
 # Install production dependencies only
 RUN pnpm install --prod --frozen-lockfile || pnpm install --prod
 
-# Copy built files and migrations
+# Copy built files, migrations, and OpenAPI spec
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/drizzle ./drizzle
+COPY --from=builder /app/openapi.json ./openapi.json
 
 # Force IPv4 first to avoid IPv6 connection issues with Neon
 ENV NODE_OPTIONS="--dns-result-order=ipv4first"
