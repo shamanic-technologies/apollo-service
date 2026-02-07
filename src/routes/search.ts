@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and, gt, isNotNull, desc, inArray } from "drizzle-orm";
+import { eq, and, gt, isNotNull, desc, inArray, count, sum } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloPeopleSearches, apolloPeopleEnrichments } from "../db/schema.js";
 import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
@@ -473,14 +473,48 @@ router.get("/enrichments/:runId", serviceAuth, async (req: AuthenticatedRequest,
  * Body: { runIds: string[] }
  */
 router.post("/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
+  /*  #swagger.requestBody = {
+        required: true,
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              required: ["runIds"],
+              properties: {
+                runIds: { type: "array", items: { type: "string" }, description: "Run IDs to aggregate stats for" }
+              }
+            }
+          }
+        }
+      }
+      #swagger.responses[200] = {
+        description: "Aggregated stats for the given run IDs",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              properties: {
+                stats: {
+                  type: "object",
+                  properties: {
+                    leadsFound: { type: "integer", description: "Number of enrichment records (leads) found" },
+                    searchesCount: { type: "integer", description: "Number of search operations performed" },
+                    totalPeopleFromSearches: { type: "integer", description: "Sum of peopleCount across all searches" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      #swagger.responses[400] = { description: "runIds array required" }
+  */
   try {
     const { runIds } = req.body as { runIds: string[] };
 
     console.log("[Apollo Service][POST /stats] called", {
       orgId: req.orgId,
-      clerkOrgId: req.clerkOrgId,
       runIdsCount: runIds?.length ?? 0,
-      runIds: runIds?.slice(0, 10), // log first 10 max
     });
 
     if (!runIds || !Array.isArray(runIds)) {
@@ -488,55 +522,49 @@ router.post("/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
     }
 
     if (runIds.length === 0) {
-      console.warn("[Apollo Service][POST /stats] ⚠ empty runIds array — returning 0");
-      return res.json({ stats: { leadsFound: 0, searchesCount: 0 } });
+      return res.json({ stats: { leadsFound: 0, searchesCount: 0, totalPeopleFromSearches: 0 } });
     }
 
-    // Count enrichments (leads found)
-    const enrichments = await db.query.apolloPeopleEnrichments.findMany({
-      where: (e, { and, eq, inArray }) =>
+    // Use SQL COUNT/SUM instead of fetching all rows into memory
+    const [enrichmentStats] = await db
+      .select({ leadsFound: count() })
+      .from(apolloPeopleEnrichments)
+      .where(
         and(
-          inArray(e.runId, runIds),
-          eq(e.orgId, req.orgId!)
-        ),
-      columns: { id: true },
-    });
+          inArray(apolloPeopleEnrichments.runId, runIds),
+          eq(apolloPeopleEnrichments.orgId, req.orgId!)
+        )
+      );
 
-    // Count searches
-    const searches = await db.query.apolloPeopleSearches.findMany({
-      where: (s, { and, eq, inArray }) =>
+    const [searchStats] = await db
+      .select({
+        searchesCount: count(),
+        totalPeopleFromSearches: sum(apolloPeopleSearches.peopleCount),
+      })
+      .from(apolloPeopleSearches)
+      .where(
         and(
-          inArray(s.runId, runIds),
-          eq(s.orgId, req.orgId!)
-        ),
-      columns: { id: true, peopleCount: true },
-    });
+          inArray(apolloPeopleSearches.runId, runIds),
+          eq(apolloPeopleSearches.orgId, req.orgId!)
+        )
+      );
 
-    const totalPeopleFromSearches = searches.reduce((sum, s) => sum + (s.peopleCount || 0), 0);
+    const stats = {
+      leadsFound: enrichmentStats.leadsFound,
+      searchesCount: searchStats.searchesCount,
+      totalPeopleFromSearches: Number(searchStats.totalPeopleFromSearches) || 0,
+    };
 
-    console.log("[Apollo Service][POST /stats] results", {
-      orgId: req.orgId,
-      leadsFound: enrichments.length,
-      searchesCount: searches.length,
-      totalPeopleFromSearches,
-    });
-
-    if (enrichments.length === 0) {
-      console.warn("[Apollo Service][POST /stats] ⚠ 0 leads found for runIds", {
+    // Only warn when searches exist but enrichments don't — that's the actual anomaly
+    if (stats.searchesCount > 0 && stats.leadsFound === 0) {
+      console.warn("[Apollo Service][POST /stats] searches found but 0 leads", {
         orgId: req.orgId,
-        runIds: runIds.slice(0, 10),
-        searchesCount: searches.length,
-        hint: "If searchesCount > 0 but leadsFound = 0, enrichments may not have been stored (missing runId on POST /search?)",
+        runIds: runIds.slice(0, 5),
+        searchesCount: stats.searchesCount,
       });
     }
 
-    res.json({
-      stats: {
-        leadsFound: enrichments.length,
-        searchesCount: searches.length,
-        totalPeopleFromSearches,
-      },
-    });
+    res.json({ stats });
   } catch (error) {
     console.error("[Apollo Service][POST /stats] ERROR:", error);
     res.status(500).json({ error: "Internal server error" });
