@@ -55,13 +55,6 @@ export async function searchPeople(
   apiKey: string,
   params: ApolloSearchParams
 ): Promise<ApolloSearchResponse> {
-  console.log("[Apollo Service][searchPeople] calling Apollo API", {
-    endpoint: `${APOLLO_API_BASE}/mixed_people/api_search`,
-    params: { ...params, page: params.page || 1, per_page: params.per_page || 25 },
-    hasApiKey: !!apiKey,
-    apiKeyPrefix: apiKey ? apiKey.slice(0, 8) + "..." : "(missing)",
-  });
-
   const response = await fetch(`${APOLLO_API_BASE}/mixed_people/api_search`, {
     method: "POST",
     headers: {
@@ -84,16 +77,7 @@ export async function searchPeople(
     throw new Error(`Apollo search failed: ${response.status} - ${error}`);
   }
 
-  const result = await response.json();
-
-  console.log("[Apollo Service][searchPeople] Apollo API response", {
-    status: response.status,
-    peopleCount: result.people?.length ?? 0,
-    totalEntries: result.total_entries ?? result.pagination?.total_entries ?? "unknown",
-    responseKeys: Object.keys(result),
-  });
-
-  return result;
+  return response.json();
 }
 
 /**
