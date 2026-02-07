@@ -98,6 +98,7 @@ export const apolloPeopleEnrichments = pgTable(
     index("idx_enrichments_org").on(table.orgId),
     index("idx_enrichments_run").on(table.runId),
     index("idx_enrichments_email").on(table.email),
+    index("idx_enrichments_person_id").on(table.apolloPersonId),
   ]
 );
 

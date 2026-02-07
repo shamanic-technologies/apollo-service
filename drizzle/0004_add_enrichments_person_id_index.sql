@@ -1,0 +1,1 @@
+CREATE INDEX IF NOT EXISTS "idx_enrichments_person_id" ON "apollo_people_enrichments" USING btree ("apollo_person_id");

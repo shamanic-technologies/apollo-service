@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq } from "drizzle-orm";
+import { eq, and, gt, isNotNull, desc, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloPeopleSearches, apolloPeopleEnrichments } from "../db/schema.js";
 import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
@@ -178,20 +178,55 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
       console.warn("[Apollo Service][POST /search] ⚠ No runId provided — results returned but NOT stored in DB. GET /enrichments will return 0 for this search.");
     }
 
+    // Fill in cached emails for people without email
+    const personIdsWithoutEmail = result.people
+      .filter((p: ApolloPerson) => !p.email && p.id)
+      .map((p: ApolloPerson) => p.id);
+
+    const emailCache = new Map<string, { email: string; emailStatus: string | null }>();
+    if (personIdsWithoutEmail.length > 0) {
+      const twelveMonthsAgo = new Date();
+      twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
+
+      const cachedEnrichments = await db
+        .select({
+          apolloPersonId: apolloPeopleEnrichments.apolloPersonId,
+          email: apolloPeopleEnrichments.email,
+          emailStatus: apolloPeopleEnrichments.emailStatus,
+        })
+        .from(apolloPeopleEnrichments)
+        .where(
+          and(
+            inArray(apolloPeopleEnrichments.apolloPersonId, personIdsWithoutEmail),
+            isNotNull(apolloPeopleEnrichments.email),
+            gt(apolloPeopleEnrichments.createdAt, twelveMonthsAgo)
+          )
+        );
+
+      for (const row of cachedEnrichments) {
+        if (row.apolloPersonId && row.email) {
+          emailCache.set(row.apolloPersonId, { email: row.email, emailStatus: row.emailStatus });
+        }
+      }
+    }
+
     // Transform to camelCase for worker consumption
-    const transformedPeople = result.people.map((person: ApolloPerson) => ({
-      id: person.id,
-      firstName: person.first_name,
-      lastName: person.last_name,
-      email: person.email,
-      emailStatus: person.email_status,
-      title: person.title,
-      linkedinUrl: person.linkedin_url,
-      organizationName: person.organization?.name,
-      organizationDomain: person.organization?.primary_domain,
-      organizationIndustry: person.organization?.industry,
-      organizationSize: person.organization?.estimated_num_employees?.toString(),
-    }));
+    const transformedPeople = result.people.map((person: ApolloPerson) => {
+      const cached = !person.email && person.id ? emailCache.get(person.id) : undefined;
+      return {
+        id: person.id,
+        firstName: person.first_name,
+        lastName: person.last_name,
+        email: person.email ?? cached?.email ?? null,
+        emailStatus: person.email_status ?? cached?.emailStatus ?? null,
+        title: person.title,
+        linkedinUrl: person.linkedin_url,
+        organizationName: person.organization?.name,
+        organizationDomain: person.organization?.primary_domain,
+        organizationIndustry: person.organization?.industry,
+        organizationSize: person.organization?.estimated_num_employees?.toString(),
+      };
+    });
 
     console.log("[Apollo Service][POST /search] responding", {
       searchId,
@@ -236,6 +271,46 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       apolloPersonId,
       runId: runId ?? "(none)",
     });
+
+    // Check cache: existing enrichment for this personId within 12 months
+    const twelveMonthsAgo = new Date();
+    twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
+
+    const [cached] = await db
+      .select()
+      .from(apolloPeopleEnrichments)
+      .where(
+        and(
+          eq(apolloPeopleEnrichments.apolloPersonId, apolloPersonId),
+          isNotNull(apolloPeopleEnrichments.email),
+          gt(apolloPeopleEnrichments.createdAt, twelveMonthsAgo)
+        )
+      )
+      .orderBy(desc(apolloPeopleEnrichments.createdAt))
+      .limit(1);
+
+    if (cached) {
+      console.log("[Apollo Service][POST /enrich] cache hit", {
+        apolloPersonId,
+        cachedEmail: cached.email,
+      });
+      return res.json({
+        enrichmentId: null,
+        person: {
+          id: apolloPersonId,
+          firstName: cached.firstName,
+          lastName: cached.lastName,
+          email: cached.email,
+          emailStatus: cached.emailStatus,
+          title: cached.title,
+          linkedinUrl: cached.linkedinUrl,
+          organizationName: cached.organizationName,
+          organizationDomain: cached.organizationDomain,
+          organizationIndustry: cached.organizationIndustry,
+          organizationSize: cached.organizationSize,
+        },
+      });
+    }
 
     const apolloApiKey = await getByokKey(req.clerkOrgId!, "apollo");
     const result = await enrichPerson(apolloApiKey, apolloPersonId);
