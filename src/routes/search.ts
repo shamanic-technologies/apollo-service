@@ -17,13 +17,6 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
     const { runId, ...searchParams } = req.body;
 
-    console.log("[Apollo Service][POST /search] called", {
-      orgId: req.orgId,
-      clerkOrgId: req.clerkOrgId,
-      runId: runId ?? "(none - results will NOT be stored in DB)",
-      searchParams,
-    });
-
     // Get Apollo API key from key-service
     const apolloApiKey = await getByokKey(req.clerkOrgId!, "apollo");
 
@@ -61,15 +54,6 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
     // Get total entries (new API format has it at root level)
     const totalEntries = result.total_entries ?? result.pagination?.total_entries ?? 0;
 
-    console.log("[Apollo Service][POST /search] Apollo API response", {
-      orgId: req.orgId,
-      runId,
-      peopleReturned: result.people?.length ?? 0,
-      totalEntries,
-      haspeople: !!result.people,
-      rawPeopleType: typeof result.people,
-    });
-
     if (!result.people || result.people.length === 0) {
       console.warn("[Apollo Service][POST /search] ⚠ Apollo returned 0 people", {
         orgId: req.orgId,
@@ -97,13 +81,6 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
         .returning();
 
       searchId = search.id;
-
-      console.log("[Apollo Service][POST /search] search record stored in DB", {
-        searchId: search.id,
-        orgId: req.orgId,
-        runId,
-        peopleToStore: result.people.length,
-      });
 
       // Store enrichment records and track each in runs-service
       const runsOrgId = await ensureOrganization(req.clerkOrgId!);
@@ -228,13 +205,6 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
       };
     });
 
-    console.log("[Apollo Service][POST /search] responding", {
-      searchId,
-      peopleCount: result.people.length,
-      totalEntries,
-      storedInDb: !!runId,
-    });
-
     res.json({
       searchId,
       peopleCount: result.people.length,
@@ -265,13 +235,6 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       return res.status(400).json({ error: "apolloPersonId is required" });
     }
 
-    console.log("[Apollo Service][POST /enrich] called", {
-      orgId: req.orgId,
-      clerkOrgId: req.clerkOrgId,
-      apolloPersonId,
-      runId: runId ?? "(none)",
-    });
-
     // Check cache: existing enrichment for this personId within 12 months
     const twelveMonthsAgo = new Date();
     twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
@@ -290,10 +253,6 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       .limit(1);
 
     if (cached) {
-      console.log("[Apollo Service][POST /enrich] cache hit", {
-        apolloPersonId,
-        cachedEmail: cached.email,
-      });
       return res.json({
         enrichmentId: null,
         person: {
@@ -315,13 +274,6 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
     const apolloApiKey = await getByokKey(req.clerkOrgId!, "apollo");
     const result = await enrichPerson(apolloApiKey, apolloPersonId);
     const person = result.person;
-
-    console.log("[Apollo Service][POST /enrich] Apollo API response", {
-      orgId: req.orgId,
-      apolloPersonId,
-      hasEmail: !!person?.email,
-      emailStatus: person?.email_status,
-    });
 
     // Store enrichment record and track costs if runId provided
     let enrichmentId: string | null = null;
@@ -399,24 +351,12 @@ router.get("/searches/:runId", serviceAuth, async (req: AuthenticatedRequest, re
   try {
     const { runId } = req.params;
 
-    console.log("[Apollo Service][GET /searches] query", {
-      runId,
-      orgId: req.orgId,
-      clerkOrgId: req.clerkOrgId,
-    });
-
     const searches = await db.query.apolloPeopleSearches.findMany({
       where: (searches, { eq, and }) =>
         and(
           eq(searches.runId, runId),
           eq(searches.orgId, req.orgId!)
         ),
-    });
-
-    console.log("[Apollo Service][GET /searches] found", {
-      runId,
-      orgId: req.orgId,
-      count: searches.length,
     });
 
     res.json({ searches });
@@ -433,12 +373,6 @@ router.get("/enrichments/:runId", serviceAuth, async (req: AuthenticatedRequest,
   try {
     const { runId } = req.params;
 
-    console.log("[Apollo Service][GET /enrichments] query", {
-      runId,
-      orgId: req.orgId,
-      clerkOrgId: req.clerkOrgId,
-    });
-
     const enrichments = await db.query.apolloPeopleEnrichments.findMany({
       where: (enrichments, { eq, and }) =>
         and(
@@ -452,12 +386,6 @@ router.get("/enrichments/:runId", serviceAuth, async (req: AuthenticatedRequest,
         runId,
         orgId: req.orgId,
         hint: "Check: was POST /search called with this runId? Was x-clerk-org-id the same?",
-      });
-    } else {
-      console.log("[Apollo Service][GET /enrichments] found", {
-        runId,
-        orgId: req.orgId,
-        count: enrichments.length,
       });
     }
 
@@ -475,13 +403,6 @@ router.get("/enrichments/:runId", serviceAuth, async (req: AuthenticatedRequest,
 router.post("/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
     const { runIds } = req.body as { runIds: string[] };
-
-    console.log("[Apollo Service][POST /stats] called", {
-      orgId: req.orgId,
-      clerkOrgId: req.clerkOrgId,
-      runIdsCount: runIds?.length ?? 0,
-      runIds: runIds?.slice(0, 10), // log first 10 max
-    });
 
     if (!runIds || !Array.isArray(runIds)) {
       return res.status(400).json({ error: "runIds array required" });
@@ -513,13 +434,6 @@ router.post("/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
     });
 
     const totalPeopleFromSearches = searches.reduce((sum, s) => sum + (s.peopleCount || 0), 0);
-
-    console.log("[Apollo Service][POST /stats] results", {
-      orgId: req.orgId,
-      leadsFound: enrichments.length,
-      searchesCount: searches.length,
-      totalPeopleFromSearches,
-    });
 
     if (enrichments.length === 0) {
       console.warn("[Apollo Service][POST /stats] ⚠ 0 leads found for runIds", {
