@@ -5,7 +5,7 @@ import { apolloPeopleSearches, apolloPeopleEnrichments } from "../db/schema.js";
 import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
 import { searchPeople, enrichPerson, ApolloSearchParams, ApolloPerson } from "../lib/apollo-client.js";
 import { getByokKey } from "../lib/keys-client.js";
-import { ensureOrganization, createRun, updateRun, addCosts } from "../lib/runs-client.js";
+import { createRun, updateRun, addCosts } from "../lib/runs-client.js";
 import { SearchRequestSchema, EnrichRequestSchema, StatsRequestSchema } from "../schemas.js";
 
 const router = Router();
@@ -41,9 +41,11 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
     let searchRunId: string | undefined;
     if (runId) {
       try {
-        const runsOrgId = await ensureOrganization(req.clerkOrgId!);
         const searchRun = await createRun({
-          organizationId: runsOrgId,
+          clerkOrgId: req.clerkOrgId!,
+          appId: appId || "mcpfactory",
+          brandId,
+          campaignId,
           serviceName: "apollo-service",
           taskName: "people-search",
           parentRunId: runId,
@@ -91,8 +93,6 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
       searchId = search.id;
 
       // Store enrichment records and track each in runs-service
-      const runsOrgId = await ensureOrganization(req.clerkOrgId!);
-
       for (const person of result.people as ApolloPerson[]) {
         const [enrichment] = await db.insert(apolloPeopleEnrichments).values({
           orgId: req.orgId!,
@@ -120,7 +120,10 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
         if (searchRunId) {
           try {
             const enrichRun = await createRun({
-              organizationId: runsOrgId,
+              clerkOrgId: req.clerkOrgId!,
+              appId: appId || "mcpfactory",
+              brandId,
+              campaignId,
               serviceName: "apollo-service",
               taskName: "enrichment",
               parentRunId: searchRunId,
@@ -314,9 +317,11 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
       // Track cost in runs-service
       try {
-        const runsOrgId = await ensureOrganization(req.clerkOrgId!);
         const enrichRun = await createRun({
-          organizationId: runsOrgId,
+          clerkOrgId: req.clerkOrgId!,
+          appId: appId || "mcpfactory",
+          brandId,
+          campaignId,
           serviceName: "apollo-service",
           taskName: "enrichment",
           parentRunId: runId,

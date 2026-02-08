@@ -16,13 +16,11 @@ import request from "supertest";
  */
 
 // Mock runs-client before importing the route
-const mockEnsureOrganization = vi.fn().mockResolvedValue("org-123");
 const mockCreateRun = vi.fn();
 const mockUpdateRun = vi.fn().mockResolvedValue({});
 const mockAddCosts = vi.fn().mockResolvedValue({ costs: [] });
 
 vi.mock("../../src/lib/runs-client.js", () => ({
-  ensureOrganization: (...args: unknown[]) => mockEnsureOrganization(...args),
   createRun: (...args: unknown[]) => mockCreateRun(...args),
   updateRun: (...args: unknown[]) => mockUpdateRun(...args),
   addCosts: (...args: unknown[]) => mockAddCosts(...args),
@@ -107,7 +105,6 @@ describe("Apollo service cost tracking", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     mockDbSetCalls.length = 0;
-    mockEnsureOrganization.mockResolvedValue("org-123");
     mockUpdateRun.mockResolvedValue({});
     mockAddCosts.mockResolvedValue({ costs: [] });
     mockInsertReturning.mockResolvedValue([{ id: "record-1" }]);
