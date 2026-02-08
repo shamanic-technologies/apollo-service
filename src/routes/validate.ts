@@ -1,32 +1,20 @@
 import { Router } from "express";
 import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
-import { validateBatch, EndpointType } from "../lib/validators.js";
+import { validateBatch } from "../lib/validators.js";
+import { ValidateRequestSchema } from "../schemas.js";
 
 const router = Router();
 
-const VALID_ENDPOINTS: EndpointType[] = ["search", "enrich", "bulk-enrich"];
-
 /**
  * POST /validate - Validate a batch of items against Apollo's expected format.
- *
- * Body: {
- *   endpoint: "search" | "enrich" | "bulk-enrich",
- *   items: unknown[]
- * }
  */
 router.post("/validate", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const { endpoint, items } = req.body;
-
-    if (!endpoint || !VALID_ENDPOINTS.includes(endpoint)) {
-      return res.status(400).json({
-        error: `endpoint must be one of: ${VALID_ENDPOINTS.join(", ")}`,
-      });
+    const parsed = ValidateRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
     }
-
-    if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ error: "items must be a non-empty array" });
-    }
+    const { endpoint, items } = parsed.data;
 
     const results = validateBatch(endpoint, items);
 

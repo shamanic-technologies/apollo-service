@@ -6,6 +6,7 @@ import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
 import { searchPeople, enrichPerson, ApolloSearchParams, ApolloPerson } from "../lib/apollo-client.js";
 import { getByokKey } from "../lib/keys-client.js";
 import { ensureOrganization, createRun, updateRun, addCosts } from "../lib/runs-client.js";
+import { SearchRequestSchema, EnrichRequestSchema, StatsRequestSchema } from "../schemas.js";
 
 const router = Router();
 
@@ -15,11 +16,11 @@ const router = Router();
  */
 router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const { runId, appId, brandId, campaignId, ...searchParams } = req.body;
-
-    if (!appId || !brandId || !campaignId) {
-      return res.status(400).json({ error: "appId, brandId, and campaignId are required" });
+    const parsed = SearchRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
     }
+    const { runId, appId, brandId, campaignId, ...searchParams } = parsed.data;
 
     // Get Apollo API key from key-service
     const apolloApiKey = await getByokKey(req.clerkOrgId!, "apollo");
@@ -239,15 +240,11 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
  */
 router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const { apolloPersonId, runId, appId, brandId, campaignId } = req.body;
-
-    if (!apolloPersonId) {
-      return res.status(400).json({ error: "apolloPersonId is required" });
+    const parsed = EnrichRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
     }
-
-    if (!appId || !brandId || !campaignId) {
-      return res.status(400).json({ error: "appId, brandId, and campaignId are required" });
-    }
+    const { apolloPersonId, runId, appId, brandId, campaignId } = parsed.data;
 
     // Check cache: existing enrichment for this personId within 12 months
     const twelveMonthsAgo = new Date();
@@ -419,51 +416,12 @@ router.get("/enrichments/:runId", serviceAuth, async (req: AuthenticatedRequest,
  * orgId is always applied from auth. All body filters are optional.
  */
 router.post("/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
-  /*  #swagger.requestBody = {
-        required: false,
-        content: {
-          "application/json": {
-            schema: {
-              type: "object",
-              properties: {
-                runIds: { type: "array", items: { type: "string" }, description: "Run IDs to filter by" },
-                appId: { type: "string", description: "App ID to filter by" },
-                brandId: { type: "string", description: "Brand ID to filter by" },
-                campaignId: { type: "string", description: "Campaign ID to filter by" }
-              }
-            }
-          }
-        }
-      }
-      #swagger.responses[200] = {
-        description: "Aggregated stats for the given filters",
-        content: {
-          "application/json": {
-            schema: {
-              type: "object",
-              properties: {
-                stats: {
-                  type: "object",
-                  properties: {
-                    enrichedLeadsCount: { type: "integer", description: "Number of enriched lead records" },
-                    searchCount: { type: "integer", description: "Number of search operations performed" },
-                    fetchedPeopleCount: { type: "integer", description: "Sum of people returned from searches" },
-                    totalMatchingPeople: { type: "integer", description: "Sum of total matching people in Apollo (universe count)" }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-  */
   try {
-    const { runIds, appId, brandId, campaignId } = req.body as {
-      runIds?: string[];
-      appId?: string;
-      brandId?: string;
-      campaignId?: string;
-    };
+    const parsed = StatsRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
+    }
+    const { runIds, appId, brandId, campaignId } = parsed.data;
 
     // Build dynamic where conditions for enrichments
     const enrichConditions = [eq(apolloPeopleEnrichments.orgId, req.orgId!)];
