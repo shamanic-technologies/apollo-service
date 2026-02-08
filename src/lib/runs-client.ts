@@ -13,6 +13,9 @@ export interface Run {
   parentRunId: string | null;
   organizationId: string;
   userId: string | null;
+  appId: string;
+  brandId: string | null;
+  campaignId: string | null;
   serviceName: string;
   taskName: string;
   status: string;
@@ -32,26 +35,39 @@ export interface RunCost {
   createdAt: string;
 }
 
+export interface DescendantRun {
+  id: string;
+  parentRunId: string | null;
+  serviceName: string;
+  taskName: string;
+  status: string;
+  startedAt: string;
+  completedAt: string | null;
+  costs: RunCost[];
+  ownCostInUsdCents: string;
+}
+
+export interface RunWithOwnCost extends Run {
+  ownCostInUsdCents: string;
+}
+
 export interface RunWithCosts extends Run {
   costs: RunCost[];
   ownCostInUsdCents: string;
   childrenCostInUsdCents: string;
   totalCostInUsdCents: string;
-}
-
-export interface RunsOrganization {
-  id: string;
-  externalId: string;
-  createdAt: string;
-  updatedAt: string;
+  descendantRuns: DescendantRun[];
 }
 
 export interface CreateRunParams {
-  organizationId: string;
+  clerkOrgId: string;
+  clerkUserId?: string;
+  appId: string;
+  brandId?: string;
+  campaignId?: string;
   serviceName: string;
   taskName: string;
   parentRunId?: string;
-  userId?: string;
 }
 
 export interface CostItem {
@@ -60,30 +76,19 @@ export interface CostItem {
 }
 
 export interface ListRunsParams {
-  organizationId: string;
+  clerkOrgId: string;
+  clerkUserId?: string;
+  appId?: string;
+  brandId?: string;
+  campaignId?: string;
   serviceName?: string;
   taskName?: string;
-  userId?: string;
   status?: string;
+  parentRunId?: string;
   startedAfter?: string;
   startedBefore?: string;
   limit?: number;
   offset?: number;
-}
-
-export interface RunSummaryParams {
-  organizationId: string;
-  serviceName?: string;
-  startedAfter?: string;
-  startedBefore?: string;
-  groupBy?: "costName" | "userId" | "serviceName";
-}
-
-export interface SummaryBreakdown {
-  key: string;
-  totalCostInUsdCents: string;
-  totalQuantity?: string;
-  runCount?: number;
 }
 
 // ─── HTTP helpers ────────────────────────────────────────────────────────────
@@ -113,32 +118,11 @@ async function runsRequest<T>(
   return response.json() as Promise<T>;
 }
 
-// ─── Org cache (in-memory, per process) ──────────────────────────────────────
-
-const orgCache = new Map<string, string>(); // clerkOrgId → runs-service orgId
-
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 /**
- * Ensure organization exists in runs-service.
- * Uses clerkOrgId as externalId. Caches result in memory.
- * Returns the runs-service organization UUID.
- */
-export async function ensureOrganization(clerkOrgId: string): Promise<string> {
-  const cached = orgCache.get(clerkOrgId);
-  if (cached) return cached;
-
-  const org = await runsRequest<RunsOrganization>("/v1/organizations", {
-    method: "POST",
-    body: { externalId: clerkOrgId },
-  });
-
-  orgCache.set(clerkOrgId, org.id);
-  return org.id;
-}
-
-/**
  * Create a new run in runs-service.
+ * Organizations are resolved automatically from clerkOrgId.
  */
 export async function createRun(params: CreateRunParams): Promise<Run> {
   return runsRequest<Run>("/v1/runs", {
@@ -175,7 +159,7 @@ export async function addCosts(
 }
 
 /**
- * Get a single run with costs (including recursive children costs).
+ * Get a single run with costs (including descendant runs and their costs).
  */
 export async function getRun(runId: string): Promise<RunWithCosts> {
   return runsRequest<RunWithCosts>(`/v1/runs/${runId}`);
@@ -186,19 +170,23 @@ export async function getRun(runId: string): Promise<RunWithCosts> {
  */
 export async function listRuns(
   params: ListRunsParams
-): Promise<{ runs: Run[]; limit: number; offset: number }> {
+): Promise<{ runs: RunWithOwnCost[]; limit: number; offset: number }> {
   const searchParams = new URLSearchParams();
-  searchParams.set("organizationId", params.organizationId);
+  searchParams.set("clerkOrgId", params.clerkOrgId);
+  if (params.clerkUserId) searchParams.set("clerkUserId", params.clerkUserId);
+  if (params.appId) searchParams.set("appId", params.appId);
+  if (params.brandId) searchParams.set("brandId", params.brandId);
+  if (params.campaignId) searchParams.set("campaignId", params.campaignId);
   if (params.serviceName) searchParams.set("serviceName", params.serviceName);
   if (params.taskName) searchParams.set("taskName", params.taskName);
-  if (params.userId) searchParams.set("userId", params.userId);
   if (params.status) searchParams.set("status", params.status);
+  if (params.parentRunId) searchParams.set("parentRunId", params.parentRunId);
   if (params.startedAfter) searchParams.set("startedAfter", params.startedAfter);
   if (params.startedBefore) searchParams.set("startedBefore", params.startedBefore);
   if (params.limit) searchParams.set("limit", String(params.limit));
   if (params.offset) searchParams.set("offset", String(params.offset));
 
-  return runsRequest<{ runs: Run[]; limit: number; offset: number }>(
+  return runsRequest<{ runs: RunWithOwnCost[]; limit: number; offset: number }>(
     `/v1/runs?${searchParams.toString()}`
   );
 }
@@ -213,22 +201,4 @@ export async function getRunsBatch(
   if (runIds.length === 0) return new Map();
   const results = await Promise.all(runIds.map((id) => getRun(id)));
   return new Map(results.map((r) => [r.id, r]));
-}
-
-/**
- * Get aggregated cost summary.
- */
-export async function getRunSummary(
-  params: RunSummaryParams
-): Promise<{ breakdown: SummaryBreakdown[] }> {
-  const searchParams = new URLSearchParams();
-  searchParams.set("organizationId", params.organizationId);
-  if (params.serviceName) searchParams.set("serviceName", params.serviceName);
-  if (params.startedAfter) searchParams.set("startedAfter", params.startedAfter);
-  if (params.startedBefore) searchParams.set("startedBefore", params.startedBefore);
-  if (params.groupBy) searchParams.set("groupBy", params.groupBy);
-
-  return runsRequest<{ breakdown: SummaryBreakdown[] }>(
-    `/v1/runs/summary?${searchParams.toString()}`
-  );
 }
