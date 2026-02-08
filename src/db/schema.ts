@@ -38,6 +38,11 @@ export const apolloPeopleSearches = pgTable(
       .references(() => orgs.id, { onDelete: "cascade" }),
     runId: text("run_id").notNull(), // Reference to runs-service run ID
 
+    // Hierarchy IDs
+    appId: text("app_id").notNull(),
+    brandId: text("brand_id").notNull(),
+    campaignId: text("campaign_id").notNull(),
+
     // Request params (for debugging/replay)
     requestParams: jsonb("request_params"),
 
@@ -53,6 +58,7 @@ export const apolloPeopleSearches = pgTable(
   (table) => [
     index("idx_searches_org").on(table.orgId),
     index("idx_searches_run").on(table.runId),
+    index("idx_searches_campaign").on(table.campaignId),
   ]
 );
 
@@ -67,6 +73,11 @@ export const apolloPeopleEnrichments = pgTable(
     runId: text("run_id").notNull(),
     searchId: uuid("search_id")
       .references(() => apolloPeopleSearches.id, { onDelete: "cascade" }),
+
+    // Hierarchy IDs
+    appId: text("app_id").notNull(),
+    brandId: text("brand_id").notNull(),
+    campaignId: text("campaign_id").notNull(),
 
     // Apollo person ID
     apolloPersonId: text("apollo_person_id"),
@@ -99,6 +110,7 @@ export const apolloPeopleEnrichments = pgTable(
     index("idx_enrichments_run").on(table.runId),
     index("idx_enrichments_email").on(table.email),
     index("idx_enrichments_person_id").on(table.apolloPersonId),
+    index("idx_enrichments_campaign").on(table.campaignId),
   ]
 );
 

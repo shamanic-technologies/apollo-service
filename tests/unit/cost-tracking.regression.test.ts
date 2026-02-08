@@ -131,6 +131,9 @@ describe("Apollo service cost tracking", () => {
       .set("X-Clerk-Org-Id", "org_test")
       .send({
         runId: "campaign-run-abc",
+        appId: "app-1",
+        brandId: "brand-1",
+        campaignId: "campaign-1",
         personTitles: ["CEO"],
       })
       .expect(200);
@@ -156,6 +159,9 @@ describe("Apollo service cost tracking", () => {
       .set("X-Clerk-Org-Id", "org_test")
       .send({
         runId: "campaign-run-abc",
+        appId: "app-1",
+        brandId: "brand-1",
+        campaignId: "campaign-1",
         personTitles: ["CEO"],
       })
       .expect(200);
@@ -187,6 +193,9 @@ describe("Apollo service cost tracking", () => {
       .set("X-Clerk-Org-Id", "org_test")
       .send({
         runId: "campaign-run-abc",
+        appId: "app-1",
+        brandId: "brand-1",
+        campaignId: "campaign-1",
         personTitles: ["CEO"],
       })
       .expect(200); // Search still succeeds despite cost tracking failure
@@ -218,6 +227,9 @@ describe("Apollo service cost tracking", () => {
       .set("X-Clerk-Org-Id", "org_test")
       .send({
         runId: "campaign-run-abc",
+        appId: "app-1",
+        brandId: "brand-1",
+        campaignId: "campaign-1",
         personTitles: ["CEO"],
       })
       .expect(200);
@@ -240,6 +252,9 @@ describe("Apollo service cost tracking", () => {
       .set("X-Clerk-Org-Id", "org_test")
       .send({
         runId: "campaign-run-abc",
+        appId: "app-1",
+        brandId: "brand-1",
+        campaignId: "campaign-1",
         personTitles: ["CEO"],
       })
       .expect(200);

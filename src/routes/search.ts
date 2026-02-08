@@ -15,7 +15,11 @@ const router = Router();
  */
 router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const { runId, ...searchParams } = req.body;
+    const { runId, appId, brandId, campaignId, ...searchParams } = req.body;
+
+    if (!appId || !brandId || !campaignId) {
+      return res.status(400).json({ error: "appId, brandId, and campaignId are required" });
+    }
 
     // Get Apollo API key from key-service
     const apolloApiKey = await getByokKey(req.clerkOrgId!, "apollo");
@@ -73,6 +77,9 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
         .values({
           orgId: req.orgId!,
           runId,
+          appId,
+          brandId,
+          campaignId,
           requestParams: apolloParams,
           peopleCount: result.people.length,
           totalEntries,
@@ -90,6 +97,9 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
           orgId: req.orgId!,
           runId,
           searchId: search.id,
+          appId,
+          brandId,
+          campaignId,
           apolloPersonId: person.id,
           firstName: person.first_name,
           lastName: person.last_name,
@@ -229,10 +239,14 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
  */
 router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const { apolloPersonId, runId } = req.body;
+    const { apolloPersonId, runId, appId, brandId, campaignId } = req.body;
 
     if (!apolloPersonId) {
       return res.status(400).json({ error: "apolloPersonId is required" });
+    }
+
+    if (!appId || !brandId || !campaignId) {
+      return res.status(400).json({ error: "appId, brandId, and campaignId are required" });
     }
 
     // Check cache: existing enrichment for this personId within 12 months
@@ -281,6 +295,9 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       const [enrichment] = await db.insert(apolloPeopleEnrichments).values({
         orgId: req.orgId!,
         runId,
+        appId,
+        brandId,
+        campaignId,
         apolloPersonId: person.id,
         firstName: person.first_name,
         lastName: person.last_name,
@@ -397,26 +414,29 @@ router.get("/enrichments/:runId", serviceAuth, async (req: AuthenticatedRequest,
 });
 
 /**
- * POST /stats - Get aggregated stats for multiple run IDs
- * Body: { runIds: string[] }
+ * POST /stats - Get aggregated stats with optional filters
+ * Body: { runIds?: string[], appId?: string, brandId?: string, campaignId?: string }
+ * orgId is always applied from auth. All body filters are optional.
  */
 router.post("/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
   /*  #swagger.requestBody = {
-        required: true,
+        required: false,
         content: {
           "application/json": {
             schema: {
               type: "object",
-              required: ["runIds"],
               properties: {
-                runIds: { type: "array", items: { type: "string" }, description: "Run IDs to aggregate stats for" }
+                runIds: { type: "array", items: { type: "string" }, description: "Run IDs to filter by" },
+                appId: { type: "string", description: "App ID to filter by" },
+                brandId: { type: "string", description: "Brand ID to filter by" },
+                campaignId: { type: "string", description: "Campaign ID to filter by" }
               }
             }
           }
         }
       }
       #swagger.responses[200] = {
-        description: "Aggregated stats for the given run IDs",
+        description: "Aggregated stats for the given filters",
         content: {
           "application/json": {
             schema: {
@@ -425,9 +445,10 @@ router.post("/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
                 stats: {
                   type: "object",
                   properties: {
-                    leadsFound: { type: "integer", description: "Number of enrichment records (leads) found" },
-                    searchesCount: { type: "integer", description: "Number of search operations performed" },
-                    totalPeopleFromSearches: { type: "integer", description: "Sum of peopleCount across all searches" }
+                    enrichedLeadsCount: { type: "integer", description: "Number of enriched lead records" },
+                    searchCount: { type: "integer", description: "Number of search operations performed" },
+                    fetchedPeopleCount: { type: "integer", description: "Sum of people returned from searches" },
+                    totalMatchingPeople: { type: "integer", description: "Sum of total matching people in Apollo (universe count)" }
                   }
                 }
               }
@@ -435,55 +456,60 @@ router.post("/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
           }
         }
       }
-      #swagger.responses[400] = { description: "runIds array required" }
   */
   try {
-    const { runIds } = req.body as { runIds: string[] };
+    const { runIds, appId, brandId, campaignId } = req.body as {
+      runIds?: string[];
+      appId?: string;
+      brandId?: string;
+      campaignId?: string;
+    };
 
-    if (!runIds || !Array.isArray(runIds)) {
-      return res.status(400).json({ error: "runIds array required" });
-    }
+    // Build dynamic where conditions for enrichments
+    const enrichConditions = [eq(apolloPeopleEnrichments.orgId, req.orgId!)];
+    if (runIds?.length) enrichConditions.push(inArray(apolloPeopleEnrichments.runId, runIds));
+    if (appId) enrichConditions.push(eq(apolloPeopleEnrichments.appId, appId));
+    if (brandId) enrichConditions.push(eq(apolloPeopleEnrichments.brandId, brandId));
+    if (campaignId) enrichConditions.push(eq(apolloPeopleEnrichments.campaignId, campaignId));
 
-    if (runIds.length === 0) {
-      return res.json({ stats: { leadsFound: 0, searchesCount: 0, totalPeopleFromSearches: 0 } });
-    }
+    // Build dynamic where conditions for searches
+    const searchConditions = [eq(apolloPeopleSearches.orgId, req.orgId!)];
+    if (runIds?.length) searchConditions.push(inArray(apolloPeopleSearches.runId, runIds));
+    if (appId) searchConditions.push(eq(apolloPeopleSearches.appId, appId));
+    if (brandId) searchConditions.push(eq(apolloPeopleSearches.brandId, brandId));
+    if (campaignId) searchConditions.push(eq(apolloPeopleSearches.campaignId, campaignId));
 
     // Use SQL COUNT/SUM instead of fetching all rows into memory
     const [enrichmentStats] = await db
-      .select({ leadsFound: count() })
+      .select({ enrichedLeadsCount: count() })
       .from(apolloPeopleEnrichments)
-      .where(
-        and(
-          inArray(apolloPeopleEnrichments.runId, runIds),
-          eq(apolloPeopleEnrichments.orgId, req.orgId!)
-        )
-      );
+      .where(and(...enrichConditions));
 
     const [searchStats] = await db
       .select({
-        searchesCount: count(),
-        totalPeopleFromSearches: sum(apolloPeopleSearches.peopleCount),
+        searchCount: count(),
+        fetchedPeopleCount: sum(apolloPeopleSearches.peopleCount),
+        totalMatchingPeople: sum(apolloPeopleSearches.totalEntries),
       })
       .from(apolloPeopleSearches)
-      .where(
-        and(
-          inArray(apolloPeopleSearches.runId, runIds),
-          eq(apolloPeopleSearches.orgId, req.orgId!)
-        )
-      );
+      .where(and(...searchConditions));
 
     const stats = {
-      leadsFound: enrichmentStats.leadsFound,
-      searchesCount: searchStats.searchesCount,
-      totalPeopleFromSearches: Number(searchStats.totalPeopleFromSearches) || 0,
+      enrichedLeadsCount: enrichmentStats.enrichedLeadsCount,
+      searchCount: searchStats.searchCount,
+      fetchedPeopleCount: Number(searchStats.fetchedPeopleCount) || 0,
+      totalMatchingPeople: Number(searchStats.totalMatchingPeople) || 0,
     };
 
     // Only warn when searches exist but enrichments don't — that's the actual anomaly
-    if (stats.searchesCount > 0 && stats.leadsFound === 0) {
+    if (stats.searchCount > 0 && stats.enrichedLeadsCount === 0) {
       console.warn("[Apollo Service][POST /stats] searches found but 0 leads", {
         orgId: req.orgId,
-        runIds: runIds.slice(0, 5),
-        searchesCount: stats.searchesCount,
+        appId,
+        brandId,
+        campaignId,
+        runIds: runIds?.slice(0, 5),
+        searchCount: stats.searchCount,
       });
     }
 
