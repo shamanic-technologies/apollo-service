@@ -40,20 +40,16 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
     // Create a child run in runs-service for this search
     let searchRunId: string | undefined;
     if (runId) {
-      try {
-        const searchRun = await createRun({
-          clerkOrgId: req.clerkOrgId!,
-          appId: appId || "mcpfactory",
-          brandId,
-          campaignId,
-          serviceName: "apollo-service",
-          taskName: "people-search",
-          parentRunId: runId,
-        });
-        searchRunId = searchRun.id;
-      } catch (err) {
-        console.warn("[Apollo Service] Failed to create search run in runs-service:", err);
-      }
+      const searchRun = await createRun({
+        clerkOrgId: req.clerkOrgId!,
+        appId: appId || "mcpfactory",
+        brandId,
+        campaignId,
+        serviceName: "apollo-service",
+        taskName: "people-search",
+        parentRunId: runId,
+      });
+      searchRunId = searchRun.id;
     }
 
     const result = await searchPeople(apolloApiKey, apolloParams);
@@ -118,50 +114,29 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
         // Create grandchild run + post costs in runs-service
         if (searchRunId) {
-          try {
-            const enrichRun = await createRun({
-              clerkOrgId: req.clerkOrgId!,
-              appId: appId || "mcpfactory",
-              brandId,
-              campaignId,
-              serviceName: "apollo-service",
-              taskName: "enrichment",
-              parentRunId: searchRunId,
-            });
+          const enrichRun = await createRun({
+            clerkOrgId: req.clerkOrgId!,
+            appId: appId || "mcpfactory",
+            brandId,
+            campaignId,
+            serviceName: "apollo-service",
+            taskName: "enrichment",
+            parentRunId: searchRunId,
+          });
 
-            // Link enrichment run to record IMMEDIATELY so per-item cost
-            // lookups work even if addCosts/updateRun fail below
-            await db.update(apolloPeopleEnrichments)
-              .set({ enrichmentRunId: enrichRun.id })
-              .where(eq(apolloPeopleEnrichments.id, enrichment.id));
+          await db.update(apolloPeopleEnrichments)
+            .set({ enrichmentRunId: enrichRun.id })
+            .where(eq(apolloPeopleEnrichments.id, enrichment.id));
 
-            await addCosts(enrichRun.id, [{ costName: "apollo-enrichment-credit", quantity: 1 }]);
-            await updateRun(enrichRun.id, "completed");
-          } catch (err) {
-            console.error("[Apollo Service] COST TRACKING FAILED for enrichment — costs will be missing from campaign totals.", {
-              runId,
-              searchRunId,
-              personId: person.id,
-              costName: "apollo-enrichment-credit",
-              error: err instanceof Error ? err.message : err,
-            });
-          }
+          await addCosts(enrichRun.id, [{ costName: "apollo-enrichment-credit", quantity: 1 }]);
+          await updateRun(enrichRun.id, "completed");
         }
       }
 
       // Mark search run as completed
       if (searchRunId) {
-        try {
-          await addCosts(searchRunId, [{ costName: "apollo-search-credit", quantity: 1 }]);
-          await updateRun(searchRunId, "completed");
-        } catch (err) {
-          console.error("[Apollo Service] COST TRACKING FAILED for search — costs will be missing from campaign totals.", {
-            runId,
-            searchRunId,
-            costName: "apollo-search-credit",
-            error: err instanceof Error ? err.message : err,
-          });
-        }
+        await addCosts(searchRunId, [{ costName: "apollo-search-credit", quantity: 1 }]);
+        await updateRun(searchRunId, "completed");
       }
     }
 
@@ -316,30 +291,22 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       enrichmentId = enrichment.id;
 
       // Track cost in runs-service
-      try {
-        const enrichRun = await createRun({
-          clerkOrgId: req.clerkOrgId!,
-          appId: appId || "mcpfactory",
-          brandId,
-          campaignId,
-          serviceName: "apollo-service",
-          taskName: "enrichment",
-          parentRunId: runId,
-        });
+      const enrichRun = await createRun({
+        clerkOrgId: req.clerkOrgId!,
+        appId: appId || "mcpfactory",
+        brandId,
+        campaignId,
+        serviceName: "apollo-service",
+        taskName: "enrichment",
+        parentRunId: runId,
+      });
 
-        await db.update(apolloPeopleEnrichments)
-          .set({ enrichmentRunId: enrichRun.id })
-          .where(eq(apolloPeopleEnrichments.id, enrichment.id));
+      await db.update(apolloPeopleEnrichments)
+        .set({ enrichmentRunId: enrichRun.id })
+        .where(eq(apolloPeopleEnrichments.id, enrichment.id));
 
-        await addCosts(enrichRun.id, [{ costName: "apollo-enrichment-credit", quantity: 1 }]);
-        await updateRun(enrichRun.id, "completed");
-      } catch (err) {
-        console.error("[Apollo Service] COST TRACKING FAILED for enrichment", {
-          runId,
-          apolloPersonId,
-          error: err instanceof Error ? err.message : err,
-        });
-      }
+      await addCosts(enrichRun.id, [{ costName: "apollo-enrichment-credit", quantity: 1 }]);
+      await updateRun(enrichRun.id, "completed");
     }
 
     const transformed = person ? {

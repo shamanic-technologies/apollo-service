@@ -5,14 +5,14 @@ import request from "supertest";
 /**
  * Regression test: Apollo service cost tracking
  *
- * Bug: Campaign showed $0.11 total cost for 350 leads. Apollo enrichment
- * credits were either not tracked or priced at near-zero in runs-service.
+ * Cost tracking via runs-service is mandatory when a runId is provided.
+ * If createRun, addCosts, or updateRun fail, the request must return 500.
  *
  * These tests verify:
  * - Correct cost names are used (apollo-enrichment-credit, apollo-search-credit)
  * - One enrichment cost is posted per person
  * - One search cost is posted per search
- * - Errors are logged at error level (not silently swallowed)
+ * - Runs-service failures propagate as 500 errors (hard fail, not soft)
  */
 
 // Mock runs-client before importing the route
@@ -51,6 +51,15 @@ vi.mock("../../src/db/index.js", () => ({
         return { where: vi.fn().mockResolvedValue(undefined) };
       }),
     }),
+    select: vi.fn().mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          orderBy: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([]),
+          }),
+        }),
+      }),
+    }),
     query: {
       apolloPeopleSearches: { findMany: vi.fn().mockResolvedValue([]) },
       apolloPeopleEnrichments: { findMany: vi.fn().mockResolvedValue([]) },
@@ -86,11 +95,33 @@ const mockPeople = Array.from({ length: MOCK_PEOPLE_COUNT }, (_, i) => ({
   },
 }));
 
+const mockSearchPeople = vi.fn().mockResolvedValue({
+  people: mockPeople,
+  total_entries: MOCK_PEOPLE_COUNT,
+});
+
+const mockEnrichPerson = vi.fn().mockResolvedValue({
+  person: {
+    id: "person-0",
+    first_name: "First0",
+    last_name: "Last0",
+    email: "enriched@example.com",
+    email_status: "verified",
+    title: "CEO",
+    linkedin_url: null,
+    organization: {
+      name: "Company0",
+      primary_domain: "company0.com",
+      industry: "tech",
+      estimated_num_employees: 50,
+      annual_revenue: null,
+    },
+  },
+});
+
 vi.mock("../../src/lib/apollo-client.js", () => ({
-  searchPeople: vi.fn().mockResolvedValue({
-    people: mockPeople,
-    total_entries: MOCK_PEOPLE_COUNT,
-  }),
+  searchPeople: (...args: unknown[]) => mockSearchPeople(...args),
+  enrichPerson: (...args: unknown[]) => mockEnrichPerson(...args),
 }));
 
 function createTestApp() {
@@ -108,6 +139,28 @@ describe("Apollo service cost tracking", () => {
     mockUpdateRun.mockResolvedValue({});
     mockAddCosts.mockResolvedValue({ costs: [] });
     mockInsertReturning.mockResolvedValue([{ id: "record-1" }]);
+    mockSearchPeople.mockResolvedValue({
+      people: mockPeople,
+      total_entries: MOCK_PEOPLE_COUNT,
+    });
+    mockEnrichPerson.mockResolvedValue({
+      person: {
+        id: "person-0",
+        first_name: "First0",
+        last_name: "Last0",
+        email: "enriched@example.com",
+        email_status: "verified",
+        title: "CEO",
+        linkedin_url: null,
+        organization: {
+          name: "Company0",
+          primary_domain: "company0.com",
+          industry: "tech",
+          estimated_num_employees: 50,
+          annual_revenue: null,
+        },
+      },
+    });
 
     // First call = search run, subsequent calls = enrichment runs
     let callCount = 0;
@@ -120,6 +173,8 @@ describe("Apollo service cost tracking", () => {
     const { default: searchRoutes } = await import("../../src/routes/search.js");
     app.use(searchRoutes);
   });
+
+  // ─── Happy path ──────────────────────────────────────────────────────────────
 
   it("should post apollo-enrichment-credit cost for each person found", async () => {
     await request(app)
@@ -173,75 +228,6 @@ describe("Apollo service cost tracking", () => {
     expect(searchItem.quantity).toBe(1);
   });
 
-  it("should log at error level when enrichment cost tracking fails", async () => {
-    // Make createRun succeed but addCosts fail for enrichments
-    let createCallCount = 0;
-    mockCreateRun.mockImplementation(() => {
-      createCallCount++;
-      return Promise.resolve({ id: `run-${createCallCount}` });
-    });
-    mockAddCosts.mockRejectedValue(new Error("Cost name not registered"));
-
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-    await request(app)
-      .post("/search")
-      .set("X-API-Key", "test-service-secret")
-      .set("X-Clerk-Org-Id", "org_test")
-      .send({
-        runId: "campaign-run-abc",
-        appId: "app-1",
-        brandId: "brand-1",
-        campaignId: "campaign-1",
-        personTitles: ["CEO"],
-      })
-      .expect(200); // Search still succeeds despite cost tracking failure
-
-    // Must log at error level (not warn)
-    const costErrorCalls = errorSpy.mock.calls.filter(
-      (call) => typeof call[0] === "string" && call[0].includes("COST TRACKING FAILED")
-    );
-    expect(costErrorCalls.length).toBeGreaterThan(0);
-
-    errorSpy.mockRestore();
-  });
-
-  it("should link enrichmentRunId to DB record even when addCosts fails", async () => {
-    // This is the critical regression: if addCosts fails, the DB link must
-    // still be set so the dashboard can show per-item cost details.
-    let createCallCount = 0;
-    mockCreateRun.mockImplementation(() => {
-      createCallCount++;
-      return Promise.resolve({ id: `run-${createCallCount}` });
-    });
-    mockAddCosts.mockRejectedValue(new Error("Cost name not registered"));
-
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-    await request(app)
-      .post("/search")
-      .set("X-API-Key", "test-service-secret")
-      .set("X-Clerk-Org-Id", "org_test")
-      .send({
-        runId: "campaign-run-abc",
-        appId: "app-1",
-        brandId: "brand-1",
-        campaignId: "campaign-1",
-        personTitles: ["CEO"],
-      })
-      .expect(200);
-
-    // enrichmentRunId must be set in the DB even though addCosts failed
-    const linkCalls = mockDbSetCalls.filter((data) => "enrichmentRunId" in data);
-    expect(linkCalls).toHaveLength(MOCK_PEOPLE_COUNT);
-    for (const linkCall of linkCalls) {
-      expect(linkCall.enrichmentRunId).toBeDefined();
-      expect(typeof linkCall.enrichmentRunId).toBe("string");
-    }
-
-    errorSpy.mockRestore();
-  });
-
   it("should use exact cost name strings that match runs-service catalog", async () => {
     await request(app)
       .post("/search")
@@ -262,5 +248,173 @@ describe("Apollo service cost tracking", () => {
     // Only these exact cost names should be used
     const uniqueNames = [...new Set(allCostNames)];
     expect(uniqueNames.sort()).toEqual(["apollo-enrichment-credit", "apollo-search-credit"]);
+  });
+
+  // ─── Hard failure on runs-service errors (POST /search) ──────────────────────
+
+  it("should return 500 when createRun fails", async () => {
+    mockCreateRun.mockRejectedValue(new Error("runs-service POST /v1/runs failed: 401"));
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await request(app)
+      .post("/search")
+      .set("X-API-Key", "test-service-secret")
+      .set("X-Clerk-Org-Id", "org_test")
+      .send({
+        runId: "campaign-run-abc",
+        appId: "app-1",
+        brandId: "brand-1",
+        campaignId: "campaign-1",
+        personTitles: ["CEO"],
+      })
+      .expect(500);
+
+    expect(res.body.error).toContain("runs-service POST /v1/runs failed: 401");
+
+    // Apollo API should never have been called
+    expect(mockSearchPeople).not.toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+  });
+
+  it("should return 500 when addCosts fails for enrichment", async () => {
+    mockAddCosts.mockRejectedValue(new Error("Cost name not registered"));
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await request(app)
+      .post("/search")
+      .set("X-API-Key", "test-service-secret")
+      .set("X-Clerk-Org-Id", "org_test")
+      .send({
+        runId: "campaign-run-abc",
+        appId: "app-1",
+        brandId: "brand-1",
+        campaignId: "campaign-1",
+        personTitles: ["CEO"],
+      })
+      .expect(500);
+
+    expect(res.body.error).toContain("Cost name not registered");
+
+    errorSpy.mockRestore();
+  });
+
+  it("should return 500 when updateRun fails", async () => {
+    mockUpdateRun.mockRejectedValue(new Error("runs-service PATCH failed: 503"));
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await request(app)
+      .post("/search")
+      .set("X-API-Key", "test-service-secret")
+      .set("X-Clerk-Org-Id", "org_test")
+      .send({
+        runId: "campaign-run-abc",
+        appId: "app-1",
+        brandId: "brand-1",
+        campaignId: "campaign-1",
+        personTitles: ["CEO"],
+      })
+      .expect(500);
+
+    expect(res.body.error).toContain("runs-service PATCH failed: 503");
+
+    errorSpy.mockRestore();
+  });
+
+  it("should still link enrichmentRunId to DB before addCosts fails", async () => {
+    mockAddCosts.mockRejectedValue(new Error("Cost name not registered"));
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await request(app)
+      .post("/search")
+      .set("X-API-Key", "test-service-secret")
+      .set("X-Clerk-Org-Id", "org_test")
+      .send({
+        runId: "campaign-run-abc",
+        appId: "app-1",
+        brandId: "brand-1",
+        campaignId: "campaign-1",
+        personTitles: ["CEO"],
+      })
+      .expect(500);
+
+    // enrichmentRunId is set BEFORE addCosts, so at least the first person's link exists
+    const linkCalls = mockDbSetCalls.filter((data) => "enrichmentRunId" in data);
+    expect(linkCalls.length).toBeGreaterThanOrEqual(1);
+    for (const linkCall of linkCalls) {
+      expect(linkCall.enrichmentRunId).toBeDefined();
+      expect(typeof linkCall.enrichmentRunId).toBe("string");
+    }
+
+    errorSpy.mockRestore();
+  });
+
+  it("should return 200 when no runId provided (no cost tracking attempted)", async () => {
+    // Even if runs-service is broken, no-runId requests succeed
+    mockCreateRun.mockRejectedValue(new Error("should not be called"));
+
+    await request(app)
+      .post("/search")
+      .set("X-API-Key", "test-service-secret")
+      .set("X-Clerk-Org-Id", "org_test")
+      .send({
+        appId: "app-1",
+        brandId: "brand-1",
+        campaignId: "campaign-1",
+        personTitles: ["CEO"],
+      })
+      .expect(200);
+
+    expect(mockCreateRun).not.toHaveBeenCalled();
+    expect(mockAddCosts).not.toHaveBeenCalled();
+    expect(mockUpdateRun).not.toHaveBeenCalled();
+  });
+
+  // ─── Hard failure on runs-service errors (POST /enrich) ──────────────────────
+
+  it("should return 500 when addCosts fails for POST /enrich", async () => {
+    mockAddCosts.mockRejectedValue(new Error("Cost name not registered"));
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await request(app)
+      .post("/enrich")
+      .set("X-API-Key", "test-service-secret")
+      .set("X-Clerk-Org-Id", "org_test")
+      .send({
+        apolloPersonId: "person-0",
+        runId: "campaign-run-abc",
+        appId: "app-1",
+        brandId: "brand-1",
+        campaignId: "campaign-1",
+      })
+      .expect(500);
+
+    expect(res.body.error).toContain("Cost name not registered");
+
+    errorSpy.mockRestore();
+  });
+
+  it("should return 200 for POST /enrich when no runId provided", async () => {
+    mockCreateRun.mockRejectedValue(new Error("should not be called"));
+
+    await request(app)
+      .post("/enrich")
+      .set("X-API-Key", "test-service-secret")
+      .set("X-Clerk-Org-Id", "org_test")
+      .send({
+        apolloPersonId: "person-0",
+        appId: "app-1",
+        brandId: "brand-1",
+        campaignId: "campaign-1",
+      })
+      .expect(200);
+
+    expect(mockCreateRun).not.toHaveBeenCalled();
+    expect(mockAddCosts).not.toHaveBeenCalled();
   });
 });
