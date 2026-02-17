@@ -1,0 +1,1609 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Apollo Service",
+    "description": "Service for searching and enriching leads via the Apollo API",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3004"
+    }
+  ],
+  "components": {
+    "schemas": {
+      "ClerkOrgId": {
+        "type": "string",
+        "description": "Clerk organization ID",
+        "example": "org_abc123"
+      },
+      "HealthResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "service"
+        ]
+      },
+      "HealthDebugResponse": {
+        "type": "object",
+        "properties": {
+          "keyServiceUrl": {
+            "type": "string"
+          },
+          "dbConfigured": {
+            "type": "boolean"
+          },
+          "dbStatus": {
+            "type": "string"
+          },
+          "keyServiceStatus": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "keyServiceUrl",
+          "dbConfigured",
+          "dbStatus",
+          "keyServiceStatus"
+        ]
+      },
+      "SearchResponse": {
+        "type": "object",
+        "properties": {
+          "searchId": {
+            "type": "string",
+            "nullable": true
+          },
+          "peopleCount": {
+            "type": "number"
+          },
+          "totalEntries": {
+            "type": "number"
+          },
+          "people": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Person"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/Pagination"
+          }
+        },
+        "required": [
+          "searchId",
+          "peopleCount",
+          "totalEntries",
+          "people",
+          "pagination"
+        ]
+      },
+      "Person": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "firstName": {
+            "type": "string"
+          },
+          "lastName": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "nullable": true
+          },
+          "emailStatus": {
+            "type": "string",
+            "nullable": true
+          },
+          "title": {
+            "type": "string"
+          },
+          "linkedinUrl": {
+            "type": "string"
+          },
+          "photoUrl": {
+            "type": "string"
+          },
+          "headline": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "country": {
+            "type": "string"
+          },
+          "seniority": {
+            "type": "string"
+          },
+          "departments": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "subdepartments": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "functions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "twitterUrl": {
+            "type": "string"
+          },
+          "githubUrl": {
+            "type": "string"
+          },
+          "facebookUrl": {
+            "type": "string"
+          },
+          "employmentHistory": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "organizationName": {
+                  "type": "string"
+                },
+                "startDate": {
+                  "type": "string"
+                },
+                "endDate": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "current": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "organizationName": {
+            "type": "string"
+          },
+          "organizationDomain": {
+            "type": "string"
+          },
+          "organizationIndustry": {
+            "type": "string"
+          },
+          "organizationSize": {
+            "type": "string"
+          },
+          "organizationRevenueUsd": {
+            "type": "string"
+          },
+          "organizationWebsiteUrl": {
+            "type": "string"
+          },
+          "organizationLogoUrl": {
+            "type": "string"
+          },
+          "organizationShortDescription": {
+            "type": "string"
+          },
+          "organizationSeoDescription": {
+            "type": "string"
+          },
+          "organizationLinkedinUrl": {
+            "type": "string"
+          },
+          "organizationTwitterUrl": {
+            "type": "string"
+          },
+          "organizationFacebookUrl": {
+            "type": "string"
+          },
+          "organizationBlogUrl": {
+            "type": "string"
+          },
+          "organizationCrunchbaseUrl": {
+            "type": "string"
+          },
+          "organizationAngellistUrl": {
+            "type": "string"
+          },
+          "organizationFoundedYear": {
+            "type": "number"
+          },
+          "organizationPrimaryPhone": {
+            "type": "string"
+          },
+          "organizationPubliclyTradedSymbol": {
+            "type": "string"
+          },
+          "organizationPubliclyTradedExchange": {
+            "type": "string"
+          },
+          "organizationAnnualRevenuePrinted": {
+            "type": "string"
+          },
+          "organizationTotalFunding": {
+            "type": "string"
+          },
+          "organizationTotalFundingPrinted": {
+            "type": "string"
+          },
+          "organizationLatestFundingRoundDate": {
+            "type": "string"
+          },
+          "organizationLatestFundingStage": {
+            "type": "string"
+          },
+          "organizationFundingEvents": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "date": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "investors": {
+                  "type": "string"
+                },
+                "amount": {
+                  "type": "number"
+                },
+                "currency": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "organizationCity": {
+            "type": "string"
+          },
+          "organizationState": {
+            "type": "string"
+          },
+          "organizationCountry": {
+            "type": "string"
+          },
+          "organizationStreetAddress": {
+            "type": "string"
+          },
+          "organizationPostalCode": {
+            "type": "string"
+          },
+          "organizationTechnologyNames": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "organizationCurrentTechnologies": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "uid": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "category": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "organizationKeywords": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "organizationIndustries": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "organizationSecondaryIndustries": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "organizationNumSuborganizations": {
+            "type": "number"
+          },
+          "organizationRetailLocationCount": {
+            "type": "number"
+          },
+          "organizationAlexaRanking": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "firstName",
+          "lastName",
+          "email",
+          "emailStatus",
+          "title",
+          "linkedinUrl"
+        ]
+      },
+      "Pagination": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "number"
+          },
+          "perPage": {
+            "type": "number"
+          },
+          "totalEntries": {
+            "type": "number"
+          },
+          "totalPages": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "page",
+          "perPage",
+          "totalEntries",
+          "totalPages"
+        ]
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "SearchRequest": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "appId": {
+            "type": "string"
+          },
+          "brandId": {
+            "type": "string"
+          },
+          "campaignId": {
+            "type": "string"
+          },
+          "personTitles": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "qOrganizationKeywordTags": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "organizationLocations": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "organizationNumEmployeesRanges": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "1,10",
+                "11,20",
+                "21,50",
+                "51,100",
+                "101,200",
+                "201,500",
+                "501,1000",
+                "1001,2000",
+                "2001,5000",
+                "5001,10000",
+                "10001,"
+              ]
+            }
+          },
+          "qOrganizationIndustryTagIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "qKeywords": {
+            "type": "string"
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          },
+          "perPage": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "appId",
+          "brandId",
+          "campaignId"
+        ]
+      },
+      "EnrichResponse": {
+        "type": "object",
+        "properties": {
+          "enrichmentId": {
+            "type": "string",
+            "nullable": true
+          },
+          "person": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Person"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          }
+        },
+        "required": [
+          "enrichmentId",
+          "person"
+        ]
+      },
+      "EnrichRequest": {
+        "type": "object",
+        "properties": {
+          "apolloPersonId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "runId": {
+            "type": "string"
+          },
+          "appId": {
+            "type": "string"
+          },
+          "brandId": {
+            "type": "string"
+          },
+          "campaignId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "apolloPersonId",
+          "appId",
+          "brandId",
+          "campaignId"
+        ]
+      },
+      "SearchesResponse": {
+        "type": "object",
+        "properties": {
+          "searches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchRecord"
+            }
+          }
+        },
+        "required": [
+          "searches"
+        ]
+      },
+      "SearchRecord": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "appId": {
+            "type": "string"
+          },
+          "brandId": {
+            "type": "string"
+          },
+          "campaignId": {
+            "type": "string"
+          },
+          "requestParams": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            }
+          },
+          "peopleCount": {
+            "type": "number"
+          },
+          "totalEntries": {
+            "type": "number"
+          },
+          "responseRaw": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            }
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "orgId",
+          "runId",
+          "appId",
+          "brandId",
+          "campaignId",
+          "requestParams",
+          "peopleCount",
+          "totalEntries",
+          "responseRaw",
+          "createdAt"
+        ]
+      },
+      "EnrichmentsResponse": {
+        "type": "object",
+        "properties": {
+          "enrichments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnrichmentRecord"
+            }
+          }
+        },
+        "required": [
+          "enrichments"
+        ]
+      },
+      "EnrichmentRecord": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "searchId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "appId": {
+            "type": "string"
+          },
+          "brandId": {
+            "type": "string"
+          },
+          "campaignId": {
+            "type": "string"
+          },
+          "apolloPersonId": {
+            "type": "string"
+          },
+          "firstName": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastName": {
+            "type": "string",
+            "nullable": true
+          },
+          "email": {
+            "type": "string",
+            "nullable": true
+          },
+          "emailStatus": {
+            "type": "string",
+            "nullable": true
+          },
+          "title": {
+            "type": "string",
+            "nullable": true
+          },
+          "linkedinUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "photoUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "headline": {
+            "type": "string",
+            "nullable": true
+          },
+          "city": {
+            "type": "string",
+            "nullable": true
+          },
+          "state": {
+            "type": "string",
+            "nullable": true
+          },
+          "country": {
+            "type": "string",
+            "nullable": true
+          },
+          "seniority": {
+            "type": "string",
+            "nullable": true
+          },
+          "departments": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "subdepartments": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "functions": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "twitterUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "githubUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "facebookUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "employmentHistory": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "organizationName": {
+                  "type": "string"
+                },
+                "startDate": {
+                  "type": "string"
+                },
+                "endDate": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "current": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "organizationName": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationDomain": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationIndustry": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationSize": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationRevenueUsd": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationWebsiteUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationLogoUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationShortDescription": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationSeoDescription": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationLinkedinUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationTwitterUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationFacebookUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationBlogUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationCrunchbaseUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationAngellistUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationFoundedYear": {
+            "type": "number",
+            "nullable": true
+          },
+          "organizationPrimaryPhone": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationPubliclyTradedSymbol": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationPubliclyTradedExchange": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationAnnualRevenuePrinted": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationTotalFunding": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationTotalFundingPrinted": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationLatestFundingRoundDate": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationLatestFundingStage": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationFundingEvents": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "date": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "investors": {
+                  "type": "string"
+                },
+                "amount": {
+                  "type": "number"
+                },
+                "currency": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "organizationCity": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationState": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationCountry": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationStreetAddress": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationPostalCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationTechnologyNames": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "organizationCurrentTechnologies": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "object",
+              "properties": {
+                "uid": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "category": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "organizationKeywords": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "organizationIndustries": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "organizationSecondaryIndustries": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "organizationNumSuborganizations": {
+            "type": "number",
+            "nullable": true
+          },
+          "organizationRetailLocationCount": {
+            "type": "number",
+            "nullable": true
+          },
+          "organizationAlexaRanking": {
+            "type": "number",
+            "nullable": true
+          },
+          "responseRaw": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            }
+          },
+          "enrichmentRunId": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "orgId",
+          "runId",
+          "appId",
+          "brandId",
+          "campaignId",
+          "apolloPersonId",
+          "responseRaw",
+          "createdAt"
+        ]
+      },
+      "StatsResponse": {
+        "type": "object",
+        "properties": {
+          "stats": {
+            "$ref": "#/components/schemas/Stats"
+          }
+        },
+        "required": [
+          "stats"
+        ]
+      },
+      "Stats": {
+        "type": "object",
+        "properties": {
+          "enrichedLeadsCount": {
+            "type": "integer"
+          },
+          "searchCount": {
+            "type": "integer"
+          },
+          "fetchedPeopleCount": {
+            "type": "integer"
+          },
+          "totalMatchingPeople": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "enrichedLeadsCount",
+          "searchCount",
+          "fetchedPeopleCount",
+          "totalMatchingPeople"
+        ]
+      },
+      "StatsRequest": {
+        "type": "object",
+        "properties": {
+          "runIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "appId": {
+            "type": "string"
+          },
+          "brandId": {
+            "type": "string"
+          },
+          "campaignId": {
+            "type": "string"
+          }
+        }
+      },
+      "IndustriesResponse": {
+        "type": "object",
+        "properties": {
+          "industries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Industry"
+            }
+          }
+        },
+        "required": [
+          "industries"
+        ]
+      },
+      "Industry": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "EmployeeRangesResponse": {
+        "type": "object",
+        "properties": {
+          "ranges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EmployeeRange"
+            }
+          }
+        },
+        "required": [
+          "ranges"
+        ]
+      },
+      "EmployeeRange": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "value"
+        ]
+      },
+      "ValidateResponse": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValidationResult"
+            }
+          }
+        },
+        "required": [
+          "results"
+        ]
+      },
+      "ValidationResult": {
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "number"
+          },
+          "valid": {
+            "type": "boolean"
+          },
+          "endpoint": {
+            "type": "string",
+            "enum": [
+              "search",
+              "enrich",
+              "bulk-enrich"
+            ]
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            }
+          }
+        },
+        "required": [
+          "index",
+          "valid",
+          "endpoint",
+          "errors"
+        ]
+      },
+      "ValidationError": {
+        "type": "object",
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "value": {
+            "nullable": true
+          }
+        },
+        "required": [
+          "field",
+          "message"
+        ]
+      },
+      "ValidateRequest": {
+        "type": "object",
+        "properties": {
+          "endpoint": {
+            "type": "string",
+            "enum": [
+              "search",
+              "enrich",
+              "bulk-enrich"
+            ]
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "nullable": true
+            },
+            "minItems": 1
+          }
+        },
+        "required": [
+          "endpoint",
+          "items"
+        ]
+      }
+    },
+    "parameters": {
+      "ClerkOrgId": {
+        "schema": {
+          "$ref": "#/components/schemas/ClerkOrgId"
+        },
+        "required": true,
+        "description": "Clerk organization ID",
+        "name": "x-clerk-org-id",
+        "in": "header"
+      }
+    }
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health check",
+        "responses": {
+          "200": {
+            "description": "Service is healthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/debug": {
+      "get": {
+        "summary": "Debug health check with dependency status",
+        "responses": {
+          "200": {
+            "description": "Debug health information",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthDebugResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/search": {
+      "post": {
+        "summary": "Search for people via Apollo",
+        "description": "Search Apollo's people database. If runId is provided, results are stored in DB and costs tracked via runs-service.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-clerk-org-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/enrich": {
+      "post": {
+        "summary": "Enrich a person via Apollo to reveal their email",
+        "description": "Enrich a single person by Apollo person ID. Uses 12-month cache. If runId is provided, stores record and tracks costs.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-clerk-org-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrichRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Enrichment result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrichResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/searches/{runId}": {
+      "get": {
+        "summary": "Get all searches for a run",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "runId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-clerk-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of search records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchesResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/enrichments/{runId}": {
+      "get": {
+        "summary": "Get all enrichments for a run",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "runId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-clerk-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of enrichment records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrichmentsResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/stats": {
+      "post": {
+        "summary": "Get aggregated stats",
+        "description": "Returns aggregated search and enrichment stats. All body filters are optional; orgId is always applied from auth.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-clerk-org-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Aggregated stats",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/reference/industries": {
+      "get": {
+        "summary": "Get Apollo industries list",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-clerk-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of industries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IndustriesResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/reference/employee-ranges": {
+      "get": {
+        "summary": "Get employee range options",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-clerk-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of employee ranges",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmployeeRangesResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/validate": {
+      "post": {
+        "summary": "Validate a batch of items against Apollo schemas",
+        "description": "Validates items against the specified endpoint schema (search, enrich, or bulk-enrich).",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-clerk-org-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Validation results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

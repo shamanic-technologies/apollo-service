@@ -6,6 +6,7 @@ import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
 import { searchPeople, enrichPerson, ApolloSearchParams, ApolloPerson } from "../lib/apollo-client.js";
 import { getByokKey } from "../lib/keys-client.js";
 import { createRun, updateRun, addCosts } from "../lib/runs-client.js";
+import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment } from "../lib/transform.js";
 import { SearchRequestSchema, EnrichRequestSchema, StatsRequestSchema } from "../schemas.js";
 
 const router = Router();
@@ -97,19 +98,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
           appId,
           brandId,
           campaignId,
-          apolloPersonId: person.id,
-          firstName: person.first_name,
-          lastName: person.last_name,
-          email: person.email,
-          emailStatus: person.email_status,
-          title: person.title,
-          linkedinUrl: person.linkedin_url,
-          organizationName: person.organization?.name,
-          organizationDomain: person.organization?.primary_domain,
-          organizationIndustry: person.organization?.industry,
-          organizationSize: person.organization?.estimated_num_employees?.toString(),
-          organizationRevenueUsd: person.organization?.annual_revenue?.toString(),
-          responseRaw: person,
+          ...toEnrichmentDbValues(person),
         });
       }
 
@@ -159,19 +148,11 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
     // Transform to camelCase for worker consumption
     const transformedPeople = result.people.map((person: ApolloPerson) => {
       const cached = !person.email && person.id ? emailCache.get(person.id) : undefined;
-      return {
-        id: person.id,
-        firstName: person.first_name,
-        lastName: person.last_name,
-        email: person.email ?? cached?.email ?? null,
-        emailStatus: person.email_status ?? cached?.emailStatus ?? null,
-        title: person.title,
-        linkedinUrl: person.linkedin_url,
-        organizationName: person.organization?.name,
-        organizationDomain: person.organization?.primary_domain,
-        organizationIndustry: person.organization?.industry,
-        organizationSize: person.organization?.estimated_num_employees?.toString(),
-      };
+      const transformed = transformApolloPerson(person);
+      if (cached) {
+        return { ...transformed, email: cached.email, emailStatus: cached.emailStatus };
+      }
+      return transformed;
     });
 
     res.json({
@@ -224,19 +205,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
     if (cached) {
       return res.json({
         enrichmentId: null,
-        person: {
-          id: apolloPersonId,
-          firstName: cached.firstName,
-          lastName: cached.lastName,
-          email: cached.email,
-          emailStatus: cached.emailStatus,
-          title: cached.title,
-          linkedinUrl: cached.linkedinUrl,
-          organizationName: cached.organizationName,
-          organizationDomain: cached.organizationDomain,
-          organizationIndustry: cached.organizationIndustry,
-          organizationSize: cached.organizationSize,
-        },
+        person: transformCachedEnrichment(apolloPersonId, cached),
       });
     }
 
@@ -253,19 +222,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
         appId,
         brandId,
         campaignId,
-        apolloPersonId: person.id,
-        firstName: person.first_name,
-        lastName: person.last_name,
-        email: person.email,
-        emailStatus: person.email_status,
-        title: person.title,
-        linkedinUrl: person.linkedin_url,
-        organizationName: person.organization?.name,
-        organizationDomain: person.organization?.primary_domain,
-        organizationIndustry: person.organization?.industry,
-        organizationSize: person.organization?.estimated_num_employees?.toString(),
-        organizationRevenueUsd: person.organization?.annual_revenue?.toString(),
-        responseRaw: person,
+        ...toEnrichmentDbValues(person),
       }).returning();
 
       enrichmentId = enrichment.id;
@@ -289,19 +246,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       await updateRun(enrichRun.id, "completed");
     }
 
-    const transformed = person ? {
-      id: person.id,
-      firstName: person.first_name,
-      lastName: person.last_name,
-      email: person.email,
-      emailStatus: person.email_status,
-      title: person.title,
-      linkedinUrl: person.linkedin_url,
-      organizationName: person.organization?.name,
-      organizationDomain: person.organization?.primary_domain,
-      organizationIndustry: person.organization?.industry,
-      organizationSize: person.organization?.estimated_num_employees?.toString(),
-    } : null;
+    const transformed = person ? transformApolloPerson(person) : null;
 
     res.json({ enrichmentId, person: transformed });
   } catch (error) {

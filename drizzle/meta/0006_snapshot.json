@@ -1,0 +1,816 @@
+{
+  "id": "c6d7e8f9-a0b1-2345-cdef-678901abcdef",
+  "prevId": "b5c6d7e8-f9a0-1234-bcde-567890abcdef",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.apollo_people_enrichments": {
+      "name": "apollo_people_enrichments",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "org_id": {
+          "name": "org_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "run_id": {
+          "name": "run_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "search_id": {
+          "name": "search_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "app_id": {
+          "name": "app_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "brand_id": {
+          "name": "brand_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "campaign_id": {
+          "name": "campaign_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "apollo_person_id": {
+          "name": "apollo_person_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "first_name": {
+          "name": "first_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_name": {
+          "name": "last_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "email": {
+          "name": "email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "email_status": {
+          "name": "email_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "linkedin_url": {
+          "name": "linkedin_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_name": {
+          "name": "organization_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_domain": {
+          "name": "organization_domain",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_industry": {
+          "name": "organization_industry",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_size": {
+          "name": "organization_size",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_revenue_usd": {
+          "name": "organization_revenue_usd",
+          "type": "numeric(15, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "response_raw": {
+          "name": "response_raw",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "enrichment_run_id": {
+          "name": "enrichment_run_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "photo_url": {
+          "name": "photo_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "headline": {
+          "name": "headline",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "city": {
+          "name": "city",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "country": {
+          "name": "country",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "seniority": {
+          "name": "seniority",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "twitter_url": {
+          "name": "twitter_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "github_url": {
+          "name": "github_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "facebook_url": {
+          "name": "facebook_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "departments": {
+          "name": "departments",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "subdepartments": {
+          "name": "subdepartments",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "functions": {
+          "name": "functions",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "employment_history": {
+          "name": "employment_history",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_website_url": {
+          "name": "organization_website_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_logo_url": {
+          "name": "organization_logo_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_short_description": {
+          "name": "organization_short_description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_seo_description": {
+          "name": "organization_seo_description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_linkedin_url": {
+          "name": "organization_linkedin_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_twitter_url": {
+          "name": "organization_twitter_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_facebook_url": {
+          "name": "organization_facebook_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_blog_url": {
+          "name": "organization_blog_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_crunchbase_url": {
+          "name": "organization_crunchbase_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_angellist_url": {
+          "name": "organization_angellist_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_primary_phone": {
+          "name": "organization_primary_phone",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_publicly_traded_symbol": {
+          "name": "organization_publicly_traded_symbol",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_publicly_traded_exchange": {
+          "name": "organization_publicly_traded_exchange",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_annual_revenue_printed": {
+          "name": "organization_annual_revenue_printed",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_total_funding_printed": {
+          "name": "organization_total_funding_printed",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_latest_funding_round_date": {
+          "name": "organization_latest_funding_round_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_latest_funding_stage": {
+          "name": "organization_latest_funding_stage",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_city": {
+          "name": "organization_city",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_state": {
+          "name": "organization_state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_country": {
+          "name": "organization_country",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_street_address": {
+          "name": "organization_street_address",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_postal_code": {
+          "name": "organization_postal_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_total_funding": {
+          "name": "organization_total_funding",
+          "type": "numeric(15, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_founded_year": {
+          "name": "organization_founded_year",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_num_suborganizations": {
+          "name": "organization_num_suborganizations",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_retail_location_count": {
+          "name": "organization_retail_location_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_alexa_ranking": {
+          "name": "organization_alexa_ranking",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_funding_events": {
+          "name": "organization_funding_events",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_technology_names": {
+          "name": "organization_technology_names",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_current_technologies": {
+          "name": "organization_current_technologies",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_keywords": {
+          "name": "organization_keywords",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_industries": {
+          "name": "organization_industries",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "organization_secondary_industries": {
+          "name": "organization_secondary_industries",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "idx_enrichments_org": {
+          "name": "idx_enrichments_org",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "with": {},
+          "method": "btree",
+          "concurrently": false
+        },
+        "idx_enrichments_run": {
+          "name": "idx_enrichments_run",
+          "columns": [
+            {
+              "expression": "run_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "with": {},
+          "method": "btree",
+          "concurrently": false
+        },
+        "idx_enrichments_email": {
+          "name": "idx_enrichments_email",
+          "columns": [
+            {
+              "expression": "email",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "with": {},
+          "method": "btree",
+          "concurrently": false
+        },
+        "idx_enrichments_person_id": {
+          "name": "idx_enrichments_person_id",
+          "columns": [
+            {
+              "expression": "apollo_person_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "with": {},
+          "method": "btree",
+          "concurrently": false
+        },
+        "idx_enrichments_campaign": {
+          "name": "idx_enrichments_campaign",
+          "columns": [
+            {
+              "expression": "campaign_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "with": {},
+          "method": "btree",
+          "concurrently": false
+        }
+      },
+      "foreignKeys": {
+        "apollo_people_enrichments_org_id_orgs_id_fk": {
+          "name": "apollo_people_enrichments_org_id_orgs_id_fk",
+          "tableFrom": "apollo_people_enrichments",
+          "columnsFrom": [
+            "org_id"
+          ],
+          "tableTo": "orgs",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "cascade"
+        },
+        "apollo_people_enrichments_search_id_apollo_people_searches_id_fk": {
+          "name": "apollo_people_enrichments_search_id_apollo_people_searches_id_fk",
+          "tableFrom": "apollo_people_enrichments",
+          "columnsFrom": [
+            "search_id"
+          ],
+          "tableTo": "apollo_people_searches",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "cascade"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.apollo_people_searches": {
+      "name": "apollo_people_searches",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "org_id": {
+          "name": "org_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "run_id": {
+          "name": "run_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "app_id": {
+          "name": "app_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "brand_id": {
+          "name": "brand_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "campaign_id": {
+          "name": "campaign_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "request_params": {
+          "name": "request_params",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "people_count": {
+          "name": "people_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "total_entries": {
+          "name": "total_entries",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "response_raw": {
+          "name": "response_raw",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "idx_searches_org": {
+          "name": "idx_searches_org",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "with": {},
+          "method": "btree",
+          "concurrently": false
+        },
+        "idx_searches_run": {
+          "name": "idx_searches_run",
+          "columns": [
+            {
+              "expression": "run_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "with": {},
+          "method": "btree",
+          "concurrently": false
+        },
+        "idx_searches_campaign": {
+          "name": "idx_searches_campaign",
+          "columns": [
+            {
+              "expression": "campaign_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "with": {},
+          "method": "btree",
+          "concurrently": false
+        }
+      },
+      "foreignKeys": {
+        "apollo_people_searches_org_id_orgs_id_fk": {
+          "name": "apollo_people_searches_org_id_orgs_id_fk",
+          "tableFrom": "apollo_people_searches",
+          "columnsFrom": [
+            "org_id"
+          ],
+          "tableTo": "orgs",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "cascade"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.orgs": {
+      "name": "orgs",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "clerk_org_id": {
+          "name": "clerk_org_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "idx_orgs_clerk_id": {
+          "name": "idx_orgs_clerk_id",
+          "columns": [
+            {
+              "expression": "clerk_org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "with": {},
+          "method": "btree",
+          "concurrently": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "orgs_clerk_org_id_unique": {
+          "name": "orgs_clerk_org_id_unique",
+          "columns": [
+            "clerk_org_id"
+          ],
+          "nullsNotDistinct": false
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.users": {
+      "name": "users",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "clerk_user_id": {
+          "name": "clerk_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "idx_users_clerk_id": {
+          "name": "idx_users_clerk_id",
+          "columns": [
+            {
+              "expression": "clerk_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "with": {},
+          "method": "btree",
+          "concurrently": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "users_clerk_user_id_unique": {
+          "name": "users_clerk_user_id_unique",
+          "columns": [
+            "clerk_user_id"
+          ],
+          "nullsNotDistinct": false
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {},
+  "schemas": {},
+  "views": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}
