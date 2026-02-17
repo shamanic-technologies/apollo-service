@@ -176,7 +176,7 @@ describe("Apollo service cost tracking", () => {
 
   // ─── Happy path ──────────────────────────────────────────────────────────────
 
-  it("should post apollo-enrichment-credit cost for each person found", async () => {
+  it("should NOT post enrichment costs for search results (regression: search != enrichment)", async () => {
     await request(app)
       .post("/search")
       .set("X-API-Key", "test-service-secret")
@@ -190,18 +190,12 @@ describe("Apollo service cost tracking", () => {
       })
       .expect(200);
 
-    // One addCosts call per person (enrichment) + one for search
+    // Search should NOT create enrichment costs — only search credit
     const enrichmentCalls = mockAddCosts.mock.calls.filter(([, items]) =>
       items.some((i: { costName: string }) => i.costName === "apollo-enrichment-credit")
     );
 
-    expect(enrichmentCalls).toHaveLength(MOCK_PEOPLE_COUNT);
-
-    // Each enrichment cost should have quantity 1
-    for (const [, items] of enrichmentCalls) {
-      const enrichItem = items.find((i: { costName: string }) => i.costName === "apollo-enrichment-credit");
-      expect(enrichItem.quantity).toBe(1);
-    }
+    expect(enrichmentCalls).toHaveLength(0);
   });
 
   it("should post apollo-search-credit cost once per search", async () => {
@@ -228,7 +222,7 @@ describe("Apollo service cost tracking", () => {
     expect(searchItem.quantity).toBe(1);
   });
 
-  it("should use exact cost name strings that match runs-service catalog", async () => {
+  it("should only post search credit from POST /search (no enrichment credits)", async () => {
     await request(app)
       .post("/search")
       .set("X-API-Key", "test-service-secret")
@@ -245,9 +239,9 @@ describe("Apollo service cost tracking", () => {
     const allCostNames = mockAddCosts.mock.calls
       .flatMap(([, items]) => items.map((i: { costName: string }) => i.costName));
 
-    // Only these exact cost names should be used
+    // Search endpoint should only track search credits
     const uniqueNames = [...new Set(allCostNames)];
-    expect(uniqueNames.sort()).toEqual(["apollo-enrichment-credit", "apollo-search-credit"]);
+    expect(uniqueNames).toEqual(["apollo-search-credit"]);
   });
 
   // ─── Hard failure on runs-service errors (POST /search) ──────────────────────
@@ -278,7 +272,7 @@ describe("Apollo service cost tracking", () => {
     errorSpy.mockRestore();
   });
 
-  it("should return 500 when addCosts fails for enrichment", async () => {
+  it("should return 500 when addCosts fails for search credit", async () => {
     mockAddCosts.mockRejectedValue(new Error("Cost name not registered"));
 
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -324,11 +318,7 @@ describe("Apollo service cost tracking", () => {
     errorSpy.mockRestore();
   });
 
-  it("should still link enrichmentRunId to DB before addCosts fails", async () => {
-    mockAddCosts.mockRejectedValue(new Error("Cost name not registered"));
-
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
+  it("should NOT create enrichment runs in search (only 1 createRun for search itself)", async () => {
     await request(app)
       .post("/search")
       .set("X-API-Key", "test-service-secret")
@@ -340,17 +330,13 @@ describe("Apollo service cost tracking", () => {
         campaignId: "campaign-1",
         personTitles: ["CEO"],
       })
-      .expect(500);
+      .expect(200);
 
-    // enrichmentRunId is set BEFORE addCosts, so at least the first person's link exists
-    const linkCalls = mockDbSetCalls.filter((data) => "enrichmentRunId" in data);
-    expect(linkCalls.length).toBeGreaterThanOrEqual(1);
-    for (const linkCall of linkCalls) {
-      expect(linkCall.enrichmentRunId).toBeDefined();
-      expect(typeof linkCall.enrichmentRunId).toBe("string");
-    }
-
-    errorSpy.mockRestore();
+    // Only 1 createRun call for the search run, NOT N+1 (search + one per person)
+    expect(mockCreateRun).toHaveBeenCalledTimes(1);
+    expect(mockCreateRun).toHaveBeenCalledWith(
+      expect.objectContaining({ taskName: "people-search" })
+    );
   });
 
   it("should return 200 when no runId provided (no cost tracking attempted)", async () => {
@@ -372,6 +358,29 @@ describe("Apollo service cost tracking", () => {
     expect(mockCreateRun).not.toHaveBeenCalled();
     expect(mockAddCosts).not.toHaveBeenCalled();
     expect(mockUpdateRun).not.toHaveBeenCalled();
+  });
+
+  // ─── POST /enrich cost tracking ─────────────────────────────────────────────
+
+  it("should post exactly 1 enrichment cost from POST /enrich", async () => {
+    await request(app)
+      .post("/enrich")
+      .set("X-API-Key", "test-service-secret")
+      .set("X-Clerk-Org-Id", "org_test")
+      .send({
+        apolloPersonId: "person-0",
+        runId: "campaign-run-abc",
+        appId: "app-1",
+        brandId: "brand-1",
+        campaignId: "campaign-1",
+      })
+      .expect(200);
+
+    const enrichmentCalls = mockAddCosts.mock.calls.filter(([, items]) =>
+      items.some((i: { costName: string }) => i.costName === "apollo-enrichment-credit")
+    );
+    expect(enrichmentCalls).toHaveLength(1);
+    expect(enrichmentCalls[0][1][0].quantity).toBe(1);
   });
 
   // ─── Hard failure on runs-service errors (POST /enrich) ──────────────────────

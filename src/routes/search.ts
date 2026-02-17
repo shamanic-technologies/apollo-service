@@ -88,9 +88,9 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
       searchId = search.id;
 
-      // Store enrichment records and track each in runs-service
+      // Store search result records (no enrichment costs — those are tracked when POST /enrich is called)
       for (const person of result.people as ApolloPerson[]) {
-        const [enrichment] = await db.insert(apolloPeopleEnrichments).values({
+        await db.insert(apolloPeopleEnrichments).values({
           orgId: req.orgId!,
           runId,
           searchId: search.id,
@@ -110,27 +110,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
           organizationSize: person.organization?.estimated_num_employees?.toString(),
           organizationRevenueUsd: person.organization?.annual_revenue?.toString(),
           responseRaw: person,
-        }).returning();
-
-        // Create grandchild run + post costs in runs-service
-        if (searchRunId) {
-          const enrichRun = await createRun({
-            clerkOrgId: req.clerkOrgId!,
-            appId: appId || "mcpfactory",
-            brandId,
-            campaignId,
-            serviceName: "apollo-service",
-            taskName: "enrichment",
-            parentRunId: searchRunId,
-          });
-
-          await db.update(apolloPeopleEnrichments)
-            .set({ enrichmentRunId: enrichRun.id })
-            .where(eq(apolloPeopleEnrichments.id, enrichment.id));
-
-          await addCosts(enrichRun.id, [{ costName: "apollo-enrichment-credit", quantity: 1 }]);
-          await updateRun(enrichRun.id, "completed");
-        }
+        });
       }
 
       // Mark search run as completed
