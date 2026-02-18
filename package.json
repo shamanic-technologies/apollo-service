@@ -18,6 +18,7 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.76.0",
     "@asteasolutions/zod-to-openapi": "^8.4.0",
     "@sentry/node": "^8.0.0",
     "cors": "^2.8.5",
