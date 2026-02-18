@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, uniqueIndex, index, integer, decimal, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, uniqueIndex, index, integer, decimal, jsonb, boolean } from "drizzle-orm/pg-core";
 
 // Local users table (maps to Clerk)
 export const users = pgTable(
@@ -160,6 +160,30 @@ export const apolloPeopleEnrichments = pgTable(
   ]
 );
 
+// Search pagination cursors (one per campaign per org)
+export const apolloSearchCursors = pgTable(
+  "apollo_search_cursors",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => orgs.id, { onDelete: "cascade" }),
+    campaignId: text("campaign_id").notNull(),
+    appId: text("app_id").notNull(),
+    brandId: text("brand_id").notNull(),
+    searchParams: jsonb("search_params").notNull(),
+    currentPage: integer("current_page").notNull().default(1),
+    totalEntries: integer("total_entries").notNull().default(0),
+    exhausted: boolean("exhausted").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("idx_cursors_org_campaign").on(table.orgId, table.campaignId),
+    index("idx_cursors_campaign").on(table.campaignId),
+  ]
+);
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Org = typeof orgs.$inferSelect;
@@ -168,3 +192,5 @@ export type ApolloPeopleSearch = typeof apolloPeopleSearches.$inferSelect;
 export type NewApolloPeopleSearch = typeof apolloPeopleSearches.$inferInsert;
 export type ApolloPeopleEnrichment = typeof apolloPeopleEnrichments.$inferSelect;
 export type NewApolloPeopleEnrichment = typeof apolloPeopleEnrichments.$inferInsert;
+export type ApolloSearchCursor = typeof apolloSearchCursors.$inferSelect;
+export type NewApolloSearchCursor = typeof apolloSearchCursors.$inferInsert;

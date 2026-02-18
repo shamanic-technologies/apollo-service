@@ -50,6 +50,13 @@
       "when": 1771344000000,
       "tag": "0006_add_enrichment_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1771397043612,
+      "tag": "0007_fearless_tyger_tiger",
+      "breakpoints": true
     }
   ]
 }

@@ -658,6 +658,182 @@
         ],
         "description": "All search filters are combined using AND. Using too many filters simultaneously may return 0 results — start broad and narrow down."
       },
+      "SearchNextResponse": {
+        "type": "object",
+        "properties": {
+          "people": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Person"
+            }
+          },
+          "done": {
+            "type": "boolean",
+            "description": "True when all matching results have been returned."
+          },
+          "totalEntries": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "people",
+          "done",
+          "totalEntries"
+        ]
+      },
+      "SearchNextRequest": {
+        "type": "object",
+        "properties": {
+          "campaignId": {
+            "type": "string",
+            "description": "Campaign ID used as the pagination key."
+          },
+          "brandId": {
+            "type": "string"
+          },
+          "appId": {
+            "type": "string"
+          },
+          "searchParams": {
+            "$ref": "#/components/schemas/SearchFilters"
+          },
+          "runId": {
+            "type": "string",
+            "description": "Link to a runs-service run for cost tracking."
+          }
+        },
+        "required": [
+          "campaignId",
+          "brandId",
+          "appId"
+        ]
+      },
+      "SearchFilters": {
+        "type": "object",
+        "properties": {
+          "personTitles": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Filter by job titles.",
+            "example": [
+              "CEO",
+              "CTO"
+            ]
+          },
+          "qOrganizationKeywordTags": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "organizationLocations": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "organizationNumEmployeesRanges": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "1,10",
+                "11,20",
+                "21,50",
+                "51,100",
+                "101,200",
+                "201,500",
+                "501,1000",
+                "1001,2000",
+                "2001,5000",
+                "5001,10000",
+                "10001,"
+              ]
+            }
+          },
+          "qOrganizationIndustryTagIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "qKeywords": {
+            "type": "string"
+          },
+          "personLocations": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "personSeniorities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "entry",
+                "senior",
+                "manager",
+                "director",
+                "vp",
+                "c_suite",
+                "owner",
+                "founder",
+                "partner"
+              ]
+            }
+          },
+          "contactEmailStatus": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "verified",
+                "guessed",
+                "unavailable",
+                "bounced",
+                "pending_manual_fulfillment"
+              ]
+            }
+          },
+          "qOrganizationDomains": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "currentlyUsingAnyOfTechnologyUids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "revenueRange": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "organizationIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "description": "Search filters. If provided, resets pagination from page 1. If omitted, continues from last cursor position."
+      },
       "EnrichResponse": {
         "type": "object",
         "properties": {
@@ -1441,6 +1617,64 @@
           },
           "400": {
             "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/search/next": {
+      "post": {
+        "summary": "Get next page of search results for a campaign",
+        "description": "Server-managed pagination. First call with searchParams starts a new search. Subsequent calls return the next batch of unseen people. Deduplicates against previously returned results for this campaign.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-clerk-org-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchNextRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Next batch of people",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchNextResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No cursor found (call with searchParams first) or validation error",
             "content": {
               "application/json": {
                 "schema": {

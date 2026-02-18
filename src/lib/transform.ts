@@ -1,5 +1,27 @@
-import type { ApolloPerson } from "./apollo-client.js";
+import type { ApolloPerson, ApolloSearchParams } from "./apollo-client.js";
 import type { ApolloPeopleEnrichment } from "../db/schema.js";
+
+/**
+ * Map camelCase search filter params to Apollo's snake_case API format.
+ * Shared by POST /search and POST /search/next.
+ */
+export function toApolloSearchParams(sp: Record<string, unknown>): ApolloSearchParams {
+  return {
+    person_titles: sp.personTitles as string[] | undefined,
+    q_organization_keyword_tags: sp.qOrganizationKeywordTags as string[] | undefined,
+    organization_locations: sp.organizationLocations as string[] | undefined,
+    organization_num_employees_ranges: sp.organizationNumEmployeesRanges as string[] | undefined,
+    q_organization_industry_tag_ids: sp.qOrganizationIndustryTagIds as string[] | undefined,
+    q_keywords: sp.qKeywords as string | undefined,
+    person_locations: sp.personLocations as string[] | undefined,
+    person_seniorities: sp.personSeniorities as string[] | undefined,
+    contact_email_status: sp.contactEmailStatus as string[] | undefined,
+    q_organization_domains: sp.qOrganizationDomains as string[] | undefined,
+    currently_using_any_of_technology_uids: sp.currentlyUsingAnyOfTechnologyUids as string[] | undefined,
+    revenue_range: sp.revenueRange as string[] | undefined,
+    organization_ids: sp.organizationIds as string[] | undefined,
+  };
+}
 
 /**
  * Transform an Apollo API person to our camelCase API response format.
