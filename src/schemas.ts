@@ -24,6 +24,26 @@ const VALID_EMPLOYEE_RANGES = [
   "10001,",
 ] as const;
 
+const VALID_SENIORITIES = [
+  "entry",
+  "senior",
+  "manager",
+  "director",
+  "vp",
+  "c_suite",
+  "owner",
+  "founder",
+  "partner",
+] as const;
+
+const VALID_EMAIL_STATUSES = [
+  "verified",
+  "guessed",
+  "unavailable",
+  "bounced",
+  "pending_manual_fulfillment",
+] as const;
+
 const ErrorResponseSchema = z
   .object({ error: z.string() })
   .openapi("ErrorResponse");
@@ -206,6 +226,34 @@ export const SearchRequestSchema = z
     qKeywords: z.string().optional().openapi({
       description: "Free-text keyword search across person and organization fields. Combined with other filters using AND. Keep broad to avoid empty results.",
       example: "machine learning",
+    }),
+    personLocations: z.array(z.string().min(1)).optional().openapi({
+      description: "Filter by person's location (city, state, country). Different from organizationLocations which filters by company HQ. Combined with other filters using AND.",
+      example: ["San Francisco, California, US", "New York, US"],
+    }),
+    personSeniorities: z.array(z.enum(VALID_SENIORITIES)).optional().openapi({
+      description: "Filter by seniority level. Valid values: entry, senior, manager, director, vp, c_suite, owner, founder, partner. Combined with other filters using AND.",
+      example: ["director", "vp", "c_suite"],
+    }),
+    contactEmailStatus: z.array(z.enum(VALID_EMAIL_STATUSES)).optional().openapi({
+      description: "Filter by email verification status. Valid values: verified, guessed, unavailable, bounced, pending_manual_fulfillment. Combined with other filters using AND.",
+      example: ["verified"],
+    }),
+    qOrganizationDomains: z.array(z.string().min(1)).optional().openapi({
+      description: "Filter by specific company domains. Combined with other filters using AND.",
+      example: ["google.com", "meta.com"],
+    }),
+    currentlyUsingAnyOfTechnologyUids: z.array(z.string().min(1)).optional().openapi({
+      description: "Filter by technology stack (Apollo technology UIDs). Combined with other filters using AND.",
+      example: ["salesforce", "hubspot"],
+    }),
+    revenueRange: z.array(z.string().min(1)).optional().openapi({
+      description: "Filter by annual revenue ranges (comma-separated min,max format, similar to employee ranges). Combined with other filters using AND.",
+      example: ["1000000,10000000", "10000000,50000000"],
+    }),
+    organizationIds: z.array(z.string().min(1)).optional().openapi({
+      description: "Filter by specific Apollo organization IDs. Combined with other filters using AND.",
+      example: ["5f5e100a01d6b1000169c754"],
     }),
     page: z.number().int().min(1).max(500).optional(),
     perPage: z.number().int().min(1).max(100).optional(),

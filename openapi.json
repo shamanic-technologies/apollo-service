@@ -541,6 +541,105 @@
             "description": "Free-text keyword search across person and organization fields. Combined with other filters using AND. Keep broad to avoid empty results.",
             "example": "machine learning"
           },
+          "personLocations": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Filter by person's location (city, state, country). Different from organizationLocations which filters by company HQ. Combined with other filters using AND.",
+            "example": [
+              "San Francisco, California, US",
+              "New York, US"
+            ]
+          },
+          "personSeniorities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "entry",
+                "senior",
+                "manager",
+                "director",
+                "vp",
+                "c_suite",
+                "owner",
+                "founder",
+                "partner"
+              ]
+            },
+            "description": "Filter by seniority level. Valid values: entry, senior, manager, director, vp, c_suite, owner, founder, partner. Combined with other filters using AND.",
+            "example": [
+              "director",
+              "vp",
+              "c_suite"
+            ]
+          },
+          "contactEmailStatus": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "verified",
+                "guessed",
+                "unavailable",
+                "bounced",
+                "pending_manual_fulfillment"
+              ]
+            },
+            "description": "Filter by email verification status. Valid values: verified, guessed, unavailable, bounced, pending_manual_fulfillment. Combined with other filters using AND.",
+            "example": [
+              "verified"
+            ]
+          },
+          "qOrganizationDomains": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Filter by specific company domains. Combined with other filters using AND.",
+            "example": [
+              "google.com",
+              "meta.com"
+            ]
+          },
+          "currentlyUsingAnyOfTechnologyUids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Filter by technology stack (Apollo technology UIDs). Combined with other filters using AND.",
+            "example": [
+              "salesforce",
+              "hubspot"
+            ]
+          },
+          "revenueRange": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Filter by annual revenue ranges (comma-separated min,max format, similar to employee ranges). Combined with other filters using AND.",
+            "example": [
+              "1000000,10000000",
+              "10000000,50000000"
+            ]
+          },
+          "organizationIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Filter by specific Apollo organization IDs. Combined with other filters using AND.",
+            "example": [
+              "5f5e100a01d6b1000169c754"
+            ]
+          },
           "page": {
             "type": "integer",
             "minimum": 1,

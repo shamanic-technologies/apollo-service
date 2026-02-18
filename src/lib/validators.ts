@@ -17,6 +17,26 @@ const VALID_EMPLOYEE_RANGES = [
   "10001,",
 ] as const;
 
+const VALID_SENIORITIES = [
+  "entry",
+  "senior",
+  "manager",
+  "director",
+  "vp",
+  "c_suite",
+  "owner",
+  "founder",
+  "partner",
+] as const;
+
+const VALID_EMAIL_STATUSES = [
+  "verified",
+  "guessed",
+  "unavailable",
+  "bounced",
+  "pending_manual_fulfillment",
+] as const;
+
 /**
  * Zod schema for people search params (camelCase input format).
  * Industry tag IDs are passed through to Apollo's API without local validation
@@ -31,6 +51,13 @@ export const peopleSearchSchema = z.object({
     .optional(),
   qOrganizationIndustryTagIds: z.array(z.string().min(1)).optional(),
   qKeywords: z.string().optional(),
+  personLocations: z.array(z.string().min(1)).optional(),
+  personSeniorities: z.array(z.enum(VALID_SENIORITIES)).optional(),
+  contactEmailStatus: z.array(z.enum(VALID_EMAIL_STATUSES)).optional(),
+  qOrganizationDomains: z.array(z.string().min(1)).optional(),
+  currentlyUsingAnyOfTechnologyUids: z.array(z.string().min(1)).optional(),
+  revenueRange: z.array(z.string().min(1)).optional(),
+  organizationIds: z.array(z.string().min(1)).optional(),
   page: z.number().int().min(1).max(500).optional(),
   perPage: z.number().int().min(1).max(100).optional(),
 });
