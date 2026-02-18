@@ -1,13 +1,13 @@
 import { Router } from "express";
 import { eq, and, gt, isNotNull, desc, inArray, count, sum } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { apolloPeopleSearches, apolloPeopleEnrichments } from "../db/schema.js";
+import { apolloPeopleSearches, apolloPeopleEnrichments, apolloSearchCursors } from "../db/schema.js";
 import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
-import { searchPeople, enrichPerson, ApolloSearchParams, ApolloPerson } from "../lib/apollo-client.js";
+import { searchPeople, enrichPerson, ApolloPerson } from "../lib/apollo-client.js";
 import { getByokKey } from "../lib/keys-client.js";
 import { createRun, updateRun, addCosts } from "../lib/runs-client.js";
-import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment } from "../lib/transform.js";
-import { SearchRequestSchema, EnrichRequestSchema, StatsRequestSchema } from "../schemas.js";
+import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment, toApolloSearchParams } from "../lib/transform.js";
+import { SearchRequestSchema, SearchNextRequestSchema, EnrichRequestSchema, StatsRequestSchema } from "../schemas.js";
 
 const router = Router();
 
@@ -27,20 +27,8 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
     const apolloApiKey = await getByokKey(req.clerkOrgId!, "apollo");
 
     // Call Apollo API
-    const apolloParams: ApolloSearchParams = {
-      person_titles: searchParams.personTitles,
-      q_organization_keyword_tags: searchParams.qOrganizationKeywordTags,
-      organization_locations: searchParams.organizationLocations,
-      organization_num_employees_ranges: searchParams.organizationNumEmployeesRanges,
-      q_organization_industry_tag_ids: searchParams.qOrganizationIndustryTagIds,
-      q_keywords: searchParams.qKeywords,
-      person_locations: searchParams.personLocations,
-      person_seniorities: searchParams.personSeniorities,
-      contact_email_status: searchParams.contactEmailStatus,
-      q_organization_domains: searchParams.qOrganizationDomains,
-      currently_using_any_of_technology_uids: searchParams.currentlyUsingAnyOfTechnologyUids,
-      revenue_range: searchParams.revenueRange,
-      organization_ids: searchParams.organizationIds,
+    const apolloParams = {
+      ...toApolloSearchParams(searchParams),
       page: searchParams.page || 1,
       per_page: searchParams.perPage || 25,
     };
@@ -258,6 +246,240 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
     res.json({ enrichmentId, person: transformed });
   } catch (error) {
     console.error("[Apollo Service][POST /enrich] ERROR:", error);
+    res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
+  }
+});
+
+/**
+ * POST /search/next - Server-managed pagination for campaign searches.
+ * First call with searchParams starts a new search cursor.
+ * Subsequent calls return the next batch of unseen people.
+ */
+router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const parsed = SearchNextRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
+    }
+    const { campaignId, brandId, appId, searchParams, runId } = parsed.data;
+
+    // Get Apollo API key
+    const apolloApiKey = await getByokKey(req.clerkOrgId!, "apollo");
+
+    // Look up existing cursor for this campaign
+    const [existingCursor] = await db
+      .select()
+      .from(apolloSearchCursors)
+      .where(
+        and(
+          eq(apolloSearchCursors.orgId, req.orgId!),
+          eq(apolloSearchCursors.campaignId, campaignId)
+        )
+      )
+      .limit(1);
+
+    // Determine search params and cursor state
+    let cursorSearchParams: Record<string, unknown>;
+    let currentPage: number;
+    let isExhausted = false;
+    let cursorId: string | undefined = existingCursor?.id;
+
+    if (searchParams) {
+      const paramsJson = JSON.stringify(searchParams);
+
+      if (!existingCursor) {
+        // Create new cursor
+        const [newCursor] = await db.insert(apolloSearchCursors).values({
+          orgId: req.orgId!,
+          campaignId,
+          appId,
+          brandId,
+          searchParams: searchParams as Record<string, unknown>,
+          currentPage: 1,
+          totalEntries: 0,
+          exhausted: false,
+        }).returning();
+        cursorId = newCursor.id;
+        cursorSearchParams = searchParams as Record<string, unknown>;
+        currentPage = 1;
+      } else if (JSON.stringify(existingCursor.searchParams) !== paramsJson) {
+        // Params changed — reset cursor
+        await db
+          .update(apolloSearchCursors)
+          .set({
+            searchParams: searchParams as Record<string, unknown>,
+            currentPage: 1,
+            totalEntries: 0,
+            exhausted: false,
+            updatedAt: new Date(),
+          })
+          .where(eq(apolloSearchCursors.id, existingCursor.id));
+        cursorSearchParams = searchParams as Record<string, unknown>;
+        currentPage = 1;
+      } else {
+        // Same params — use existing cursor position
+        cursorSearchParams = existingCursor.searchParams as Record<string, unknown>;
+        currentPage = existingCursor.currentPage;
+        isExhausted = existingCursor.exhausted;
+      }
+    } else {
+      // No searchParams — must have existing cursor
+      if (!existingCursor) {
+        return res.status(400).json({
+          error: "No search cursor found for this campaign. Provide searchParams to start a new search.",
+        });
+      }
+      cursorSearchParams = existingCursor.searchParams as Record<string, unknown>;
+      currentPage = existingCursor.currentPage;
+      isExhausted = existingCursor.exhausted;
+    }
+
+    // If already exhausted, return immediately
+    if (isExhausted) {
+      return res.json({
+        people: [],
+        done: true,
+        totalEntries: existingCursor?.totalEntries ?? 0,
+      });
+    }
+
+    // Map to Apollo snake_case params
+    const baseApolloParams = toApolloSearchParams(cursorSearchParams);
+
+    // Get already-seen person IDs for dedup
+    const seenRows = await db
+      .select({ apolloPersonId: apolloPeopleEnrichments.apolloPersonId })
+      .from(apolloPeopleEnrichments)
+      .where(
+        and(
+          eq(apolloPeopleEnrichments.campaignId, campaignId),
+          eq(apolloPeopleEnrichments.orgId, req.orgId!)
+        )
+      );
+    const seenIds = new Set(seenRows.map((r) => r.apolloPersonId).filter(Boolean));
+
+    // Create cost-tracking run if runId provided
+    let searchRunId: string | undefined;
+    if (runId) {
+      const searchRun = await createRun({
+        clerkOrgId: req.clerkOrgId!,
+        appId: appId || "mcpfactory",
+        brandId,
+        campaignId,
+        serviceName: "apollo-service",
+        taskName: "people-search-next",
+        parentRunId: runId,
+      });
+      searchRunId = searchRun.id;
+    }
+
+    // Pagination loop: fetch pages until we get unseen people or exhaust
+    let newPeople: ApolloPerson[] = [];
+    let totalEntries = existingCursor?.totalEntries ?? 0;
+    let page = currentPage;
+    const MAX_SKIP_PAGES = 10;
+    let apolloCallCount = 0;
+
+    while (apolloCallCount < MAX_SKIP_PAGES) {
+      const apolloParams = { ...baseApolloParams, page, per_page: 25 };
+      const result = await searchPeople(apolloApiKey, apolloParams);
+      apolloCallCount++;
+      totalEntries = result.total_entries ?? result.pagination?.total_entries ?? 0;
+
+      if (!result.people || result.people.length === 0) {
+        isExhausted = true;
+        break;
+      }
+
+      // Filter out already-seen people
+      const unseen = result.people.filter((p: ApolloPerson) => !seenIds.has(p.id));
+
+      if (unseen.length > 0) {
+        newPeople = unseen;
+        page++; // advance past this page for next call
+        // Check if this was the last page
+        const totalPages = Math.ceil(totalEntries / 25);
+        if (page > totalPages || page > 500) {
+          isExhausted = true;
+        }
+        break;
+      }
+
+      // All people on this page were dupes — advance
+      const totalPages = Math.ceil(totalEntries / 25);
+      page++;
+      if (page > totalPages || page > 500) {
+        isExhausted = true;
+        break;
+      }
+    }
+
+    // If we hit the skip limit without finding new people, mark exhausted
+    if (apolloCallCount >= MAX_SKIP_PAGES && newPeople.length === 0) {
+      isExhausted = true;
+    }
+
+    // Store search record for audit trail
+    const effectiveRunId = runId || `cursor-${campaignId}`;
+    const [search] = await db
+      .insert(apolloPeopleSearches)
+      .values({
+        orgId: req.orgId!,
+        runId: effectiveRunId,
+        appId,
+        brandId,
+        campaignId,
+        requestParams: { ...baseApolloParams, page: currentPage },
+        peopleCount: newPeople.length,
+        totalEntries,
+        responseRaw: { source: "search-next", pagesScanned: apolloCallCount },
+      })
+      .returning();
+
+    // Store new people in enrichments table (for dedup + retrieval)
+    for (const person of newPeople) {
+      await db.insert(apolloPeopleEnrichments).values({
+        orgId: req.orgId!,
+        runId: effectiveRunId,
+        searchId: search.id,
+        appId,
+        brandId,
+        campaignId,
+        ...toEnrichmentDbValues(person),
+      });
+    }
+
+    // Update cursor state
+    if (cursorId) {
+      await db
+        .update(apolloSearchCursors)
+        .set({
+          currentPage: page,
+          totalEntries,
+          exhausted: isExhausted,
+          updatedAt: new Date(),
+        })
+        .where(eq(apolloSearchCursors.id, cursorId));
+    }
+
+    // Track costs if runId provided
+    if (searchRunId) {
+      await addCosts(searchRunId, [{ costName: "apollo-search-credit", quantity: apolloCallCount }]);
+      await updateRun(searchRunId, "completed");
+    }
+
+    // Transform and respond
+    const transformedPeople = newPeople.map((person: ApolloPerson) =>
+      transformApolloPerson(person)
+    );
+
+    res.json({
+      people: transformedPeople,
+      done: isExhausted,
+      totalEntries,
+    });
+  } catch (error) {
+    console.error("[Apollo Service][POST /search/next] ERROR:", error);
     res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
   }
 });

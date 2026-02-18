@@ -310,6 +310,82 @@ registry.registerPath({
   },
 });
 
+// ─── POST /search/next ──────────────────────────────────────────────────────
+
+export const SearchFiltersSchema = z
+  .object({
+    personTitles: z.array(z.string().min(1)).optional().openapi({
+      description: "Filter by job titles.",
+      example: ["CEO", "CTO"],
+    }),
+    qOrganizationKeywordTags: z.array(z.string().min(1)).optional(),
+    organizationLocations: z.array(z.string().min(1)).optional(),
+    organizationNumEmployeesRanges: z.array(z.enum(VALID_EMPLOYEE_RANGES)).optional(),
+    qOrganizationIndustryTagIds: z.array(z.string().min(1)).optional(),
+    qKeywords: z.string().optional(),
+    personLocations: z.array(z.string().min(1)).optional(),
+    personSeniorities: z.array(z.enum(VALID_SENIORITIES)).optional(),
+    contactEmailStatus: z.array(z.enum(VALID_EMAIL_STATUSES)).optional(),
+    qOrganizationDomains: z.array(z.string().min(1)).optional(),
+    currentlyUsingAnyOfTechnologyUids: z.array(z.string().min(1)).optional(),
+    revenueRange: z.array(z.string().min(1)).optional(),
+    organizationIds: z.array(z.string().min(1)).optional(),
+  })
+  .openapi("SearchFilters", {
+    description: "Apollo search filters. All filters are combined using AND.",
+  });
+
+export const SearchNextRequestSchema = z
+  .object({
+    campaignId: z.string().openapi({ description: "Campaign ID used as the pagination key." }),
+    brandId: z.string(),
+    appId: z.string(),
+    searchParams: SearchFiltersSchema.optional().openapi({
+      description: "Search filters. If provided, resets pagination from page 1. If omitted, continues from last cursor position.",
+    }),
+    runId: z.string().optional().openapi({
+      description: "Link to a runs-service run for cost tracking.",
+    }),
+  })
+  .openapi("SearchNextRequest");
+
+const SearchNextResponseSchema = z
+  .object({
+    people: z.array(PersonSchema),
+    done: z.boolean().openapi({ description: "True when all matching results have been returned." }),
+    totalEntries: z.number(),
+  })
+  .openapi("SearchNextResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/search/next",
+  summary: "Get next page of search results for a campaign",
+  description:
+    "Server-managed pagination. First call with searchParams starts a new search. Subsequent calls return the next batch of unseen people. Deduplicates against previously returned results for this campaign.",
+  request: {
+    headers: z.object({ "x-clerk-org-id": z.string() }),
+    body: {
+      content: { "application/json": { schema: SearchNextRequestSchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      description: "Next batch of people",
+      content: { "application/json": { schema: SearchNextResponseSchema } },
+    },
+    400: {
+      description: "No cursor found (call with searchParams first) or validation error",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    500: {
+      description: "Internal server error",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
 // ─── POST /enrich ────────────────────────────────────────────────────────────
 
 export const EnrichRequestSchema = z
