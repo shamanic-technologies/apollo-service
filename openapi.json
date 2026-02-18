@@ -451,7 +451,8 @@
         "properties": {
           "runId": {
             "type": "string",
-            "description": "Link to a runs-service run (for campaign workflows). When provided, results are stored in DB and costs tracked."
+            "description": "Runs-service parent run ID. Required — results are stored in DB and costs tracked via runs-service.",
+            "example": "run-abc-123"
           },
           "appId": {
             "type": "string"
@@ -652,6 +653,7 @@
           }
         },
         "required": [
+          "runId",
           "appId",
           "brandId",
           "campaignId"
@@ -707,13 +709,15 @@
           },
           "runId": {
             "type": "string",
-            "description": "Link to a runs-service parent run for cost tracking. When provided, a search audit record is stored and 1 apollo-search-credit is tracked."
+            "description": "Runs-service parent run ID. Required — a search audit record is stored and 1 apollo-search-credit is tracked.",
+            "example": "run-abc-123"
           }
         },
         "required": [
           "campaignId",
           "brandId",
-          "appId"
+          "appId",
+          "runId"
         ],
         "description": "Request body for server-managed search pagination. The cursor is keyed by (orgId, campaignId)."
       },
@@ -932,7 +936,9 @@
             "minLength": 1
           },
           "runId": {
-            "type": "string"
+            "type": "string",
+            "description": "Runs-service parent run ID. Required — enrichment record is stored and 1 apollo-enrichment-credit is tracked.",
+            "example": "run-abc-123"
           },
           "appId": {
             "type": "string"
@@ -946,6 +952,7 @@
         },
         "required": [
           "apolloPersonId",
+          "runId",
           "appId",
           "brandId",
           "campaignId"

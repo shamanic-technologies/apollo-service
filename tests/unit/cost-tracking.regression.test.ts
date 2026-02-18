@@ -357,11 +357,8 @@ describe("Apollo service cost tracking", () => {
     );
   });
 
-  it("should return 200 when no runId provided (no cost tracking attempted)", async () => {
-    // Even if runs-service is broken, no-runId requests succeed
-    mockCreateRun.mockRejectedValue(new Error("should not be called"));
-
-    await request(app)
+  it("should return 400 when no runId provided", async () => {
+    const res = await request(app)
       .post("/search")
       .set("X-API-Key", "test-service-secret")
       .set("X-Clerk-Org-Id", "org_test")
@@ -371,11 +368,11 @@ describe("Apollo service cost tracking", () => {
         campaignId: "campaign-1",
         personTitles: ["CEO"],
       })
-      .expect(200);
+      .expect(400);
 
+    expect(res.body.error).toBe("Invalid request");
     expect(mockCreateRun).not.toHaveBeenCalled();
-    expect(mockAddCosts).not.toHaveBeenCalled();
-    expect(mockUpdateRun).not.toHaveBeenCalled();
+    expect(mockSearchPeople).not.toHaveBeenCalled();
   });
 
   // ─── POST /enrich cost tracking ─────────────────────────────────────────────
@@ -426,10 +423,8 @@ describe("Apollo service cost tracking", () => {
     errorSpy.mockRestore();
   });
 
-  it("should return 200 for POST /enrich when no runId provided", async () => {
-    mockCreateRun.mockRejectedValue(new Error("should not be called"));
-
-    await request(app)
+  it("should return 400 for POST /enrich when no runId provided", async () => {
+    const res = await request(app)
       .post("/enrich")
       .set("X-API-Key", "test-service-secret")
       .set("X-Clerk-Org-Id", "org_test")
@@ -439,9 +434,10 @@ describe("Apollo service cost tracking", () => {
         brandId: "brand-1",
         campaignId: "campaign-1",
       })
-      .expect(200);
+      .expect(400);
 
+    expect(res.body.error).toBe("Invalid request");
     expect(mockCreateRun).not.toHaveBeenCalled();
-    expect(mockAddCosts).not.toHaveBeenCalled();
+    expect(mockEnrichPerson).not.toHaveBeenCalled();
   });
 });
