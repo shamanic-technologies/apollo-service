@@ -316,53 +316,96 @@ export const SearchFiltersSchema = z
   .object({
     personTitles: z.array(z.string().min(1)).optional().openapi({
       description: "Filter by job titles.",
-      example: ["CEO", "CTO"],
+      example: ["CEO", "CTO", "VP Engineering"],
     }),
-    qOrganizationKeywordTags: z.array(z.string().min(1)).optional(),
-    organizationLocations: z.array(z.string().min(1)).optional(),
-    organizationNumEmployeesRanges: z.array(z.enum(VALID_EMPLOYEE_RANGES)).optional(),
-    qOrganizationIndustryTagIds: z.array(z.string().min(1)).optional(),
-    qKeywords: z.string().optional(),
-    personLocations: z.array(z.string().min(1)).optional(),
-    personSeniorities: z.array(z.enum(VALID_SENIORITIES)).optional(),
-    contactEmailStatus: z.array(z.enum(VALID_EMAIL_STATUSES)).optional(),
-    qOrganizationDomains: z.array(z.string().min(1)).optional(),
-    currentlyUsingAnyOfTechnologyUids: z.array(z.string().min(1)).optional(),
-    revenueRange: z.array(z.string().min(1)).optional(),
-    organizationIds: z.array(z.string().min(1)).optional(),
+    qOrganizationKeywordTags: z.array(z.string().min(1)).optional().openapi({
+      description: "Filter by organization keyword tags.",
+      example: ["SaaS", "fintech"],
+    }),
+    organizationLocations: z.array(z.string().min(1)).optional().openapi({
+      description: "Filter by organization HQ location.",
+      example: ["United States", "California, US"],
+    }),
+    organizationNumEmployeesRanges: z.array(z.enum(VALID_EMPLOYEE_RANGES)).optional().openapi({
+      description: "Filter by employee count ranges.",
+      example: ["11,20", "21,50", "51,100"],
+    }),
+    qOrganizationIndustryTagIds: z.array(z.string().min(1)).optional().openapi({
+      description: "Filter by industry names (use GET /reference/industries for valid values).",
+      example: ["Information Technology and Services", "Computer Software"],
+    }),
+    qKeywords: z.string().optional().openapi({
+      description: "Free-text keyword search across person and organization fields.",
+      example: "machine learning",
+    }),
+    personLocations: z.array(z.string().min(1)).optional().openapi({
+      description: "Filter by person's location (city, state, country). Different from organizationLocations which filters by company HQ.",
+      example: ["San Francisco, California, US", "New York, US"],
+    }),
+    personSeniorities: z.array(z.enum(VALID_SENIORITIES)).optional().openapi({
+      description: "Filter by seniority level. Valid values: entry, senior, manager, director, vp, c_suite, owner, founder, partner.",
+      example: ["director", "vp", "c_suite"],
+    }),
+    contactEmailStatus: z.array(z.enum(VALID_EMAIL_STATUSES)).optional().openapi({
+      description: "Filter by email verification status. Valid values: verified, guessed, unavailable, bounced, pending_manual_fulfillment.",
+      example: ["verified"],
+    }),
+    qOrganizationDomains: z.array(z.string().min(1)).optional().openapi({
+      description: "Filter by specific company domains.",
+      example: ["google.com", "meta.com"],
+    }),
+    currentlyUsingAnyOfTechnologyUids: z.array(z.string().min(1)).optional().openapi({
+      description: "Filter by technology stack (Apollo technology UIDs).",
+      example: ["salesforce", "hubspot"],
+    }),
+    revenueRange: z.array(z.string().min(1)).optional().openapi({
+      description: "Filter by annual revenue ranges (comma-separated min,max format).",
+      example: ["1000000,10000000", "10000000,50000000"],
+    }),
+    organizationIds: z.array(z.string().min(1)).optional().openapi({
+      description: "Filter by specific Apollo organization IDs.",
+      example: ["5f5e100a01d6b1000169c754"],
+    }),
   })
   .openapi("SearchFilters", {
-    description: "Apollo search filters. All filters are combined using AND.",
+    description: "Apollo search filters. All filters are combined using AND. Start broad and narrow down to avoid empty results.",
   });
 
 export const SearchNextRequestSchema = z
   .object({
-    campaignId: z.string().openapi({ description: "Campaign ID used as the pagination key." }),
-    brandId: z.string(),
-    appId: z.string(),
+    campaignId: z.string().openapi({
+      description: "Campaign ID — used as the pagination cursor key. One cursor per (orgId, campaignId).",
+      example: "campaign-abc-123",
+    }),
+    brandId: z.string().openapi({ description: "Brand ID.", example: "brand-1" }),
+    appId: z.string().openapi({ description: "App ID.", example: "my-app" }),
     searchParams: SearchFiltersSchema.optional().openapi({
-      description: "Search filters. If provided, resets pagination from page 1. If omitted, continues from last cursor position.",
+      description: "Search filters. On first call, provide filters to create a cursor at page 1. On subsequent calls, omit to continue from the last page. If provided and different from the stored filters, the cursor resets to page 1.",
     }),
     runId: z.string().optional().openapi({
-      description: "Link to a runs-service run for cost tracking.",
+      description: "Link to a runs-service parent run for cost tracking. When provided, a search audit record is stored and 1 apollo-search-credit is tracked.",
     }),
   })
-  .openapi("SearchNextRequest");
+  .openapi("SearchNextRequest", {
+    description: "Request body for server-managed search pagination. The cursor is keyed by (orgId, campaignId).",
+  });
 
 const SearchNextResponseSchema = z
   .object({
-    people: z.array(PersonSchema),
-    done: z.boolean().openapi({ description: "True when all matching results have been returned." }),
-    totalEntries: z.number(),
+    people: z.array(PersonSchema).openapi({ description: "People returned for this page. Empty array when done=true." }),
+    done: z.boolean().openapi({ description: "True when all pages have been exhausted. No more results to fetch." }),
+    totalEntries: z.number().openapi({ description: "Total number of people matching the search filters across all pages." }),
   })
-  .openapi("SearchNextResponse");
+  .openapi("SearchNextResponse", {
+    description: "One page of search results with pagination state.",
+  });
 
 registry.registerPath({
   method: "post",
   path: "/search/next",
   summary: "Get next page of search results for a campaign",
   description:
-    "Server-managed pagination. First call with searchParams starts a new search. Subsequent calls return the next batch of unseen people. Deduplicates against previously returned results for this campaign.",
+    "Server-managed pagination. First call with searchParams creates a cursor at page 1. Subsequent calls (with or without searchParams) return the next page. Each call returns one page of 25 people and advances the cursor. When done=true, all pages are exhausted. If searchParams differ from the stored cursor, pagination resets to page 1.",
   request: {
     headers: z.object({ "x-clerk-org-id": z.string() }),
     body: {

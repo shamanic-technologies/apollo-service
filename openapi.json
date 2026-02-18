@@ -665,48 +665,57 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Person"
-            }
+            },
+            "description": "People returned for this page. Empty array when done=true."
           },
           "done": {
             "type": "boolean",
-            "description": "True when all matching results have been returned."
+            "description": "True when all pages have been exhausted. No more results to fetch."
           },
           "totalEntries": {
-            "type": "number"
+            "type": "number",
+            "description": "Total number of people matching the search filters across all pages."
           }
         },
         "required": [
           "people",
           "done",
           "totalEntries"
-        ]
+        ],
+        "description": "One page of search results with pagination state."
       },
       "SearchNextRequest": {
         "type": "object",
         "properties": {
           "campaignId": {
             "type": "string",
-            "description": "Campaign ID used as the pagination key."
+            "description": "Campaign ID — used as the pagination cursor key. One cursor per (orgId, campaignId).",
+            "example": "campaign-abc-123"
           },
           "brandId": {
-            "type": "string"
+            "type": "string",
+            "description": "Brand ID.",
+            "example": "brand-1"
           },
           "appId": {
-            "type": "string"
+            "type": "string",
+            "description": "App ID.",
+            "example": "my-app"
           },
           "searchParams": {
             "$ref": "#/components/schemas/SearchFilters"
           },
           "runId": {
             "type": "string",
-            "description": "Link to a runs-service run for cost tracking."
+            "description": "Link to a runs-service parent run for cost tracking. When provided, a search audit record is stored and 1 apollo-search-credit is tracked."
           }
         },
         "required": [
           "campaignId",
           "brandId",
           "appId"
-        ]
+        ],
+        "description": "Request body for server-managed search pagination. The cursor is keyed by (orgId, campaignId)."
       },
       "SearchFilters": {
         "type": "object",
@@ -720,7 +729,8 @@
             "description": "Filter by job titles.",
             "example": [
               "CEO",
-              "CTO"
+              "CTO",
+              "VP Engineering"
             ]
           },
           "qOrganizationKeywordTags": {
@@ -728,14 +738,24 @@
             "items": {
               "type": "string",
               "minLength": 1
-            }
+            },
+            "description": "Filter by organization keyword tags.",
+            "example": [
+              "SaaS",
+              "fintech"
+            ]
           },
           "organizationLocations": {
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1
-            }
+            },
+            "description": "Filter by organization HQ location.",
+            "example": [
+              "United States",
+              "California, US"
+            ]
           },
           "organizationNumEmployeesRanges": {
             "type": "array",
@@ -754,24 +774,42 @@
                 "5001,10000",
                 "10001,"
               ]
-            }
+            },
+            "description": "Filter by employee count ranges.",
+            "example": [
+              "11,20",
+              "21,50",
+              "51,100"
+            ]
           },
           "qOrganizationIndustryTagIds": {
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1
-            }
+            },
+            "description": "Filter by industry names (use GET /reference/industries for valid values).",
+            "example": [
+              "Information Technology and Services",
+              "Computer Software"
+            ]
           },
           "qKeywords": {
-            "type": "string"
+            "type": "string",
+            "description": "Free-text keyword search across person and organization fields.",
+            "example": "machine learning"
           },
           "personLocations": {
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1
-            }
+            },
+            "description": "Filter by person's location (city, state, country). Different from organizationLocations which filters by company HQ.",
+            "example": [
+              "San Francisco, California, US",
+              "New York, US"
+            ]
           },
           "personSeniorities": {
             "type": "array",
@@ -788,7 +826,13 @@
                 "founder",
                 "partner"
               ]
-            }
+            },
+            "description": "Filter by seniority level. Valid values: entry, senior, manager, director, vp, c_suite, owner, founder, partner.",
+            "example": [
+              "director",
+              "vp",
+              "c_suite"
+            ]
           },
           "contactEmailStatus": {
             "type": "array",
@@ -801,38 +845,61 @@
                 "bounced",
                 "pending_manual_fulfillment"
               ]
-            }
+            },
+            "description": "Filter by email verification status. Valid values: verified, guessed, unavailable, bounced, pending_manual_fulfillment.",
+            "example": [
+              "verified"
+            ]
           },
           "qOrganizationDomains": {
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1
-            }
+            },
+            "description": "Filter by specific company domains.",
+            "example": [
+              "google.com",
+              "meta.com"
+            ]
           },
           "currentlyUsingAnyOfTechnologyUids": {
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1
-            }
+            },
+            "description": "Filter by technology stack (Apollo technology UIDs).",
+            "example": [
+              "salesforce",
+              "hubspot"
+            ]
           },
           "revenueRange": {
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1
-            }
+            },
+            "description": "Filter by annual revenue ranges (comma-separated min,max format).",
+            "example": [
+              "1000000,10000000",
+              "10000000,50000000"
+            ]
           },
           "organizationIds": {
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1
-            }
+            },
+            "description": "Filter by specific Apollo organization IDs.",
+            "example": [
+              "5f5e100a01d6b1000169c754"
+            ]
           }
         },
-        "description": "Search filters. If provided, resets pagination from page 1. If omitted, continues from last cursor position."
+        "description": "Search filters. On first call, provide filters to create a cursor at page 1. On subsequent calls, omit to continue from the last page. If provided and different from the stored filters, the cursor resets to page 1."
       },
       "EnrichResponse": {
         "type": "object",
@@ -1641,7 +1708,7 @@
     "/search/next": {
       "post": {
         "summary": "Get next page of search results for a campaign",
-        "description": "Server-managed pagination. First call with searchParams starts a new search. Subsequent calls return the next batch of unseen people. Deduplicates against previously returned results for this campaign.",
+        "description": "Server-managed pagination. First call with searchParams creates a cursor at page 1. Subsequent calls (with or without searchParams) return the next page. Each call returns one page of 25 people and advances the cursor. When done=true, all pages are exhausted. If searchParams differ from the stored cursor, pagination resets to page 1.",
         "parameters": [
           {
             "schema": {
