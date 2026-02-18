@@ -1586,13 +1586,13 @@
             "description": "Unstructured context about the company — website content, target audience description, ICP notes, or any combination. The LLM extracts what it needs.",
             "example": "We are a B2B SaaS company selling developer tools. Target audience: engineering leaders at mid-size tech companies in the US."
           },
-          "anthropicKeySource": {
+          "keySource": {
             "type": "string",
             "enum": [
               "byok",
               "app"
             ],
-            "description": "Where to fetch the Anthropic API key. \"byok\" = user's own key from key-service, \"app\" = platform app key.",
+            "description": "Where to fetch API keys (Apollo + Anthropic). \"byok\" = user's own keys from key-service, \"app\" = platform app keys.",
             "example": "app"
           },
           "runId": {
@@ -1615,7 +1615,7 @@
         },
         "required": [
           "context",
-          "anthropicKeySource",
+          "keySource",
           "runId",
           "appId",
           "brandId",
