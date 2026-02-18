@@ -196,7 +196,7 @@ registry.registerPath({
 
 export const SearchRequestSchema = z
   .object({
-    runId: z.string().optional().openapi({ description: "Link to a runs-service run (for campaign workflows). When provided, results are stored in DB and costs tracked." }),
+    runId: z.string().openapi({ description: "Runs-service parent run ID. Required — results are stored in DB and costs tracked via runs-service.", example: "run-abc-123" }),
     appId: z.string(),
     brandId: z.string(),
     campaignId: z.string(),
@@ -382,8 +382,9 @@ export const SearchNextRequestSchema = z
     searchParams: SearchFiltersSchema.optional().openapi({
       description: "Search filters. On first call, provide filters to create a cursor at page 1. On subsequent calls, omit to continue from the last page. If provided and different from the stored filters, the cursor resets to page 1.",
     }),
-    runId: z.string().optional().openapi({
-      description: "Link to a runs-service parent run for cost tracking. When provided, a search audit record is stored and 1 apollo-search-credit is tracked.",
+    runId: z.string().openapi({
+      description: "Runs-service parent run ID. Required — a search audit record is stored and 1 apollo-search-credit is tracked.",
+      example: "run-abc-123",
     }),
   })
   .openapi("SearchNextRequest", {
@@ -434,7 +435,7 @@ registry.registerPath({
 export const EnrichRequestSchema = z
   .object({
     apolloPersonId: z.string().min(1, "apolloPersonId is required"),
-    runId: z.string().optional(),
+    runId: z.string().openapi({ description: "Runs-service parent run ID. Required — enrichment record is stored and 1 apollo-enrichment-credit is tracked.", example: "run-abc-123" }),
     appId: z.string(),
     brandId: z.string(),
     campaignId: z.string(),
