@@ -180,6 +180,18 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       .limit(1);
 
     if (cached) {
+      // Create a run for traceability but no costs (cache hit)
+      const cachedRun = await createRun({
+        clerkOrgId: req.clerkOrgId!,
+        appId: appId || "mcpfactory",
+        brandId,
+        campaignId,
+        serviceName: "apollo-service",
+        taskName: "enrichment",
+        parentRunId: runId,
+      });
+      await updateRun(cachedRun.id, "completed");
+
       return res.json({
         enrichmentId: null,
         person: transformCachedEnrichment(apolloPersonId, cached),
