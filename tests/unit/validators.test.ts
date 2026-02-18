@@ -70,6 +70,76 @@ describe("validateBatch", () => {
       expect(results[0].valid).toBe(true);
     });
 
+    it("accepts all new search filter fields", () => {
+      const results = validateBatch("search", [
+        {
+          personLocations: ["San Francisco, California, US"],
+          personSeniorities: ["director", "vp", "c_suite"],
+          contactEmailStatus: ["verified"],
+          qOrganizationDomains: ["google.com", "meta.com"],
+          currentlyUsingAnyOfTechnologyUids: ["salesforce"],
+          revenueRange: ["1000000,10000000"],
+          organizationIds: ["5f5e100a01d6b1000169c754"],
+        },
+      ]);
+
+      expect(results[0].valid).toBe(true);
+      expect(results[0].errors).toHaveLength(0);
+    });
+
+    it("rejects invalid personSeniorities values", () => {
+      const results = validateBatch("search", [
+        { personSeniorities: ["ceo"] },
+      ]);
+
+      expect(results[0].valid).toBe(false);
+      expect(results[0].errors[0].field).toContain("personSeniorities");
+    });
+
+    it("accepts all valid personSeniorities values", () => {
+      const results = validateBatch("search", [
+        {
+          personSeniorities: [
+            "entry", "senior", "manager", "director",
+            "vp", "c_suite", "owner", "founder", "partner",
+          ],
+        },
+      ]);
+
+      expect(results[0].valid).toBe(true);
+    });
+
+    it("rejects invalid contactEmailStatus values", () => {
+      const results = validateBatch("search", [
+        { contactEmailStatus: ["valid"] },
+      ]);
+
+      expect(results[0].valid).toBe(false);
+      expect(results[0].errors[0].field).toContain("contactEmailStatus");
+    });
+
+    it("accepts all valid contactEmailStatus values", () => {
+      const results = validateBatch("search", [
+        {
+          contactEmailStatus: [
+            "verified", "guessed", "unavailable",
+            "bounced", "pending_manual_fulfillment",
+          ],
+        },
+      ]);
+
+      expect(results[0].valid).toBe(true);
+    });
+
+    it("rejects empty strings in new array fields", () => {
+      const results = validateBatch("search", [
+        { qOrganizationDomains: ["google.com", ""] },
+      ]);
+
+      expect(results[0].valid).toBe(false);
+      expect(results[0].errors[0].field).toContain("qOrganizationDomains");
+    });
+
     it("validates a batch of multiple items", () => {
       const results = validateBatch("search", [
         { personTitles: ["CEO"], page: 1 },

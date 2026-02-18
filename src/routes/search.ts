@@ -34,6 +34,13 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
       organization_num_employees_ranges: searchParams.organizationNumEmployeesRanges,
       q_organization_industry_tag_ids: searchParams.qOrganizationIndustryTagIds,
       q_keywords: searchParams.qKeywords,
+      person_locations: searchParams.personLocations,
+      person_seniorities: searchParams.personSeniorities,
+      contact_email_status: searchParams.contactEmailStatus,
+      q_organization_domains: searchParams.qOrganizationDomains,
+      currently_using_any_of_technology_uids: searchParams.currentlyUsingAnyOfTechnologyUids,
+      revenue_range: searchParams.revenueRange,
+      organization_ids: searchParams.organizationIds,
       page: searchParams.page || 1,
       per_page: searchParams.perPage || 25,
     };

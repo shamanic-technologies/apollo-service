@@ -7,6 +7,13 @@ export interface ApolloSearchParams {
   organization_num_employees_ranges?: string[];
   q_organization_industry_tag_ids?: string[];
   q_keywords?: string;
+  person_locations?: string[];
+  person_seniorities?: string[];
+  contact_email_status?: string[];
+  q_organization_domains?: string[];
+  currently_using_any_of_technology_uids?: string[];
+  revenue_range?: string[];
+  organization_ids?: string[];
   page?: number;
   per_page?: number;
 }
