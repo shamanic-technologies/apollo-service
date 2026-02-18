@@ -93,10 +93,12 @@
             "type": "string"
           },
           "firstName": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "lastName": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "email": {
             "type": "string",
@@ -107,58 +109,73 @@
             "nullable": true
           },
           "title": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "linkedinUrl": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "photoUrl": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "headline": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "city": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "state": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "country": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "seniority": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "departments": {
             "type": "array",
+            "nullable": true,
             "items": {
               "type": "string"
             }
           },
           "subdepartments": {
             "type": "array",
+            "nullable": true,
             "items": {
               "type": "string"
             }
           },
           "functions": {
             "type": "array",
+            "nullable": true,
             "items": {
               "type": "string"
             }
           },
           "twitterUrl": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "githubUrl": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "facebookUrl": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "employmentHistory": {
             "type": "array",
+            "nullable": true,
             "items": {
               "type": "object",
               "properties": {
@@ -184,79 +201,104 @@
             }
           },
           "organizationName": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationDomain": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationIndustry": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationSize": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationRevenueUsd": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationWebsiteUrl": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationLogoUrl": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationShortDescription": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationSeoDescription": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationLinkedinUrl": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationTwitterUrl": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationFacebookUrl": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationBlogUrl": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationCrunchbaseUrl": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationAngellistUrl": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationFoundedYear": {
-            "type": "number"
+            "type": "number",
+            "nullable": true
           },
           "organizationPrimaryPhone": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationPubliclyTradedSymbol": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationPubliclyTradedExchange": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationAnnualRevenuePrinted": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationTotalFunding": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationTotalFundingPrinted": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationLatestFundingRoundDate": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationLatestFundingStage": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationFundingEvents": {
             "type": "array",
+            "nullable": true,
             "items": {
               "type": "object",
               "properties": {
@@ -282,28 +324,35 @@
             }
           },
           "organizationCity": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationState": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationCountry": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationStreetAddress": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationPostalCode": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "organizationTechnologyNames": {
             "type": "array",
+            "nullable": true,
             "items": {
               "type": "string"
             }
           },
           "organizationCurrentTechnologies": {
             "type": "array",
+            "nullable": true,
             "items": {
               "type": "object",
               "properties": {
@@ -321,30 +370,36 @@
           },
           "organizationKeywords": {
             "type": "array",
+            "nullable": true,
             "items": {
               "type": "string"
             }
           },
           "organizationIndustries": {
             "type": "array",
+            "nullable": true,
             "items": {
               "type": "string"
             }
           },
           "organizationSecondaryIndustries": {
             "type": "array",
+            "nullable": true,
             "items": {
               "type": "string"
             }
           },
           "organizationNumSuborganizations": {
-            "type": "number"
+            "type": "number",
+            "nullable": true
           },
           "organizationRetailLocationCount": {
-            "type": "number"
+            "type": "number",
+            "nullable": true
           },
           "organizationAlexaRanking": {
-            "type": "number"
+            "type": "number",
+            "nullable": true
           }
         },
         "required": [
