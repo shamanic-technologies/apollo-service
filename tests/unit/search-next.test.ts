@@ -6,7 +6,7 @@ import request from "supertest";
  * Tests for POST /search/next — server-managed pagination.
  *
  * Verifies: cursor creation, cursor reuse, param change reset,
- * exhaustion, dedup, auto-advance, cost tracking.
+ * exhaustion, page advance, cost tracking.
  */
 
 // Mock runs-client
@@ -29,9 +29,8 @@ vi.mock("../../src/middleware/auth.js", () => ({
   },
 }));
 
-// Stateful DB mock — tracks cursors and controls query results
+// Stateful DB mock — tracks cursors
 let mockCursor: Record<string, unknown> | null = null;
-let mockSeenPersonIds: string[] = [];
 const mockInsertReturning = vi.fn();
 const mockUpdateSet = vi.fn();
 
@@ -48,26 +47,14 @@ vi.mock("../../src/db/index.js", () => ({
         return { where: vi.fn().mockResolvedValue(undefined) };
       },
     }),
-    select: vi.fn().mockImplementation((selectArg?: Record<string, unknown>) => {
-      // If selecting specific columns (e.g. {apolloPersonId: ...}), it's the dedup query
-      const isDedup = selectArg && "apolloPersonId" in selectArg;
+    select: vi.fn().mockImplementation(() => {
       return {
         from: vi.fn().mockImplementation(() => ({
           where: vi.fn().mockImplementation(() => {
-            if (isDedup) {
-              // Dedup query — return seen person IDs (no .limit())
-              return Promise.resolve(
-                mockSeenPersonIds.map((id) => ({ apolloPersonId: id }))
-              );
-            }
             // Cursor query — has .limit()
             return {
               limit: vi.fn().mockResolvedValue(mockCursor ? [mockCursor] : []),
             };
-          }),
-          // For queries without .where() (shouldn't happen but safe)
-          orderBy: vi.fn().mockReturnValue({
-            limit: vi.fn().mockResolvedValue([]),
           }),
         })),
       };
@@ -147,7 +134,6 @@ describe("POST /search/next", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     mockCursor = null;
-    mockSeenPersonIds = [];
     mockInsertReturning.mockResolvedValue([{ id: "record-1" }]);
 
     mockSearchPeople.mockResolvedValue({
@@ -310,9 +296,9 @@ describe("POST /search/next", () => {
     expect(mockSearchPeople).not.toHaveBeenCalled();
   });
 
-  // ─── Dedup ────────────────────────────────────────────────────────────────
+  // ─── Cursor advances after each call ────────────────────────────────────────
 
-  it("filters out already-seen people", async () => {
+  it("advances cursor to next page after fetching", async () => {
     mockCursor = {
       id: "cursor-1",
       orgId: "org-internal-123",
@@ -322,57 +308,18 @@ describe("POST /search/next", () => {
       totalEntries: 75,
       exhausted: false,
     };
-    // p1 and p2 already seen
-    mockSeenPersonIds = ["p1", "p2"];
 
-    const res = await request(app)
+    await request(app)
       .post("/search/next")
       .set("X-API-Key", "test-key")
       .set("X-Clerk-Org-Id", "org_test")
       .send(BASE_BODY)
       .expect(200);
 
-    // Only p3 should be returned
-    expect(res.body.people).toHaveLength(1);
-    expect(res.body.people[0].id).toBe("p3");
-  });
-
-  // ─── Auto-advance on all-dupes ────────────────────────────────────────────
-
-  it("auto-advances past pages of all-dupe people", async () => {
-    mockCursor = {
-      id: "cursor-1",
-      orgId: "org-internal-123",
-      campaignId: "campaign-1",
-      searchParams: SEARCH_PARAMS,
-      currentPage: 1,
-      totalEntries: 75,
-      exhausted: false,
-    };
-    // All of page 1's people are seen
-    mockSeenPersonIds = ["p1", "p2", "p3"];
-
-    // Page 1 returns seen people, page 2 returns new people
-    mockSearchPeople
-      .mockResolvedValueOnce({
-        people: makePeople(["p1", "p2", "p3"]),
-        total_entries: 75,
-      })
-      .mockResolvedValueOnce({
-        people: makePeople(["p4", "p5", "p6"]),
-        total_entries: 75,
-      });
-
-    const res = await request(app)
-      .post("/search/next")
-      .set("X-API-Key", "test-key")
-      .set("X-Clerk-Org-Id", "org_test")
-      .send(BASE_BODY)
-      .expect(200);
-
-    expect(mockSearchPeople).toHaveBeenCalledTimes(2);
-    expect(res.body.people).toHaveLength(3);
-    expect(res.body.people[0].id).toBe("p4");
+    // Should advance cursor from page 2 to page 3
+    expect(mockUpdateSet).toHaveBeenCalledWith(
+      expect.objectContaining({ currentPage: 3 })
+    );
   });
 
   // ─── Exhaustion when Apollo returns empty ─────────────────────────────────
@@ -408,6 +355,31 @@ describe("POST /search/next", () => {
     );
   });
 
+  // ─── Returns all people (no dedup filtering) ──────────────────────────────
+
+  it("returns all people from Apollo without filtering", async () => {
+    mockCursor = {
+      id: "cursor-1",
+      orgId: "org-internal-123",
+      campaignId: "campaign-1",
+      searchParams: SEARCH_PARAMS,
+      currentPage: 1,
+      totalEntries: 75,
+      exhausted: false,
+    };
+
+    const res = await request(app)
+      .post("/search/next")
+      .set("X-API-Key", "test-key")
+      .set("X-Clerk-Org-Id", "org_test")
+      .send(BASE_BODY)
+      .expect(200);
+
+    // All 3 people returned — no dedup filtering
+    expect(res.body.people).toHaveLength(3);
+    expect(mockSearchPeople).toHaveBeenCalledTimes(1);
+  });
+
   // ─── Cost tracking ────────────────────────────────────────────────────────
 
   it("tracks costs when runId provided", async () => {
@@ -439,7 +411,9 @@ describe("POST /search/next", () => {
     expect(mockAddCosts).not.toHaveBeenCalled();
   });
 
-  it("counts skipped pages in cost quantity", async () => {
+  // ─── Single Apollo call per request ──────────────────────────────────────
+
+  it("makes exactly one Apollo call per request", async () => {
     mockCursor = {
       id: "cursor-1",
       orgId: "org-internal-123",
@@ -449,28 +423,15 @@ describe("POST /search/next", () => {
       totalEntries: 75,
       exhausted: false,
     };
-    mockSeenPersonIds = ["p1", "p2", "p3"];
-
-    mockSearchPeople
-      .mockResolvedValueOnce({
-        people: makePeople(["p1", "p2", "p3"]),
-        total_entries: 75,
-      })
-      .mockResolvedValueOnce({
-        people: makePeople(["p4", "p5"]),
-        total_entries: 75,
-      });
 
     await request(app)
       .post("/search/next")
       .set("X-API-Key", "test-key")
       .set("X-Clerk-Org-Id", "org_test")
-      .send({ ...BASE_BODY, runId: "run-abc" })
+      .send(BASE_BODY)
       .expect(200);
 
-    // 2 Apollo calls = 2 search credits
-    expect(mockAddCosts).toHaveBeenCalledWith("run-1", [
-      { costName: "apollo-search-credit", quantity: 2 },
-    ]);
+    // Exactly 1 Apollo call — no looping/retrying
+    expect(mockSearchPeople).toHaveBeenCalledTimes(1);
   });
 });
