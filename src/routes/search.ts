@@ -13,7 +13,6 @@ const router = Router();
 
 /**
  * POST /search - Search for people via Apollo
- * runId is optional - if provided, links to a runs-service run (campaign workflow)
  */
 router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
@@ -34,19 +33,15 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
     };
 
     // Create a child run in runs-service for this search
-    let searchRunId: string | undefined;
-    if (runId) {
-      const searchRun = await createRun({
-        clerkOrgId: req.clerkOrgId!,
-        appId: appId || "mcpfactory",
-        brandId,
-        campaignId,
-        serviceName: "apollo-service",
-        taskName: "people-search",
-        parentRunId: runId,
-      });
-      searchRunId = searchRun.id;
-    }
+    const searchRun = await createRun({
+      clerkOrgId: req.clerkOrgId!,
+      appId: appId || "mcpfactory",
+      brandId,
+      campaignId,
+      serviceName: "apollo-service",
+      taskName: "people-search",
+      parentRunId: runId,
+    });
 
     const result = await searchPeople(apolloApiKey, apolloParams);
 
@@ -63,50 +58,38 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
       });
     }
 
-    // Only store records if runId is provided (campaign workflow)
-    let searchId: string | null = null;
-    if (runId) {
-      // Store search record
-      const [search] = await db
-        .insert(apolloPeopleSearches)
-        .values({
-          orgId: req.orgId!,
-          runId,
-          appId,
-          brandId,
-          campaignId,
-          requestParams: apolloParams,
-          peopleCount: result.people.length,
-          totalEntries,
-          responseRaw: result,
-        })
-        .returning();
+    // Store search record
+    const [search] = await db
+      .insert(apolloPeopleSearches)
+      .values({
+        orgId: req.orgId!,
+        runId,
+        appId,
+        brandId,
+        campaignId,
+        requestParams: apolloParams,
+        peopleCount: result.people.length,
+        totalEntries,
+        responseRaw: result,
+      })
+      .returning();
 
-      searchId = search.id;
-
-      // Store search result records (no enrichment costs — those are tracked when POST /enrich is called)
-      for (const person of result.people as ApolloPerson[]) {
-        await db.insert(apolloPeopleEnrichments).values({
-          orgId: req.orgId!,
-          runId,
-          searchId: search.id,
-          appId,
-          brandId,
-          campaignId,
-          ...toEnrichmentDbValues(person),
-        });
-      }
-
-      // Mark search run as completed
-      if (searchRunId) {
-        await addCosts(searchRunId, [{ costName: "apollo-search-credit", quantity: 1 }]);
-        await updateRun(searchRunId, "completed");
-      }
+    // Store search result records (no enrichment costs — those are tracked when POST /enrich is called)
+    for (const person of result.people as ApolloPerson[]) {
+      await db.insert(apolloPeopleEnrichments).values({
+        orgId: req.orgId!,
+        runId,
+        searchId: search.id,
+        appId,
+        brandId,
+        campaignId,
+        ...toEnrichmentDbValues(person),
+      });
     }
 
-    if (!runId) {
-      console.warn("[Apollo Service][POST /search] ⚠ No runId provided — results returned but NOT stored in DB. GET /enrichments will return 0 for this search.");
-    }
+    // Track search cost and mark run as completed
+    await addCosts(searchRun.id, [{ costName: "apollo-search-credit", quantity: 1 }]);
+    await updateRun(searchRun.id, "completed");
 
     // Fill in cached emails for people without email
     const personIdsWithoutEmail = result.people
@@ -151,7 +134,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
     });
 
     res.json({
-      searchId,
+      searchId: search.id,
       peopleCount: result.people.length,
       totalEntries,
       people: transformedPeople,
@@ -170,7 +153,6 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
 /**
  * POST /enrich - Enrich a single person via Apollo to reveal their email
- * Body: { apolloPersonId: string, runId?: string }
  */
 router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
@@ -208,9 +190,9 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
     const result = await enrichPerson(apolloApiKey, apolloPersonId);
     const person = result.person;
 
-    // Store enrichment record and track costs if runId provided
+    // Store enrichment record and track costs
     let enrichmentId: string | null = null;
-    if (runId && person) {
+    if (person) {
       const [enrichment] = await db.insert(apolloPeopleEnrichments).values({
         orgId: req.orgId!,
         runId,
@@ -370,33 +352,31 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
         .where(eq(apolloSearchCursors.id, cursorId));
     }
 
-    // Store search record (audit trail) if runId provided
-    if (runId) {
-      const searchRun = await createRun({
-        clerkOrgId: req.clerkOrgId!,
-        appId: appId || "mcpfactory",
-        brandId,
-        campaignId,
-        serviceName: "apollo-service",
-        taskName: "people-search-next",
-        parentRunId: runId,
-      });
+    // Store search record (audit trail) and track costs
+    const searchRun = await createRun({
+      clerkOrgId: req.clerkOrgId!,
+      appId: appId || "mcpfactory",
+      brandId,
+      campaignId,
+      serviceName: "apollo-service",
+      taskName: "people-search-next",
+      parentRunId: runId,
+    });
 
-      await db.insert(apolloPeopleSearches).values({
-        orgId: req.orgId!,
-        runId,
-        appId,
-        brandId,
-        campaignId,
-        requestParams: apolloParams,
-        peopleCount: people.length,
-        totalEntries,
-        responseRaw: result,
-      });
+    await db.insert(apolloPeopleSearches).values({
+      orgId: req.orgId!,
+      runId,
+      appId,
+      brandId,
+      campaignId,
+      requestParams: apolloParams,
+      peopleCount: people.length,
+      totalEntries,
+      responseRaw: result,
+    });
 
-      await addCosts(searchRun.id, [{ costName: "apollo-search-credit", quantity: 1 }]);
-      await updateRun(searchRun.id, "completed");
-    }
+    await addCosts(searchRun.id, [{ costName: "apollo-search-credit", quantity: 1 }]);
+    await updateRun(searchRun.id, "completed");
 
     // Transform and respond
     const transformedPeople = people.map((person: ApolloPerson) =>

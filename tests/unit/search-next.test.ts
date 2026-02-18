@@ -126,6 +126,7 @@ const BASE_BODY = {
   campaignId: "campaign-1",
   brandId: "brand-1",
   appId: "app-1",
+  runId: "run-parent-1",
 };
 
 describe("POST /search/next", () => {
@@ -399,16 +400,16 @@ describe("POST /search/next", () => {
     expect(mockUpdateRun).toHaveBeenCalledWith("run-1", "completed");
   });
 
-  it("does not track costs when no runId", async () => {
-    await request(app)
+  it("returns 400 when no runId provided", async () => {
+    const res = await request(app)
       .post("/search/next")
       .set("X-API-Key", "test-key")
       .set("X-Clerk-Org-Id", "org_test")
-      .send({ ...BASE_BODY, searchParams: SEARCH_PARAMS })
-      .expect(200);
+      .send({ campaignId: "campaign-1", brandId: "brand-1", appId: "app-1", searchParams: SEARCH_PARAMS })
+      .expect(400);
 
-    expect(mockCreateRun).not.toHaveBeenCalled();
-    expect(mockAddCosts).not.toHaveBeenCalled();
+    expect(res.body.error).toBe("Invalid request");
+    expect(mockSearchPeople).not.toHaveBeenCalled();
   });
 
   // ─── Single Apollo call per request ──────────────────────────────────────
