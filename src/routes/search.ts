@@ -343,23 +343,34 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
       });
     }
 
-    // Map to Apollo snake_case params
-    const baseApolloParams = toApolloSearchParams(cursorSearchParams);
+    // Fetch current page from Apollo
+    const apolloParams = {
+      ...toApolloSearchParams(cursorSearchParams),
+      page: currentPage,
+      per_page: 25,
+    };
+    const result = await searchPeople(apolloApiKey, apolloParams);
+    const totalEntries = result.total_entries ?? result.pagination?.total_entries ?? 0;
+    const people = result.people ?? [];
 
-    // Get already-seen person IDs for dedup
-    const seenRows = await db
-      .select({ apolloPersonId: apolloPeopleEnrichments.apolloPersonId })
-      .from(apolloPeopleEnrichments)
-      .where(
-        and(
-          eq(apolloPeopleEnrichments.campaignId, campaignId),
-          eq(apolloPeopleEnrichments.orgId, req.orgId!)
-        )
-      );
-    const seenIds = new Set(seenRows.map((r) => r.apolloPersonId).filter(Boolean));
+    // Advance cursor
+    const nextPage = currentPage + 1;
+    const totalPages = Math.ceil(totalEntries / 25);
+    const done = people.length === 0 || nextPage > totalPages || nextPage > 500;
 
-    // Create cost-tracking run if runId provided
-    let searchRunId: string | undefined;
+    if (cursorId) {
+      await db
+        .update(apolloSearchCursors)
+        .set({
+          currentPage: nextPage,
+          totalEntries,
+          exhausted: done,
+          updatedAt: new Date(),
+        })
+        .where(eq(apolloSearchCursors.id, cursorId));
+    }
+
+    // Store search record (audit trail) if runId provided
     if (runId) {
       const searchRun = await createRun({
         clerkOrgId: req.clerkOrgId!,
@@ -370,112 +381,31 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
         taskName: "people-search-next",
         parentRunId: runId,
       });
-      searchRunId = searchRun.id;
-    }
 
-    // Pagination loop: fetch pages until we get unseen people or exhaust
-    let newPeople: ApolloPerson[] = [];
-    let totalEntries = existingCursor?.totalEntries ?? 0;
-    let page = currentPage;
-    const MAX_SKIP_PAGES = 10;
-    let apolloCallCount = 0;
-
-    while (apolloCallCount < MAX_SKIP_PAGES) {
-      const apolloParams = { ...baseApolloParams, page, per_page: 25 };
-      const result = await searchPeople(apolloApiKey, apolloParams);
-      apolloCallCount++;
-      totalEntries = result.total_entries ?? result.pagination?.total_entries ?? 0;
-
-      if (!result.people || result.people.length === 0) {
-        isExhausted = true;
-        break;
-      }
-
-      // Filter out already-seen people
-      const unseen = result.people.filter((p: ApolloPerson) => !seenIds.has(p.id));
-
-      if (unseen.length > 0) {
-        newPeople = unseen;
-        page++; // advance past this page for next call
-        // Check if this was the last page
-        const totalPages = Math.ceil(totalEntries / 25);
-        if (page > totalPages || page > 500) {
-          isExhausted = true;
-        }
-        break;
-      }
-
-      // All people on this page were dupes — advance
-      const totalPages = Math.ceil(totalEntries / 25);
-      page++;
-      if (page > totalPages || page > 500) {
-        isExhausted = true;
-        break;
-      }
-    }
-
-    // If we hit the skip limit without finding new people, mark exhausted
-    if (apolloCallCount >= MAX_SKIP_PAGES && newPeople.length === 0) {
-      isExhausted = true;
-    }
-
-    // Store search record for audit trail
-    const effectiveRunId = runId || `cursor-${campaignId}`;
-    const [search] = await db
-      .insert(apolloPeopleSearches)
-      .values({
+      await db.insert(apolloPeopleSearches).values({
         orgId: req.orgId!,
-        runId: effectiveRunId,
+        runId,
         appId,
         brandId,
         campaignId,
-        requestParams: { ...baseApolloParams, page: currentPage },
-        peopleCount: newPeople.length,
+        requestParams: apolloParams,
+        peopleCount: people.length,
         totalEntries,
-        responseRaw: { source: "search-next", pagesScanned: apolloCallCount },
-      })
-      .returning();
-
-    // Store new people in enrichments table (for dedup + retrieval)
-    for (const person of newPeople) {
-      await db.insert(apolloPeopleEnrichments).values({
-        orgId: req.orgId!,
-        runId: effectiveRunId,
-        searchId: search.id,
-        appId,
-        brandId,
-        campaignId,
-        ...toEnrichmentDbValues(person),
+        responseRaw: result,
       });
-    }
 
-    // Update cursor state
-    if (cursorId) {
-      await db
-        .update(apolloSearchCursors)
-        .set({
-          currentPage: page,
-          totalEntries,
-          exhausted: isExhausted,
-          updatedAt: new Date(),
-        })
-        .where(eq(apolloSearchCursors.id, cursorId));
-    }
-
-    // Track costs if runId provided
-    if (searchRunId) {
-      await addCosts(searchRunId, [{ costName: "apollo-search-credit", quantity: apolloCallCount }]);
-      await updateRun(searchRunId, "completed");
+      await addCosts(searchRun.id, [{ costName: "apollo-search-credit", quantity: 1 }]);
+      await updateRun(searchRun.id, "completed");
     }
 
     // Transform and respond
-    const transformedPeople = newPeople.map((person: ApolloPerson) =>
+    const transformedPeople = people.map((person: ApolloPerson) =>
       transformApolloPerson(person)
     );
 
     res.json({
       people: transformedPeople,
-      done: isExhausted,
+      done,
       totalEntries,
     });
   } catch (error) {
