@@ -450,7 +450,8 @@
         "type": "object",
         "properties": {
           "runId": {
-            "type": "string"
+            "type": "string",
+            "description": "Link to a runs-service run (for campaign workflows). When provided, results are stored in DB and costs tracked."
           },
           "appId": {
             "type": "string"
@@ -466,21 +467,37 @@
             "items": {
               "type": "string",
               "minLength": 1
-            }
+            },
+            "description": "Filter by job titles. Combined with other filters using AND.",
+            "example": [
+              "CEO",
+              "CTO",
+              "VP Engineering"
+            ]
           },
           "qOrganizationKeywordTags": {
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1
-            }
+            },
+            "description": "Filter by organization keyword tags. Combined with other filters using AND.",
+            "example": [
+              "SaaS",
+              "fintech"
+            ]
           },
           "organizationLocations": {
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1
-            }
+            },
+            "description": "Filter by organization HQ location. Combined with other filters using AND.",
+            "example": [
+              "United States",
+              "California, US"
+            ]
           },
           "organizationNumEmployeesRanges": {
             "type": "array",
@@ -499,17 +516,30 @@
                 "5001,10000",
                 "10001,"
               ]
-            }
+            },
+            "description": "Filter by employee count ranges. Combined with other filters using AND.",
+            "example": [
+              "11,20",
+              "21,50",
+              "51,100"
+            ]
           },
           "qOrganizationIndustryTagIds": {
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1
-            }
+            },
+            "description": "Filter by industry names (use GET /reference/industries for valid values). Combined with other filters using AND.",
+            "example": [
+              "Information Technology and Services",
+              "Computer Software"
+            ]
           },
           "qKeywords": {
-            "type": "string"
+            "type": "string",
+            "description": "Free-text keyword search across person and organization fields. Combined with other filters using AND. Keep broad to avoid empty results.",
+            "example": "machine learning"
           },
           "page": {
             "type": "integer",
@@ -526,7 +556,8 @@
           "appId",
           "brandId",
           "campaignId"
-        ]
+        ],
+        "description": "All search filters are combined using AND. Using too many filters simultaneously may return 0 results — start broad and narrow down."
       },
       "EnrichResponse": {
         "type": "object",
