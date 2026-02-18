@@ -744,9 +744,9 @@ export const SearchParamsRequestSchema = z
       example:
         "We are a B2B SaaS company selling developer tools. Target audience: engineering leaders at mid-size tech companies in the US.",
     }),
-    anthropicKeySource: z.enum(["byok", "app"]).openapi({
+    keySource: z.enum(["byok", "app"]).openapi({
       description:
-        'Where to fetch the Anthropic API key. "byok" = user\'s own key from key-service, "app" = platform app key.',
+        'Where to fetch API keys (Apollo + Anthropic). "byok" = user\'s own keys from key-service, "app" = platform app keys.',
       example: "app",
     }),
     runId: z.string().openapi({

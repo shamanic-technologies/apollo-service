@@ -23,12 +23,15 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
       return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
     }
 
-    const { context, anthropicKeySource, runId, appId, brandId, campaignId } = parsed.data;
+    const { context, keySource, runId, appId, brandId, campaignId } = parsed.data;
 
-    // Fetch keys
-    const apolloApiKey = await getByokKey(req.clerkOrgId!, "apollo");
+    // Fetch keys — both Apollo and Anthropic use the same source
+    const apolloApiKey =
+      keySource === "byok"
+        ? await getByokKey(req.clerkOrgId!, "apollo")
+        : await getAppKey(appId, "apollo");
     const anthropicApiKey =
-      anthropicKeySource === "byok"
+      keySource === "byok"
         ? await getByokKey(req.clerkOrgId!, "anthropic")
         : await getAppKey(appId, "anthropic");
 

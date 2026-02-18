@@ -63,7 +63,7 @@ vi.mock("../../src/lib/anthropic-client.js", () => ({
 
 const BASE_BODY = {
   context: "We sell B2B developer tools to engineering leaders",
-  anthropicKeySource: "app" as const,
+  keySource: "app" as const,
   runId: "run-parent-1",
   appId: "app-1",
   brandId: "brand-1",
@@ -242,10 +242,10 @@ describe("POST /search/params", () => {
 
   // ─── BYOK key source ────────────────────────────────────────────────────
 
-  it("uses BYOK key when anthropicKeySource is byok", async () => {
+  it("uses BYOK keys for both Apollo and Anthropic when keySource is byok", async () => {
     mockGetByokKey.mockImplementation((_orgId: string, provider: string) => {
       if (provider === "anthropic") return Promise.resolve("user-anthropic-key");
-      return Promise.resolve("fake-apollo-key");
+      return Promise.resolve("user-apollo-key");
     });
 
     mockCallClaude.mockResolvedValue({
@@ -259,23 +259,34 @@ describe("POST /search/params", () => {
     await request(app)
       .post("/search/params")
       .set("X-Clerk-Org-Id", "org_test")
-      .send({ ...BASE_BODY, anthropicKeySource: "byok" })
+      .send({ ...BASE_BODY, keySource: "byok" })
       .expect(200);
 
-    // Should call getByokKey for anthropic, not getAppKey
+    // Should call getByokKey for both providers
+    expect(mockGetByokKey).toHaveBeenCalledWith("org_test", "apollo");
     expect(mockGetByokKey).toHaveBeenCalledWith("org_test", "anthropic");
     expect(mockGetAppKey).not.toHaveBeenCalled();
-    // callClaude should receive the user's key
+    // callClaude should receive the user's Anthropic key
     expect(mockCallClaude).toHaveBeenCalledWith(
       "user-anthropic-key",
       expect.any(String),
       expect.any(String)
     );
+    // searchPeople should receive the user's Apollo key
+    expect(mockSearchPeople).toHaveBeenCalledWith(
+      "user-apollo-key",
+      expect.any(Object)
+    );
   });
 
   // ─── App key source ──────────────────────────────────────────────────────
 
-  it("uses app key when anthropicKeySource is app", async () => {
+  it("uses app keys for both Apollo and Anthropic when keySource is app", async () => {
+    mockGetAppKey.mockImplementation((_appId: string, provider: string) => {
+      if (provider === "anthropic") return Promise.resolve("platform-anthropic-key");
+      return Promise.resolve("platform-apollo-key");
+    });
+
     mockCallClaude.mockResolvedValue({
       content: JSON.stringify({ personTitles: ["CEO"] }),
       inputTokens: 100,
@@ -287,14 +298,21 @@ describe("POST /search/params", () => {
     await request(app)
       .post("/search/params")
       .set("X-Clerk-Org-Id", "org_test")
-      .send({ ...BASE_BODY, anthropicKeySource: "app" })
+      .send({ ...BASE_BODY, keySource: "app" })
       .expect(200);
 
+    // Should call getAppKey for both providers
+    expect(mockGetAppKey).toHaveBeenCalledWith("app-1", "apollo");
     expect(mockGetAppKey).toHaveBeenCalledWith("app-1", "anthropic");
+    expect(mockGetByokKey).not.toHaveBeenCalled();
     expect(mockCallClaude).toHaveBeenCalledWith(
-      "fake-anthropic-key",
+      "platform-anthropic-key",
       expect.any(String),
       expect.any(String)
+    );
+    expect(mockSearchPeople).toHaveBeenCalledWith(
+      "platform-apollo-key",
+      expect.any(Object)
     );
   });
 
@@ -311,21 +329,21 @@ describe("POST /search/params", () => {
     expect(mockCallClaude).not.toHaveBeenCalled();
   });
 
-  it("returns 400 when anthropicKeySource is missing", async () => {
+  it("returns 400 when keySource is missing", async () => {
     const res = await request(app)
       .post("/search/params")
       .set("X-Clerk-Org-Id", "org_test")
-      .send({ ...BASE_BODY, anthropicKeySource: undefined })
+      .send({ ...BASE_BODY, keySource: undefined })
       .expect(400);
 
     expect(res.body.error).toBe("Invalid request");
   });
 
-  it("returns 400 when anthropicKeySource is invalid value", async () => {
+  it("returns 400 when keySource is invalid value", async () => {
     const res = await request(app)
       .post("/search/params")
       .set("X-Clerk-Org-Id", "org_test")
-      .send({ ...BASE_BODY, anthropicKeySource: "invalid" })
+      .send({ ...BASE_BODY, keySource: "invalid" })
       .expect(400);
 
     expect(res.body.error).toBe("Invalid request");
