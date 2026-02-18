@@ -1519,6 +1519,109 @@
           "value"
         ]
       },
+      "SearchParamsResponse": {
+        "type": "object",
+        "properties": {
+          "searchParams": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SearchFilters"
+              },
+              {
+                "description": "Validated Apollo search filters that returned results."
+              }
+            ]
+          },
+          "totalResults": {
+            "type": "number",
+            "description": "Apollo total_entries for the final search params."
+          },
+          "attempts": {
+            "type": "number",
+            "description": "Number of LLM iterations (1 = first try worked)."
+          },
+          "attemptHistory": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchParamsAttempt"
+            },
+            "description": "Full history of all attempts for debugging."
+          }
+        },
+        "required": [
+          "searchParams",
+          "totalResults",
+          "attempts",
+          "attemptHistory"
+        ]
+      },
+      "SearchParamsAttempt": {
+        "type": "object",
+        "properties": {
+          "searchParams": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SearchFilters"
+              },
+              {
+                "description": "Apollo search filters. All filters are combined using AND. Start broad and narrow down to avoid empty results."
+              }
+            ]
+          },
+          "totalResults": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "searchParams",
+          "totalResults"
+        ]
+      },
+      "SearchParamsRequest": {
+        "type": "object",
+        "properties": {
+          "context": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Unstructured context about the company — website content, target audience description, ICP notes, or any combination. The LLM extracts what it needs.",
+            "example": "We are a B2B SaaS company selling developer tools. Target audience: engineering leaders at mid-size tech companies in the US."
+          },
+          "anthropicKeySource": {
+            "type": "string",
+            "enum": [
+              "byok",
+              "app"
+            ],
+            "description": "Where to fetch the Anthropic API key. \"byok\" = user's own key from key-service, \"app\" = platform app key.",
+            "example": "app"
+          },
+          "runId": {
+            "type": "string",
+            "description": "Runs-service parent run ID for cost tracking.",
+            "example": "run-abc-123"
+          },
+          "appId": {
+            "type": "string",
+            "example": "my-app"
+          },
+          "brandId": {
+            "type": "string",
+            "example": "brand-1"
+          },
+          "campaignId": {
+            "type": "string",
+            "example": "campaign-1"
+          }
+        },
+        "required": [
+          "context",
+          "anthropicKeySource",
+          "runId",
+          "appId",
+          "brandId",
+          "campaignId"
+        ]
+      },
       "ValidateResponse": {
         "type": "object",
         "properties": {
@@ -2023,6 +2126,64 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/EmployeeRangesResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/search/params": {
+      "post": {
+        "summary": "Generate Apollo search parameters from context using LLM",
+        "description": "Takes unstructured context (website content, target audience, etc.) and uses Claude to generate Apollo search filters. Validates against Apollo — if 0 results, retries with broadened filters (max 10 attempts). Returns validated search params guaranteed to produce results, or the best-effort params after 10 attempts.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-clerk-org-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchParamsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Generated and validated search parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchParamsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }

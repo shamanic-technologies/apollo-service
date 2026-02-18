@@ -734,6 +734,84 @@ registry.registerPath({
   },
 });
 
+// ─── POST /search/params ────────────────────────────────────────────────────
+
+export const SearchParamsRequestSchema = z
+  .object({
+    context: z.string().min(1).openapi({
+      description:
+        "Unstructured context about the company — website content, target audience description, ICP notes, or any combination. The LLM extracts what it needs.",
+      example:
+        "We are a B2B SaaS company selling developer tools. Target audience: engineering leaders at mid-size tech companies in the US.",
+    }),
+    anthropicKeySource: z.enum(["byok", "app"]).openapi({
+      description:
+        'Where to fetch the Anthropic API key. "byok" = user\'s own key from key-service, "app" = platform app key.',
+      example: "app",
+    }),
+    runId: z.string().openapi({
+      description: "Runs-service parent run ID for cost tracking.",
+      example: "run-abc-123",
+    }),
+    appId: z.string().openapi({ example: "my-app" }),
+    brandId: z.string().openapi({ example: "brand-1" }),
+    campaignId: z.string().openapi({ example: "campaign-1" }),
+  })
+  .openapi("SearchParamsRequest");
+
+const SearchParamsAttemptSchema = z
+  .object({
+    searchParams: SearchFiltersSchema,
+    totalResults: z.number(),
+  })
+  .openapi("SearchParamsAttempt");
+
+const SearchParamsResponseSchema = z
+  .object({
+    searchParams: SearchFiltersSchema.openapi({
+      description: "Validated Apollo search filters that returned results.",
+    }),
+    totalResults: z.number().openapi({
+      description: "Apollo total_entries for the final search params.",
+    }),
+    attempts: z.number().openapi({
+      description: "Number of LLM iterations (1 = first try worked).",
+    }),
+    attemptHistory: z.array(SearchParamsAttemptSchema).openapi({
+      description: "Full history of all attempts for debugging.",
+    }),
+  })
+  .openapi("SearchParamsResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/search/params",
+  summary: "Generate Apollo search parameters from context using LLM",
+  description:
+    "Takes unstructured context (website content, target audience, etc.) and uses Claude to generate Apollo search filters. Validates against Apollo — if 0 results, retries with broadened filters (max 10 attempts). Returns validated search params guaranteed to produce results, or the best-effort params after 10 attempts.",
+  request: {
+    headers: z.object({ "x-clerk-org-id": z.string() }),
+    body: {
+      content: { "application/json": { schema: SearchParamsRequestSchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      description: "Generated and validated search parameters",
+      content: { "application/json": { schema: SearchParamsResponseSchema } },
+    },
+    400: {
+      description: "Validation error",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    500: {
+      description: "Internal server error",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
 // ─── POST /validate ──────────────────────────────────────────────────────────
 
 export const ValidateRequestSchema = z
