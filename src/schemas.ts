@@ -176,22 +176,43 @@ registry.registerPath({
 
 export const SearchRequestSchema = z
   .object({
-    runId: z.string().optional(),
+    runId: z.string().optional().openapi({ description: "Link to a runs-service run (for campaign workflows). When provided, results are stored in DB and costs tracked." }),
     appId: z.string(),
     brandId: z.string(),
     campaignId: z.string(),
-    personTitles: z.array(z.string().min(1)).optional(),
-    qOrganizationKeywordTags: z.array(z.string().min(1)).optional(),
-    organizationLocations: z.array(z.string().min(1)).optional(),
+    personTitles: z.array(z.string().min(1)).optional().openapi({
+      description: "Filter by job titles. Combined with other filters using AND.",
+      example: ["CEO", "CTO", "VP Engineering"],
+    }),
+    qOrganizationKeywordTags: z.array(z.string().min(1)).optional().openapi({
+      description: "Filter by organization keyword tags. Combined with other filters using AND.",
+      example: ["SaaS", "fintech"],
+    }),
+    organizationLocations: z.array(z.string().min(1)).optional().openapi({
+      description: "Filter by organization HQ location. Combined with other filters using AND.",
+      example: ["United States", "California, US"],
+    }),
     organizationNumEmployeesRanges: z
       .array(z.enum(VALID_EMPLOYEE_RANGES))
-      .optional(),
-    qOrganizationIndustryTagIds: z.array(z.string().min(1)).optional(),
-    qKeywords: z.string().optional(),
+      .optional()
+      .openapi({
+        description: "Filter by employee count ranges. Combined with other filters using AND.",
+        example: ["11,20", "21,50", "51,100"],
+      }),
+    qOrganizationIndustryTagIds: z.array(z.string().min(1)).optional().openapi({
+      description: "Filter by industry names (use GET /reference/industries for valid values). Combined with other filters using AND.",
+      example: ["Information Technology and Services", "Computer Software"],
+    }),
+    qKeywords: z.string().optional().openapi({
+      description: "Free-text keyword search across person and organization fields. Combined with other filters using AND. Keep broad to avoid empty results.",
+      example: "machine learning",
+    }),
     page: z.number().int().min(1).max(500).optional(),
     perPage: z.number().int().min(1).max(100).optional(),
   })
-  .openapi("SearchRequest");
+  .openapi("SearchRequest", {
+    description: "All search filters are combined using AND. Using too many filters simultaneously may return 0 results — start broad and narrow down.",
+  });
 
 const PaginationSchema = z
   .object({
