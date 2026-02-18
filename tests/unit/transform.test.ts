@@ -246,7 +246,7 @@ describe("toEnrichmentDbValues", () => {
     expect(result.employmentHistory).toHaveLength(2);
     expect(result.organizationFundingEvents).toHaveLength(2);
     expect(result.organizationCurrentTechnologies).toHaveLength(2);
-    expect(result.responseRaw).toBe(fullPerson);
+    expect(result.responseRaw).toStrictEqual({ ...fullPerson, organization: fullPerson.organization });
   });
 
   it("should handle missing organization", () => {
@@ -266,6 +266,26 @@ describe("toEnrichmentDbValues", () => {
     expect(result.organizationName).toBeUndefined();
     expect(result.organizationLogoUrl).toBeUndefined();
     expect(result.organizationFundingEvents).toBeUndefined();
+  });
+
+  it("should default responseRaw.organization to empty object when missing", () => {
+    const person: ApolloPerson = {
+      id: "abc123",
+      first_name: "Jane",
+      last_name: "Smith",
+      name: "Jane Smith",
+      email: "jane@example.com",
+      email_status: "verified",
+      title: "Engineer",
+      linkedin_url: "",
+    };
+
+    const result = toEnrichmentDbValues(person);
+    const raw = result.responseRaw as Record<string, unknown>;
+
+    // organization must be an object so downstream consumers can safely access .primary_domain etc.
+    expect(raw.organization).toEqual({});
+    expect((raw.organization as Record<string, unknown>).primary_domain).toBeUndefined();
   });
 });
 

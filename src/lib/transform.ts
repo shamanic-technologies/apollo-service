@@ -144,7 +144,7 @@ export function toEnrichmentDbValues(person: ApolloPerson) {
     organizationNumSuborganizations: org?.num_suborganizations,
     organizationRetailLocationCount: org?.retail_location_count,
     organizationAlexaRanking: org?.alexa_ranking,
-    responseRaw: person,
+    responseRaw: { ...person, organization: person.organization ?? {} },
   };
 }
 
