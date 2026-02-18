@@ -423,6 +423,68 @@ describe("Apollo service cost tracking", () => {
     errorSpy.mockRestore();
   });
 
+  it("should create a run but NO costs when enrichment is served from cache", async () => {
+    // Simulate cache hit: db.select returns a cached enrichment
+    const { db } = await import("../../src/db/index.js");
+    const selectMock = vi.mocked(db.select);
+    selectMock.mockReturnValueOnce({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          orderBy: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([{
+              id: "cached-enrichment-1",
+              apolloPersonId: "person-0",
+              firstName: "First0",
+              lastName: "Last0",
+              email: "enriched@example.com",
+              emailStatus: "verified",
+              title: "CEO",
+              linkedinUrl: null,
+              organizationName: "Company0",
+              organizationDomain: "company0.com",
+              organizationIndustry: "tech",
+              organizationSize: 50,
+              organizationRevenue: null,
+              createdAt: new Date(),
+            }]),
+          }),
+        }),
+      }),
+    } as any);
+
+    await request(app)
+      .post("/enrich")
+      .set("X-API-Key", "test-service-secret")
+      .set("X-Clerk-Org-Id", "org_test")
+      .send({
+        apolloPersonId: "person-0",
+        runId: "campaign-run-abc",
+        appId: "app-1",
+        brandId: "brand-1",
+        campaignId: "campaign-1",
+      })
+      .expect(200);
+
+    // Should create a run for traceability
+    expect(mockCreateRun).toHaveBeenCalledTimes(1);
+    expect(mockCreateRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serviceName: "apollo-service",
+        taskName: "enrichment",
+        parentRunId: "campaign-run-abc",
+      })
+    );
+
+    // Should mark the run as completed
+    expect(mockUpdateRun).toHaveBeenCalledTimes(1);
+
+    // Should NOT add any costs (cache hit = no Apollo API call)
+    expect(mockAddCosts).not.toHaveBeenCalled();
+
+    // Should NOT call Apollo API
+    expect(mockEnrichPerson).not.toHaveBeenCalled();
+  });
+
   it("should return 400 for POST /enrich when no runId provided", async () => {
     const res = await request(app)
       .post("/enrich")
