@@ -398,6 +398,61 @@ describe("Apollo service cost tracking", () => {
     expect(enrichmentCalls[0][1][0].quantity).toBe(1);
   });
 
+  it("should NOT post enrichment cost when Apollo returns person without email (regression: no-email = no charge)", async () => {
+    mockEnrichPerson.mockResolvedValueOnce({
+      person: {
+        id: "person-0",
+        first_name: "First0",
+        last_name: "Last0",
+        name: "First0 Last0",
+        email: null,
+        email_status: null,
+        title: "CEO",
+        linkedin_url: null,
+        photo_url: "https://img.apollo.io/person0.jpg",
+        headline: "CEO at Company0",
+        seniority: "c_suite",
+        organization: {
+          id: "org-0",
+          name: "Company0",
+          website_url: "https://company0.com",
+          primary_domain: "company0.com",
+          industry: "tech",
+          estimated_num_employees: 50,
+          annual_revenue: null,
+          logo_url: "https://company0.com/logo.png",
+          short_description: "Company0 is a tech company",
+          founded_year: 2020,
+        },
+      },
+    });
+
+    await request(app)
+      .post("/enrich")
+      .set("X-API-Key", "test-service-secret")
+      .set("X-Clerk-Org-Id", "org_test")
+      .send({
+        apolloPersonId: "person-0",
+        runId: "campaign-run-abc",
+        appId: "app-1",
+        brandId: "brand-1",
+        campaignId: "campaign-1",
+      })
+      .expect(200);
+
+    // Should still create a run for traceability
+    expect(mockCreateRun).toHaveBeenCalledTimes(1);
+    expect(mockCreateRun).toHaveBeenCalledWith(
+      expect.objectContaining({ taskName: "enrichment" })
+    );
+
+    // Should NOT add enrichment cost — Apollo doesn't charge when no email returned
+    expect(mockAddCosts).not.toHaveBeenCalled();
+
+    // Should still mark run as completed
+    expect(mockUpdateRun).toHaveBeenCalledTimes(1);
+  });
+
   // ─── Hard failure on runs-service errors (POST /enrich) ──────────────────────
 
   it("should return 500 when addCosts fails for POST /enrich", async () => {
