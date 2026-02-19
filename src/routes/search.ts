@@ -231,7 +231,9 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
         .set({ enrichmentRunId: enrichRun.id })
         .where(eq(apolloPeopleEnrichments.id, enrichment.id));
 
-      await addCosts(enrichRun.id, [{ costName: "apollo-enrichment-credit", quantity: 1 }]);
+      if (person.email) {
+        await addCosts(enrichRun.id, [{ costName: "apollo-enrichment-credit", quantity: 1 }]);
+      }
       await updateRun(enrichRun.id, "completed");
     }
 
