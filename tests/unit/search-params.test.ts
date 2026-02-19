@@ -227,8 +227,8 @@ describe("POST /search/params", () => {
 
     // LLM token costs
     expect(mockAddCosts).toHaveBeenCalledWith("run-1", [
-      { costName: "anthropic-opus-4.6-tokens-input", quantity: 1234 },
-      { costName: "anthropic-opus-4.6-tokens-output", quantity: 56 },
+      { costName: "anthropic-sonnet-4.6-tokens-input", quantity: 1234 },
+      { costName: "anthropic-sonnet-4.6-tokens-output", quantity: 56 },
     ]);
 
     // Apollo search credit

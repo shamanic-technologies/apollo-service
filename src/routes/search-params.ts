@@ -59,8 +59,8 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
 
         // Track LLM token costs
         await addCosts(paramRun.id, [
-          { costName: "anthropic-opus-4.6-tokens-input", quantity: llmResponse.inputTokens },
-          { costName: "anthropic-opus-4.6-tokens-output", quantity: llmResponse.outputTokens },
+          { costName: "anthropic-sonnet-4.6-tokens-input", quantity: llmResponse.inputTokens },
+          { costName: "anthropic-sonnet-4.6-tokens-output", quantity: llmResponse.outputTokens },
         ]);
 
         // Parse LLM response as JSON
