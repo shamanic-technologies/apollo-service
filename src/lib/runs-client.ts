@@ -68,6 +68,7 @@ export interface CreateRunParams {
   serviceName: string;
   taskName: string;
   parentRunId?: string;
+  workflowName?: string;
 }
 
 export interface CostItem {

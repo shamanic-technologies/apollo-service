@@ -557,4 +557,46 @@ describe("Apollo service cost tracking", () => {
     expect(mockCreateRun).not.toHaveBeenCalled();
     expect(mockEnrichPerson).not.toHaveBeenCalled();
   });
+
+  // ─── workflowName propagation ─────────────────────────────────────────────
+
+  it("should pass workflowName to createRun on POST /search", async () => {
+    await request(app)
+      .post("/search")
+      .set("X-API-Key", "test-service-secret")
+      .set("X-Clerk-Org-Id", "org_test")
+      .send({
+        runId: "campaign-run-abc",
+        appId: "app-1",
+        brandId: "brand-1",
+        campaignId: "campaign-1",
+        personTitles: ["CEO"],
+        workflowName: "fetch-lead",
+      })
+      .expect(200);
+
+    expect(mockCreateRun).toHaveBeenCalledWith(
+      expect.objectContaining({ workflowName: "fetch-lead" })
+    );
+  });
+
+  it("should pass workflowName to createRun on POST /enrich", async () => {
+    await request(app)
+      .post("/enrich")
+      .set("X-API-Key", "test-service-secret")
+      .set("X-Clerk-Org-Id", "org_test")
+      .send({
+        apolloPersonId: "person-0",
+        runId: "campaign-run-abc",
+        appId: "app-1",
+        brandId: "brand-1",
+        campaignId: "campaign-1",
+        workflowName: "fetch-lead",
+      })
+      .expect(200);
+
+    expect(mockCreateRun).toHaveBeenCalledWith(
+      expect.objectContaining({ workflowName: "fetch-lead" })
+    );
+  });
 });

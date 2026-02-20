@@ -370,6 +370,48 @@ describe("POST /search/params", () => {
     expect(res.body.totalResults).toBe(5);
   });
 
+  // ─── workflowName propagation ──────────────────────────────────────────
+
+  it("passes workflowName to createRun when provided", async () => {
+    mockCallClaude.mockResolvedValue({
+      content: JSON.stringify({ personTitles: ["CEO"] }),
+      inputTokens: 100,
+      outputTokens: 20,
+    });
+
+    mockSearchPeople.mockResolvedValue({ people: [{ id: "p1" }], total_entries: 5 });
+
+    await request(app)
+      .post("/search/params")
+      .set("X-Clerk-Org-Id", "org_test")
+      .send({ ...BASE_BODY, workflowName: "fetch-lead" })
+      .expect(200);
+
+    expect(mockCreateRun).toHaveBeenCalledWith(
+      expect.objectContaining({ workflowName: "fetch-lead" })
+    );
+  });
+
+  it("omits workflowName from createRun when not provided", async () => {
+    mockCallClaude.mockResolvedValue({
+      content: JSON.stringify({ personTitles: ["CEO"] }),
+      inputTokens: 100,
+      outputTokens: 20,
+    });
+
+    mockSearchPeople.mockResolvedValue({ people: [{ id: "p1" }], total_entries: 5 });
+
+    await request(app)
+      .post("/search/params")
+      .set("X-Clerk-Org-Id", "org_test")
+      .send(BASE_BODY)
+      .expect(200);
+
+    expect(mockCreateRun).toHaveBeenCalledWith(
+      expect.objectContaining({ workflowName: undefined })
+    );
+  });
+
   // ─── Run is marked failed on error ───────────────────────────────────────
 
   it("marks run as failed when an error occurs", async () => {

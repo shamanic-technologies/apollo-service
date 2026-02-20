@@ -20,7 +20,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
     if (!parsed.success) {
       return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
     }
-    const { runId, appId, brandId, campaignId, ...searchParams } = parsed.data;
+    const { runId, appId, brandId, campaignId, workflowName, ...searchParams } = parsed.data;
 
     // Get Apollo API key from key-service
     const apolloApiKey = await getByokKey(req.clerkOrgId!, "apollo");
@@ -41,6 +41,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
       serviceName: "apollo-service",
       taskName: "people-search",
       parentRunId: runId,
+      workflowName,
     });
 
     const result = await searchPeople(apolloApiKey, apolloParams);
@@ -160,7 +161,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
     if (!parsed.success) {
       return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
     }
-    const { apolloPersonId, runId, appId, brandId, campaignId } = parsed.data;
+    const { apolloPersonId, runId, appId, brandId, campaignId, workflowName } = parsed.data;
 
     // Check cache: existing enrichment for this personId within 12 months
     const twelveMonthsAgo = new Date();
@@ -189,6 +190,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
         serviceName: "apollo-service",
         taskName: "enrichment",
         parentRunId: runId,
+        workflowName,
       });
       await updateRun(cachedRun.id, "completed");
 
@@ -225,6 +227,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
         serviceName: "apollo-service",
         taskName: "enrichment",
         parentRunId: runId,
+        workflowName,
       });
 
       await db.update(apolloPeopleEnrichments)
@@ -257,7 +260,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     if (!parsed.success) {
       return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
     }
-    const { campaignId, brandId, appId, searchParams, runId } = parsed.data;
+    const { campaignId, brandId, appId, searchParams, runId, workflowName } = parsed.data;
 
     // Get Apollo API key
     const apolloApiKey = await getByokKey(req.clerkOrgId!, "apollo");
@@ -375,6 +378,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
       serviceName: "apollo-service",
       taskName: "people-search-next",
       parentRunId: runId,
+      workflowName,
     });
 
     await db.insert(apolloPeopleSearches).values({
