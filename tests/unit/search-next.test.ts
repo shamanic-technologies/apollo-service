@@ -435,4 +435,19 @@ describe("POST /search/next", () => {
     // Exactly 1 Apollo call — no looping/retrying
     expect(mockSearchPeople).toHaveBeenCalledTimes(1);
   });
+
+  // ─── workflowName propagation ──────────────────────────────────────────
+
+  it("passes workflowName to createRun when provided", async () => {
+    await request(app)
+      .post("/search/next")
+      .set("X-API-Key", "test-key")
+      .set("X-Clerk-Org-Id", "org_test")
+      .send({ ...BASE_BODY, searchParams: SEARCH_PARAMS, workflowName: "fetch-lead" })
+      .expect(200);
+
+    expect(mockCreateRun).toHaveBeenCalledWith(
+      expect.objectContaining({ workflowName: "fetch-lead" })
+    );
+  });
 });

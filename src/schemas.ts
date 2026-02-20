@@ -200,6 +200,7 @@ export const SearchRequestSchema = z
     appId: z.string(),
     brandId: z.string(),
     campaignId: z.string(),
+    workflowName: z.string().optional().openapi({ description: "Workflow name for run tracking in runs-service.", example: "fetch-lead" }),
     personTitles: z.array(z.string().min(1)).optional().openapi({
       description: "Filter by job titles. Combined with other filters using AND.",
       example: ["CEO", "CTO", "VP Engineering"],
@@ -386,6 +387,7 @@ export const SearchNextRequestSchema = z
       description: "Runs-service parent run ID. Required — a search audit record is stored and 1 apollo-search-credit is tracked.",
       example: "run-abc-123",
     }),
+    workflowName: z.string().optional().openapi({ description: "Workflow name for run tracking in runs-service.", example: "fetch-lead" }),
   })
   .openapi("SearchNextRequest", {
     description: "Request body for server-managed search pagination. The cursor is keyed by (orgId, campaignId).",
@@ -439,6 +441,7 @@ export const EnrichRequestSchema = z
     appId: z.string(),
     brandId: z.string(),
     campaignId: z.string(),
+    workflowName: z.string().optional().openapi({ description: "Workflow name for run tracking in runs-service.", example: "fetch-lead" }),
   })
   .openapi("EnrichRequest");
 
@@ -756,6 +759,7 @@ export const SearchParamsRequestSchema = z
     appId: z.string().openapi({ example: "my-app" }),
     brandId: z.string().openapi({ example: "brand-1" }),
     campaignId: z.string().openapi({ example: "campaign-1" }),
+    workflowName: z.string().optional().openapi({ description: "Workflow name for run tracking in runs-service.", example: "fetch-lead" }),
   })
   .openapi("SearchParamsRequest");
 

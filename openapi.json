@@ -463,6 +463,11 @@
           "campaignId": {
             "type": "string"
           },
+          "workflowName": {
+            "type": "string",
+            "description": "Workflow name for run tracking in runs-service.",
+            "example": "fetch-lead"
+          },
           "personTitles": {
             "type": "array",
             "items": {
@@ -711,6 +716,11 @@
             "type": "string",
             "description": "Runs-service parent run ID. Required — a search audit record is stored and 1 apollo-search-credit is tracked.",
             "example": "run-abc-123"
+          },
+          "workflowName": {
+            "type": "string",
+            "description": "Workflow name for run tracking in runs-service.",
+            "example": "fetch-lead"
           }
         },
         "required": [
@@ -948,6 +958,11 @@
           },
           "campaignId": {
             "type": "string"
+          },
+          "workflowName": {
+            "type": "string",
+            "description": "Workflow name for run tracking in runs-service.",
+            "example": "fetch-lead"
           }
         },
         "required": [
@@ -1611,6 +1626,11 @@
           "campaignId": {
             "type": "string",
             "example": "campaign-1"
+          },
+          "workflowName": {
+            "type": "string",
+            "description": "Workflow name for run tracking in runs-service.",
+            "example": "fetch-lead"
           }
         },
         "required": [
