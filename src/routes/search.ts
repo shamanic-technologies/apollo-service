@@ -513,18 +513,6 @@ router.post("/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
       totalMatchingPeople: Number(searchStats.totalMatchingPeople) || 0,
     };
 
-    // Only warn when searches exist but enrichments don't — that's the actual anomaly
-    if (stats.searchCount > 0 && stats.enrichedLeadsCount === 0) {
-      console.warn("[Apollo Service][POST /stats] searches found but 0 leads", {
-        orgId: req.orgId,
-        appId,
-        brandId,
-        campaignId,
-        runIds: runIds?.slice(0, 5),
-        searchCount: stats.searchCount,
-      });
-    }
-
     res.json({ stats });
   } catch (error) {
     console.error("[Apollo Service][POST /stats] ERROR:", error);
