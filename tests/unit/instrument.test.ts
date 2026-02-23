@@ -53,6 +53,28 @@ describe("instrument", () => {
     expect(setTagSpy).toHaveBeenCalledWith("service", "apollo-service");
   });
 
+  it("should exclude drizzle-orm from ESM loader hooks to prevent named-export breakage", async () => {
+    process.env.SENTRY_DSN = "https://fake@sentry.io/123";
+
+    const initSpy = vi.fn();
+    const setTagSpy = vi.fn();
+    vi.doMock("@sentry/node", () => ({
+      init: initSpy,
+      setTag: setTagSpy,
+    }));
+
+    await import("../../src/instrument.js");
+
+    const config = initSpy.mock.calls[0][0];
+    expect(config.registerEsmLoaderHooks).toBeDefined();
+    expect(config.registerEsmLoaderHooks.exclude).toBeDefined();
+
+    const excludePatterns: RegExp[] = config.registerEsmLoaderHooks.exclude;
+    expect(excludePatterns.some((re: RegExp) => re.test("drizzle-orm"))).toBe(
+      true
+    );
+  });
+
   it("index.ts should not statically import instrument", async () => {
     const { readFileSync } = await import("fs");
     const { join } = await import("path");
