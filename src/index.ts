@@ -12,6 +12,7 @@ import searchRoutes from "./routes/search.js";
 import searchParamsRoutes from "./routes/search-params.js";
 import referenceRoutes from "./routes/reference.js";
 import validateRoutes from "./routes/validate.js";
+import matchRoutes from "./routes/match.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -41,6 +42,7 @@ app.use(searchRoutes);
 app.use(searchParamsRoutes);
 app.use(referenceRoutes);
 app.use(validateRoutes);
+app.use(matchRoutes);
 
 // 404 handler
 app.use((req, res) => {

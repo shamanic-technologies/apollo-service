@@ -139,6 +139,16 @@ export interface ApolloEnrichResponse {
   person: ApolloPerson;
 }
 
+export interface ApolloMatchResponse {
+  person: ApolloPerson | null;
+}
+
+export interface BulkMatchInput {
+  first_name: string;
+  last_name: string;
+  domain: string;
+}
+
 /**
  * Search for people using Apollo API
  * Uses the new api_search endpoint (mixed_people/search is deprecated)
@@ -194,6 +204,66 @@ export async function enrichPerson(
   if (!response.ok) {
     const error = await response.text();
     throw new Error(`Apollo enrich failed: ${response.status} - ${error}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Match a person by name and domain using Apollo API.
+ * Same endpoint as enrichPerson, but with first_name + last_name + domain instead of id.
+ */
+export async function matchPersonByName(
+  apiKey: string,
+  firstName: string,
+  lastName: string,
+  domain: string
+): Promise<ApolloMatchResponse> {
+  const response = await fetch(`${APOLLO_API_BASE}/people/match`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Api-Key": apiKey,
+    },
+    body: JSON.stringify({
+      first_name: firstName,
+      last_name: lastName,
+      domain,
+      reveal_personal_emails: false,
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Apollo match failed: ${response.status} - ${error}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Bulk match people by name + domain using Apollo's bulk_match endpoint.
+ * Max 10 items per call (Apollo limit).
+ */
+export async function bulkMatchPeopleByName(
+  apiKey: string,
+  items: BulkMatchInput[]
+): Promise<{ matches: (ApolloPerson | null)[] }> {
+  const response = await fetch(`${APOLLO_API_BASE}/people/bulk_match`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Api-Key": apiKey,
+    },
+    body: JSON.stringify({
+      details: items,
+      reveal_personal_emails: false,
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Apollo bulk match failed: ${response.status} - ${error}`);
   }
 
   return response.json();
