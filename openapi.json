@@ -973,6 +973,182 @@
           "campaignId"
         ]
       },
+      "MatchResponse": {
+        "type": "object",
+        "properties": {
+          "enrichmentId": {
+            "type": "string",
+            "nullable": true
+          },
+          "person": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Person"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          },
+          "cached": {
+            "type": "boolean",
+            "description": "True if the result was served from cache (no Apollo API call)."
+          }
+        },
+        "required": [
+          "enrichmentId",
+          "person",
+          "cached"
+        ]
+      },
+      "MatchRequest": {
+        "type": "object",
+        "properties": {
+          "firstName": {
+            "type": "string",
+            "minLength": 1
+          },
+          "lastName": {
+            "type": "string",
+            "minLength": 1
+          },
+          "organizationDomain": {
+            "type": "string",
+            "minLength": 1
+          },
+          "runId": {
+            "type": "string",
+            "description": "Runs-service parent run ID. Required — match record is stored and costs tracked.",
+            "example": "run-abc-123"
+          },
+          "appId": {
+            "type": "string"
+          },
+          "brandId": {
+            "type": "string"
+          },
+          "campaignId": {
+            "type": "string"
+          },
+          "workflowName": {
+            "type": "string",
+            "description": "Workflow name for run tracking in runs-service.",
+            "example": "fetch-lead"
+          }
+        },
+        "required": [
+          "firstName",
+          "lastName",
+          "organizationDomain",
+          "runId",
+          "appId",
+          "brandId",
+          "campaignId"
+        ]
+      },
+      "MatchBulkResponse": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MatchBulkResult"
+            },
+            "description": "Results in the same order as the input items array."
+          }
+        },
+        "required": [
+          "results"
+        ]
+      },
+      "MatchBulkResult": {
+        "type": "object",
+        "properties": {
+          "enrichmentId": {
+            "type": "string",
+            "nullable": true
+          },
+          "person": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Person"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          },
+          "cached": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enrichmentId",
+          "person",
+          "cached"
+        ]
+      },
+      "MatchBulkRequest": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MatchBulkItem"
+            },
+            "minItems": 1,
+            "maxItems": 10
+          },
+          "runId": {
+            "type": "string",
+            "description": "Runs-service parent run ID. A single run covers the entire batch.",
+            "example": "run-abc-123"
+          },
+          "appId": {
+            "type": "string"
+          },
+          "brandId": {
+            "type": "string"
+          },
+          "campaignId": {
+            "type": "string"
+          },
+          "workflowName": {
+            "type": "string",
+            "description": "Workflow name for run tracking in runs-service.",
+            "example": "fetch-lead"
+          }
+        },
+        "required": [
+          "items",
+          "runId",
+          "appId",
+          "brandId",
+          "campaignId"
+        ]
+      },
+      "MatchBulkItem": {
+        "type": "object",
+        "properties": {
+          "firstName": {
+            "type": "string",
+            "minLength": 1
+          },
+          "lastName": {
+            "type": "string",
+            "minLength": 1
+          },
+          "organizationDomain": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "firstName",
+          "lastName",
+          "organizationDomain"
+        ]
+      },
       "SearchesResponse": {
         "type": "object",
         "properties": {
@@ -1924,6 +2100,122 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/EnrichResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/match": {
+      "post": {
+        "summary": "Match a person by name and organization domain via Apollo",
+        "description": "Match a single person by firstName + lastName + organizationDomain. Uses 12-month cache. Costs tracked as apollo-person-match-credit (only charged when email is found).",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-clerk-org-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Match result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/match/bulk": {
+      "post": {
+        "summary": "Bulk match people by name and organization domain via Apollo",
+        "description": "Match up to 10 people by firstName + lastName + organizationDomain. Each item is cached independently. A single run covers the whole batch; costs tracked per item (apollo-person-match-credit, only when email found).",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-clerk-org-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MatchBulkRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Bulk match results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatchBulkResponse"
                 }
               }
             }

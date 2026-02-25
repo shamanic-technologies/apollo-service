@@ -481,6 +481,141 @@ registry.registerPath({
   },
 });
 
+// ─── POST /match ────────────────────────────────────────────────────────────
+
+export const MatchRequestSchema = z
+  .object({
+    firstName: z.string().min(1, "firstName is required"),
+    lastName: z.string().min(1, "lastName is required"),
+    organizationDomain: z.string().min(1, "organizationDomain is required"),
+    runId: z.string().openapi({
+      description: "Runs-service parent run ID. Required — match record is stored and costs tracked.",
+      example: "run-abc-123",
+    }),
+    appId: z.string(),
+    brandId: z.string(),
+    campaignId: z.string(),
+    workflowName: z.string().optional().openapi({
+      description: "Workflow name for run tracking in runs-service.",
+      example: "fetch-lead",
+    }),
+  })
+  .openapi("MatchRequest");
+
+const MatchResponseSchema = z
+  .object({
+    enrichmentId: z.string().nullable(),
+    person: PersonSchema.nullable(),
+    cached: z.boolean().openapi({
+      description: "True if the result was served from cache (no Apollo API call).",
+    }),
+  })
+  .openapi("MatchResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/match",
+  summary: "Match a person by name and organization domain via Apollo",
+  description:
+    "Match a single person by firstName + lastName + organizationDomain. Uses 12-month cache. Costs tracked as apollo-person-match-credit (only charged when email is found).",
+  request: {
+    headers: z.object({ "x-clerk-org-id": z.string() }),
+    body: {
+      content: { "application/json": { schema: MatchRequestSchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      description: "Match result",
+      content: { "application/json": { schema: MatchResponseSchema } },
+    },
+    400: {
+      description: "Validation error",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    500: {
+      description: "Internal server error",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+// ─── POST /match/bulk ───────────────────────────────────────────────────────
+
+const MatchBulkItemSchema = z
+  .object({
+    firstName: z.string().min(1),
+    lastName: z.string().min(1),
+    organizationDomain: z.string().min(1),
+  })
+  .openapi("MatchBulkItem");
+
+export const MatchBulkRequestSchema = z
+  .object({
+    items: z
+      .array(MatchBulkItemSchema)
+      .min(1, "At least one item required")
+      .max(10, "Maximum 10 items per request"),
+    runId: z.string().openapi({
+      description: "Runs-service parent run ID. A single run covers the entire batch.",
+      example: "run-abc-123",
+    }),
+    appId: z.string(),
+    brandId: z.string(),
+    campaignId: z.string(),
+    workflowName: z.string().optional().openapi({
+      description: "Workflow name for run tracking in runs-service.",
+      example: "fetch-lead",
+    }),
+  })
+  .openapi("MatchBulkRequest");
+
+const MatchBulkResultSchema = z
+  .object({
+    enrichmentId: z.string().nullable(),
+    person: PersonSchema.nullable(),
+    cached: z.boolean(),
+  })
+  .openapi("MatchBulkResult");
+
+const MatchBulkResponseSchema = z
+  .object({
+    results: z.array(MatchBulkResultSchema).openapi({
+      description: "Results in the same order as the input items array.",
+    }),
+  })
+  .openapi("MatchBulkResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/match/bulk",
+  summary: "Bulk match people by name and organization domain via Apollo",
+  description:
+    "Match up to 10 people by firstName + lastName + organizationDomain. Each item is cached independently. A single run covers the whole batch; costs tracked per item (apollo-person-match-credit, only when email found).",
+  request: {
+    headers: z.object({ "x-clerk-org-id": z.string() }),
+    body: {
+      content: { "application/json": { schema: MatchBulkRequestSchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      description: "Bulk match results",
+      content: { "application/json": { schema: MatchBulkResponseSchema } },
+    },
+    400: {
+      description: "Validation error",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    500: {
+      description: "Internal server error",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
 // ─── GET /searches/:runId ────────────────────────────────────────────────────
 
 const SearchRecordSchema = z
