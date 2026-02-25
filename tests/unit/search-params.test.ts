@@ -263,8 +263,9 @@ describe("POST /search/params", () => {
       .expect(200);
 
     // Should call getByokKey for both providers
-    expect(mockGetByokKey).toHaveBeenCalledWith("org_test", "apollo");
-    expect(mockGetByokKey).toHaveBeenCalledWith("org_test", "anthropic");
+    const expectedCaller = { callerMethod: "POST", callerPath: "/search/params" };
+    expect(mockGetByokKey).toHaveBeenCalledWith("org_test", "apollo", expectedCaller);
+    expect(mockGetByokKey).toHaveBeenCalledWith("org_test", "anthropic", expectedCaller);
     expect(mockGetAppKey).not.toHaveBeenCalled();
     // callClaude should receive the user's Anthropic key
     expect(mockCallClaude).toHaveBeenCalledWith(
@@ -302,8 +303,9 @@ describe("POST /search/params", () => {
       .expect(200);
 
     // Should call getAppKey for both providers
-    expect(mockGetAppKey).toHaveBeenCalledWith("app-1", "apollo");
-    expect(mockGetAppKey).toHaveBeenCalledWith("app-1", "anthropic");
+    const expectedCaller = { callerMethod: "POST", callerPath: "/search/params" };
+    expect(mockGetAppKey).toHaveBeenCalledWith("app-1", "apollo", expectedCaller);
+    expect(mockGetAppKey).toHaveBeenCalledWith("app-1", "anthropic", expectedCaller);
     expect(mockGetByokKey).not.toHaveBeenCalled();
     expect(mockCallClaude).toHaveBeenCalledWith(
       "platform-anthropic-key",
