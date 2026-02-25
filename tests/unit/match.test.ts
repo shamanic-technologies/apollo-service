@@ -60,8 +60,9 @@ vi.mock("../../src/db/schema.js", () => ({
   },
 }));
 
+const mockGetByokKey = vi.fn().mockResolvedValue("fake-apollo-key");
 vi.mock("../../src/lib/keys-client.js", () => ({
-  getByokKey: vi.fn().mockResolvedValue("fake-apollo-key"),
+  getByokKey: (...args: unknown[]) => mockGetByokKey(...args),
 }));
 
 const MOCK_PERSON = {

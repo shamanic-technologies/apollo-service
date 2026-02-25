@@ -26,14 +26,15 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
     const { context, keySource, runId, appId, brandId, campaignId, workflowName } = parsed.data;
 
     // Fetch keys — both Apollo and Anthropic use the same source
+    const caller = { callerMethod: "POST", callerPath: "/search/params" };
     const apolloApiKey =
       keySource === "byok"
-        ? await getByokKey(req.clerkOrgId!, "apollo")
-        : await getAppKey(appId, "apollo");
+        ? await getByokKey(req.clerkOrgId!, "apollo", caller)
+        : await getAppKey(appId, "apollo", caller);
     const anthropicApiKey =
       keySource === "byok"
-        ? await getByokKey(req.clerkOrgId!, "anthropic")
-        : await getAppKey(appId, "anthropic");
+        ? await getByokKey(req.clerkOrgId!, "anthropic", caller)
+        : await getAppKey(appId, "anthropic", caller);
 
     // Create child run for cost tracking
     const paramRun = await createRun({

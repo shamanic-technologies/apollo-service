@@ -23,7 +23,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
     const { runId, appId, brandId, campaignId, workflowName, ...searchParams } = parsed.data;
 
     // Get Apollo API key from key-service
-    const apolloApiKey = await getByokKey(req.clerkOrgId!, "apollo");
+    const apolloApiKey = await getByokKey(req.clerkOrgId!, "apollo", { callerMethod: "POST", callerPath: "/search" });
 
     // Call Apollo API
     const apolloParams = {
@@ -200,7 +200,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       });
     }
 
-    const apolloApiKey = await getByokKey(req.clerkOrgId!, "apollo");
+    const apolloApiKey = await getByokKey(req.clerkOrgId!, "apollo", { callerMethod: "POST", callerPath: "/enrich" });
     const result = await enrichPerson(apolloApiKey, apolloPersonId);
     const person = result.person;
 
@@ -263,7 +263,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     const { campaignId, brandId, appId, searchParams, runId, workflowName } = parsed.data;
 
     // Get Apollo API key
-    const apolloApiKey = await getByokKey(req.clerkOrgId!, "apollo");
+    const apolloApiKey = await getByokKey(req.clerkOrgId!, "apollo", { callerMethod: "POST", callerPath: "/search/next" });
 
     // Look up existing cursor for this campaign
     const [existingCursor] = await db

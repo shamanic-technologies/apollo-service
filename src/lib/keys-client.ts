@@ -1,17 +1,32 @@
 const KEY_SERVICE_URL = process.env.KEY_SERVICE_URL || "http://localhost:3001";
 const KEY_SERVICE_API_KEY = process.env.KEY_SERVICE_API_KEY || "";
 
+interface CallerContext {
+  callerMethod: string;
+  callerPath: string;
+}
+
+function callerHeaders(ctx: CallerContext): Record<string, string> {
+  return {
+    "X-API-Key": KEY_SERVICE_API_KEY,
+    "X-Caller-Service": "apollo",
+    "X-Caller-Method": ctx.callerMethod,
+    "X-Caller-Path": ctx.callerPath,
+  };
+}
+
 /**
  * Fetch a decrypted app-level key from key-service.
  * App keys are platform-owned (not user BYOK).
  */
 export async function getAppKey(
   appId: string,
-  provider: string
+  provider: string,
+  caller: CallerContext
 ): Promise<string> {
   const response = await fetch(
     `${KEY_SERVICE_URL}/internal/app-keys/${provider}/decrypt?appId=${appId}`,
-    { headers: { "X-API-Key": KEY_SERVICE_API_KEY } }
+    { headers: callerHeaders(caller) }
   );
 
   if (!response.ok) {
@@ -31,11 +46,12 @@ export async function getAppKey(
  */
 export async function getByokKey(
   clerkOrgId: string,
-  provider: string
+  provider: string,
+  caller: CallerContext
 ): Promise<string> {
   const response = await fetch(
     `${KEY_SERVICE_URL}/internal/keys/${provider}/decrypt?clerkOrgId=${clerkOrgId}`,
-    { headers: { "X-API-Key": KEY_SERVICE_API_KEY } }
+    { headers: callerHeaders(caller) }
   );
 
   if (!response.ok) {
