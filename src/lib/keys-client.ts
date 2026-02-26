@@ -45,12 +45,12 @@ export async function getAppKey(
  * Client for fetching BYOK keys from key-service
  */
 export async function getByokKey(
-  clerkOrgId: string,
+  orgId: string,
   provider: string,
   caller: CallerContext
 ): Promise<string> {
   const response = await fetch(
-    `${KEY_SERVICE_URL}/internal/keys/${provider}/decrypt?clerkOrgId=${clerkOrgId}`,
+    `${KEY_SERVICE_URL}/internal/keys/${provider}/decrypt?clerkOrgId=${orgId}`,
     { headers: callerHeaders(caller) }
   );
 

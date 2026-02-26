@@ -23,8 +23,7 @@ vi.mock("../../src/lib/runs-client.js", () => ({
 // Mock auth
 vi.mock("../../src/middleware/auth.js", () => ({
   serviceAuth: (req: any, _res: any, next: any) => {
-    req.orgId = "org-internal-123";
-    req.clerkOrgId = req.headers["x-clerk-org-id"] || "org_test";
+    req.orgId = req.headers["x-org-id"] || "org-internal-123";
     next();
   },
 }));
@@ -159,7 +158,7 @@ describe("POST /search/next", () => {
     const res = await request(app)
       .post("/search/next")
       .set("X-API-Key", "test-key")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({ ...BASE_BODY, searchParams: SEARCH_PARAMS })
       .expect(200);
 
@@ -187,7 +186,7 @@ describe("POST /search/next", () => {
     const res = await request(app)
       .post("/search/next")
       .set("X-API-Key", "test-key")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send(BASE_BODY)
       .expect(200);
 
@@ -205,7 +204,7 @@ describe("POST /search/next", () => {
     const res = await request(app)
       .post("/search/next")
       .set("X-API-Key", "test-key")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send(BASE_BODY)
       .expect(400);
 
@@ -229,7 +228,7 @@ describe("POST /search/next", () => {
     await request(app)
       .post("/search/next")
       .set("X-API-Key", "test-key")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({ ...BASE_BODY, searchParams: SEARCH_PARAMS })
       .expect(200);
 
@@ -260,7 +259,7 @@ describe("POST /search/next", () => {
     await request(app)
       .post("/search/next")
       .set("X-API-Key", "test-key")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({ ...BASE_BODY, searchParams: SEARCH_PARAMS })
       .expect(200);
 
@@ -287,7 +286,7 @@ describe("POST /search/next", () => {
     const res = await request(app)
       .post("/search/next")
       .set("X-API-Key", "test-key")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send(BASE_BODY)
       .expect(200);
 
@@ -313,7 +312,7 @@ describe("POST /search/next", () => {
     await request(app)
       .post("/search/next")
       .set("X-API-Key", "test-key")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send(BASE_BODY)
       .expect(200);
 
@@ -344,7 +343,7 @@ describe("POST /search/next", () => {
     const res = await request(app)
       .post("/search/next")
       .set("X-API-Key", "test-key")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send(BASE_BODY)
       .expect(200);
 
@@ -372,7 +371,7 @@ describe("POST /search/next", () => {
     const res = await request(app)
       .post("/search/next")
       .set("X-API-Key", "test-key")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send(BASE_BODY)
       .expect(200);
 
@@ -387,7 +386,7 @@ describe("POST /search/next", () => {
     await request(app)
       .post("/search/next")
       .set("X-API-Key", "test-key")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({ ...BASE_BODY, searchParams: SEARCH_PARAMS, runId: "run-abc" })
       .expect(200);
 
@@ -404,7 +403,7 @@ describe("POST /search/next", () => {
     const res = await request(app)
       .post("/search/next")
       .set("X-API-Key", "test-key")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({ campaignId: "campaign-1", brandId: "brand-1", appId: "app-1", searchParams: SEARCH_PARAMS })
       .expect(400);
 
@@ -428,7 +427,7 @@ describe("POST /search/next", () => {
     await request(app)
       .post("/search/next")
       .set("X-API-Key", "test-key")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send(BASE_BODY)
       .expect(200);
 
@@ -442,7 +441,7 @@ describe("POST /search/next", () => {
     await request(app)
       .post("/search/next")
       .set("X-API-Key", "test-key")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({ ...BASE_BODY, searchParams: SEARCH_PARAMS, workflowName: "fetch-lead" })
       .expect(200);
 

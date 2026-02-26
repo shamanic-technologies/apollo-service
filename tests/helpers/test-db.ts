@@ -1,5 +1,5 @@
 import { db, sql } from "../../src/db/index.js";
-import { orgs, apolloPeopleSearches, apolloPeopleEnrichments } from "../../src/db/schema.js";
+import { apolloPeopleSearches, apolloPeopleEnrichments } from "../../src/db/schema.js";
 
 /**
  * Clean all test data from the database
@@ -7,20 +7,6 @@ import { orgs, apolloPeopleSearches, apolloPeopleEnrichments } from "../../src/d
 export async function cleanTestData() {
   await db.delete(apolloPeopleEnrichments);
   await db.delete(apolloPeopleSearches);
-  await db.delete(orgs);
-}
-
-/**
- * Insert a test org
- */
-export async function insertTestOrg(data: { clerkOrgId?: string } = {}) {
-  const [org] = await db
-    .insert(orgs)
-    .values({
-      clerkOrgId: data.clerkOrgId || `test-org-${Date.now()}`,
-    })
-    .returning();
-  return org;
 }
 
 /**

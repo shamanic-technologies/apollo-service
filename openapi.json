@@ -12,10 +12,10 @@
   ],
   "components": {
     "schemas": {
-      "ClerkOrgId": {
+      "OrgId": {
         "type": "string",
-        "description": "Clerk organization ID",
-        "example": "org_abc123"
+        "description": "Organization ID",
+        "example": "550e8400-e29b-41d4-a716-446655440000"
       },
       "HealthResponse": {
         "type": "object",
@@ -1907,13 +1907,13 @@
       }
     },
     "parameters": {
-      "ClerkOrgId": {
+      "OrgId": {
         "schema": {
-          "$ref": "#/components/schemas/ClerkOrgId"
+          "$ref": "#/components/schemas/OrgId"
         },
         "required": true,
-        "description": "Clerk organization ID",
-        "name": "x-clerk-org-id",
+        "description": "Organization ID",
+        "name": "x-org-id",
         "in": "header"
       }
     }
@@ -1963,7 +1963,7 @@
               "type": "string"
             },
             "required": true,
-            "name": "x-clerk-org-id",
+            "name": "x-org-id",
             "in": "header"
           }
         ],
@@ -2021,7 +2021,7 @@
               "type": "string"
             },
             "required": true,
-            "name": "x-clerk-org-id",
+            "name": "x-org-id",
             "in": "header"
           }
         ],
@@ -2079,7 +2079,7 @@
               "type": "string"
             },
             "required": true,
-            "name": "x-clerk-org-id",
+            "name": "x-org-id",
             "in": "header"
           }
         ],
@@ -2137,7 +2137,7 @@
               "type": "string"
             },
             "required": true,
-            "name": "x-clerk-org-id",
+            "name": "x-org-id",
             "in": "header"
           }
         ],
@@ -2195,7 +2195,7 @@
               "type": "string"
             },
             "required": true,
-            "name": "x-clerk-org-id",
+            "name": "x-org-id",
             "in": "header"
           }
         ],
@@ -2260,7 +2260,7 @@
               "type": "string"
             },
             "required": true,
-            "name": "x-clerk-org-id",
+            "name": "x-org-id",
             "in": "header"
           }
         ],
@@ -2305,7 +2305,7 @@
               "type": "string"
             },
             "required": true,
-            "name": "x-clerk-org-id",
+            "name": "x-org-id",
             "in": "header"
           }
         ],
@@ -2343,7 +2343,7 @@
               "type": "string"
             },
             "required": true,
-            "name": "x-clerk-org-id",
+            "name": "x-org-id",
             "in": "header"
           }
         ],
@@ -2390,7 +2390,7 @@
               "type": "string"
             },
             "required": true,
-            "name": "x-clerk-org-id",
+            "name": "x-org-id",
             "in": "header"
           }
         ],
@@ -2427,7 +2427,7 @@
               "type": "string"
             },
             "required": true,
-            "name": "x-clerk-org-id",
+            "name": "x-org-id",
             "in": "header"
           }
         ],
@@ -2465,7 +2465,7 @@
               "type": "string"
             },
             "required": true,
-            "name": "x-clerk-org-id",
+            "name": "x-org-id",
             "in": "header"
           }
         ],
@@ -2523,7 +2523,7 @@
               "type": "string"
             },
             "required": true,
-            "name": "x-clerk-org-id",
+            "name": "x-org-id",
             "in": "header"
           }
         ],

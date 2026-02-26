@@ -20,8 +20,7 @@ vi.mock("../../src/lib/runs-client.js", () => ({
 // Mock auth
 vi.mock("../../src/middleware/auth.js", () => ({
   serviceAuth: (req: any, _res: any, next: any) => {
-    req.orgId = "org-internal-123";
-    req.clerkOrgId = req.headers["x-clerk-org-id"] || "org_test";
+    req.orgId = req.headers["x-org-id"] || "org-internal-123";
     next();
   },
 }));
@@ -112,7 +111,7 @@ describe("POST /search/params", () => {
 
     const res = await request(app)
       .post("/search/params")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send(BASE_BODY)
       .expect(200);
 
@@ -145,7 +144,7 @@ describe("POST /search/params", () => {
 
     const res = await request(app)
       .post("/search/params")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send(BASE_BODY)
       .expect(200);
 
@@ -169,7 +168,7 @@ describe("POST /search/params", () => {
 
     const res = await request(app)
       .post("/search/params")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send(BASE_BODY)
       .expect(200);
 
@@ -198,7 +197,7 @@ describe("POST /search/params", () => {
 
     const res = await request(app)
       .post("/search/params")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send(BASE_BODY)
       .expect(200);
 
@@ -221,7 +220,7 @@ describe("POST /search/params", () => {
 
     await request(app)
       .post("/search/params")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send(BASE_BODY)
       .expect(200);
 
@@ -258,7 +257,7 @@ describe("POST /search/params", () => {
 
     await request(app)
       .post("/search/params")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({ ...BASE_BODY, keySource: "byok" })
       .expect(200);
 
@@ -298,7 +297,7 @@ describe("POST /search/params", () => {
 
     await request(app)
       .post("/search/params")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({ ...BASE_BODY, keySource: "app" })
       .expect(200);
 
@@ -323,7 +322,7 @@ describe("POST /search/params", () => {
   it("returns 400 when context is missing", async () => {
     const res = await request(app)
       .post("/search/params")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({ ...BASE_BODY, context: undefined })
       .expect(400);
 
@@ -334,7 +333,7 @@ describe("POST /search/params", () => {
   it("returns 400 when keySource is missing", async () => {
     const res = await request(app)
       .post("/search/params")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({ ...BASE_BODY, keySource: undefined })
       .expect(400);
 
@@ -344,7 +343,7 @@ describe("POST /search/params", () => {
   it("returns 400 when keySource is invalid value", async () => {
     const res = await request(app)
       .post("/search/params")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({ ...BASE_BODY, keySource: "invalid" })
       .expect(400);
 
@@ -364,7 +363,7 @@ describe("POST /search/params", () => {
 
     const res = await request(app)
       .post("/search/params")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send(BASE_BODY)
       .expect(200);
 
@@ -385,7 +384,7 @@ describe("POST /search/params", () => {
 
     await request(app)
       .post("/search/params")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({ ...BASE_BODY, workflowName: "fetch-lead" })
       .expect(200);
 
@@ -405,7 +404,7 @@ describe("POST /search/params", () => {
 
     await request(app)
       .post("/search/params")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send(BASE_BODY)
       .expect(200);
 
@@ -421,7 +420,7 @@ describe("POST /search/params", () => {
 
     const res = await request(app)
       .post("/search/params")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send(BASE_BODY)
       .expect(500);
 

@@ -1,11 +1,7 @@
 import { Request, Response, NextFunction } from "express";
-import { eq } from "drizzle-orm";
-import { db } from "../db/index.js";
-import { orgs } from "../db/schema.js";
 
 export interface AuthenticatedRequest extends Request {
   orgId?: string;
-  clerkOrgId?: string;
 }
 
 /**
@@ -17,27 +13,13 @@ export async function serviceAuth(
   next: NextFunction
 ) {
   try {
-    const clerkOrgId = req.headers["x-clerk-org-id"] as string;
+    const orgId = req.headers["x-org-id"] as string;
 
-    if (!clerkOrgId) {
-      return res.status(400).json({ error: "x-clerk-org-id header required" });
+    if (!orgId) {
+      return res.status(400).json({ error: "x-org-id header required" });
     }
 
-    // Find or create org
-    let org = await db.query.orgs.findFirst({
-      where: eq(orgs.clerkOrgId, clerkOrgId),
-    });
-
-    if (!org) {
-      const [newOrg] = await db
-        .insert(orgs)
-        .values({ clerkOrgId })
-        .returning();
-      org = newOrg;
-    }
-
-    req.orgId = org.id;
-    req.clerkOrgId = clerkOrgId;
+    req.orgId = orgId;
     next();
   } catch (error) {
     console.error("[Apollo Service] Auth error:", error);

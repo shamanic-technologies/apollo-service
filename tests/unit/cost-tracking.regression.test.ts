@@ -29,8 +29,7 @@ vi.mock("../../src/lib/runs-client.js", () => ({
 // Mock auth middleware to pass through
 vi.mock("../../src/middleware/auth.js", () => ({
   serviceAuth: (req: any, _res: any, next: any) => {
-    req.orgId = "org-internal-123";
-    req.clerkOrgId = req.headers["x-clerk-org-id"] || "org_test";
+    req.orgId = req.headers["x-org-id"] || "org-internal-123";
     next();
   },
 }));
@@ -198,7 +197,7 @@ describe("Apollo service cost tracking", () => {
     await request(app)
       .post("/search")
       .set("X-API-Key", "test-service-secret")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({
         runId: "campaign-run-abc",
         appId: "app-1",
@@ -220,7 +219,7 @@ describe("Apollo service cost tracking", () => {
     await request(app)
       .post("/search")
       .set("X-API-Key", "test-service-secret")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({
         runId: "campaign-run-abc",
         appId: "app-1",
@@ -244,7 +243,7 @@ describe("Apollo service cost tracking", () => {
     await request(app)
       .post("/search")
       .set("X-API-Key", "test-service-secret")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({
         runId: "campaign-run-abc",
         appId: "app-1",
@@ -272,7 +271,7 @@ describe("Apollo service cost tracking", () => {
     const res = await request(app)
       .post("/search")
       .set("X-API-Key", "test-service-secret")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({
         runId: "campaign-run-abc",
         appId: "app-1",
@@ -298,7 +297,7 @@ describe("Apollo service cost tracking", () => {
     const res = await request(app)
       .post("/search")
       .set("X-API-Key", "test-service-secret")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({
         runId: "campaign-run-abc",
         appId: "app-1",
@@ -321,7 +320,7 @@ describe("Apollo service cost tracking", () => {
     const res = await request(app)
       .post("/search")
       .set("X-API-Key", "test-service-secret")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({
         runId: "campaign-run-abc",
         appId: "app-1",
@@ -340,7 +339,7 @@ describe("Apollo service cost tracking", () => {
     await request(app)
       .post("/search")
       .set("X-API-Key", "test-service-secret")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({
         runId: "campaign-run-abc",
         appId: "app-1",
@@ -361,7 +360,7 @@ describe("Apollo service cost tracking", () => {
     const res = await request(app)
       .post("/search")
       .set("X-API-Key", "test-service-secret")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({
         appId: "app-1",
         brandId: "brand-1",
@@ -381,7 +380,7 @@ describe("Apollo service cost tracking", () => {
     await request(app)
       .post("/enrich")
       .set("X-API-Key", "test-service-secret")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({
         apolloPersonId: "person-0",
         runId: "campaign-run-abc",
@@ -430,7 +429,7 @@ describe("Apollo service cost tracking", () => {
     await request(app)
       .post("/enrich")
       .set("X-API-Key", "test-service-secret")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({
         apolloPersonId: "person-0",
         runId: "campaign-run-abc",
@@ -463,7 +462,7 @@ describe("Apollo service cost tracking", () => {
     const res = await request(app)
       .post("/enrich")
       .set("X-API-Key", "test-service-secret")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({
         apolloPersonId: "person-0",
         runId: "campaign-run-abc",
@@ -510,7 +509,7 @@ describe("Apollo service cost tracking", () => {
     await request(app)
       .post("/enrich")
       .set("X-API-Key", "test-service-secret")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({
         apolloPersonId: "person-0",
         runId: "campaign-run-abc",
@@ -544,7 +543,7 @@ describe("Apollo service cost tracking", () => {
     const res = await request(app)
       .post("/enrich")
       .set("X-API-Key", "test-service-secret")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({
         apolloPersonId: "person-0",
         appId: "app-1",
@@ -564,7 +563,7 @@ describe("Apollo service cost tracking", () => {
     await request(app)
       .post("/search")
       .set("X-API-Key", "test-service-secret")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({
         runId: "campaign-run-abc",
         appId: "app-1",
@@ -584,7 +583,7 @@ describe("Apollo service cost tracking", () => {
     await request(app)
       .post("/enrich")
       .set("X-API-Key", "test-service-secret")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({
         apolloPersonId: "person-0",
         runId: "campaign-run-abc",

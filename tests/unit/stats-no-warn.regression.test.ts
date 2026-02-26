@@ -20,8 +20,7 @@ vi.mock("../../src/lib/runs-client.js", () => ({
 
 vi.mock("../../src/middleware/auth.js", () => ({
   serviceAuth: (req: any, _res: any, next: any) => {
-    req.orgId = "org-internal-123";
-    req.clerkOrgId = req.headers["x-clerk-org-id"] || "org_test";
+    req.orgId = req.headers["x-org-id"] || "org-internal-123";
     next();
   },
 }));
@@ -108,7 +107,7 @@ describe("POST /stats - no spurious warnings", () => {
     const res = await request(app)
       .post("/stats")
       .set("X-API-Key", "test-service-secret")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({ campaignId: "campaign-1" })
       .expect(200);
 
@@ -149,7 +148,7 @@ describe("POST /stats - no spurious warnings", () => {
     const res = await request(app)
       .post("/stats")
       .set("X-API-Key", "test-service-secret")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({ campaignId: "campaign-1" })
       .expect(200);
 

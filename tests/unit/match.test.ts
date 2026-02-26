@@ -22,8 +22,7 @@ vi.mock("../../src/lib/runs-client.js", () => ({
 
 vi.mock("../../src/middleware/auth.js", () => ({
   serviceAuth: (req: any, _res: any, next: any) => {
-    req.orgId = "org-internal-123";
-    req.clerkOrgId = req.headers["x-clerk-org-id"] || "org_test";
+    req.orgId = req.headers["x-org-id"] || "org-internal-123";
     next();
   },
 }));
@@ -137,7 +136,7 @@ describe("POST /match", () => {
   it("should return 400 when firstName is missing", async () => {
     const res = await request(app)
       .post("/match")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({ lastName: "Doe", organizationDomain: "acme.com", ...BASE_BODY })
       .expect(400);
 
@@ -148,7 +147,7 @@ describe("POST /match", () => {
   it("should return 400 when runId is missing", async () => {
     await request(app)
       .post("/match")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({
         firstName: "John",
         lastName: "Doe",
@@ -165,7 +164,7 @@ describe("POST /match", () => {
   it("should call Apollo and return person on cache miss", async () => {
     const res = await request(app)
       .post("/match")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com", ...BASE_BODY })
       .expect(200);
 
@@ -182,7 +181,7 @@ describe("POST /match", () => {
   it("should charge apollo-person-match-credit when email is found", async () => {
     await request(app)
       .post("/match")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com", ...BASE_BODY })
       .expect(200);
 
@@ -200,7 +199,7 @@ describe("POST /match", () => {
 
     await request(app)
       .post("/match")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com", ...BASE_BODY })
       .expect(200);
 
@@ -212,7 +211,7 @@ describe("POST /match", () => {
 
     const res = await request(app)
       .post("/match")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({ firstName: "Nobody", lastName: "Exists", organizationDomain: "none.com", ...BASE_BODY })
       .expect(200);
 
@@ -251,7 +250,7 @@ describe("POST /match", () => {
 
     const res = await request(app)
       .post("/match")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com", ...BASE_BODY })
       .expect(200);
 
@@ -267,7 +266,7 @@ describe("POST /match", () => {
   it("should pass workflowName to createRun", async () => {
     await request(app)
       .post("/match")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({
         firstName: "John",
         lastName: "Doe",
@@ -290,7 +289,7 @@ describe("POST /match", () => {
 
     const res = await request(app)
       .post("/match")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com", ...BASE_BODY })
       .expect(500);
 
@@ -304,7 +303,7 @@ describe("POST /match", () => {
 
     await request(app)
       .post("/match")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com", ...BASE_BODY })
       .expect(500);
 
@@ -340,7 +339,7 @@ describe("POST /match/bulk", () => {
   it("should return 400 when items array is empty", async () => {
     await request(app)
       .post("/match/bulk")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({ items: [], ...BASE_BODY })
       .expect(400);
   });
@@ -354,7 +353,7 @@ describe("POST /match/bulk", () => {
 
     await request(app)
       .post("/match/bulk")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({ items, ...BASE_BODY })
       .expect(400);
   });
@@ -368,7 +367,7 @@ describe("POST /match/bulk", () => {
 
     await request(app)
       .post("/match/bulk")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({
         items: [
           { firstName: "John", lastName: "Doe", organizationDomain: "acme.com" },
@@ -395,7 +394,7 @@ describe("POST /match/bulk", () => {
 
     await request(app)
       .post("/match/bulk")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({
         items: [
           { firstName: "A", lastName: "B", organizationDomain: "acme.com" },
@@ -419,7 +418,7 @@ describe("POST /match/bulk", () => {
 
     const res = await request(app)
       .post("/match/bulk")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({
         items: [
           { firstName: "John", lastName: "Doe", organizationDomain: "acme.com" },
@@ -463,7 +462,7 @@ describe("POST /match/bulk", () => {
 
     const res = await request(app)
       .post("/match/bulk")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({
         items: [{ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" }],
         ...BASE_BODY,
@@ -482,7 +481,7 @@ describe("POST /match/bulk", () => {
 
     await request(app)
       .post("/match/bulk")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({
         items: [{ firstName: "A", lastName: "B", organizationDomain: "acme.com" }],
         ...BASE_BODY,
@@ -500,7 +499,7 @@ describe("POST /match/bulk", () => {
 
     await request(app)
       .post("/match/bulk")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({
         items: [{ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" }],
         ...BASE_BODY,
@@ -513,7 +512,7 @@ describe("POST /match/bulk", () => {
   it("should pass workflowName to createRun", async () => {
     await request(app)
       .post("/match/bulk")
-      .set("X-Clerk-Org-Id", "org_test")
+      .set("X-Org-Id", "org_test")
       .send({
         items: [{ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" }],
         ...BASE_BODY,

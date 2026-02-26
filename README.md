@@ -127,7 +127,7 @@ Validates:
 
 ## Authentication
 
-All endpoints (except health) require `x-clerk-org-id` header for organization context.
+All endpoints (except health) require `x-org-id` header for organization context.
 
 ## Testing
 

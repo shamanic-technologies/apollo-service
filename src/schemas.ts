@@ -139,12 +139,12 @@ const PersonSchema = z
 
 // ─── Auth header ─────────────────────────────────────────────────────────────
 
-const clerkOrgIdHeader = registry.registerParameter(
-  "ClerkOrgId",
+const orgIdHeader = registry.registerParameter(
+  "OrgId",
   z.string().openapi({
-    param: { name: "x-clerk-org-id", in: "header" },
-    description: "Clerk organization ID",
-    example: "org_abc123",
+    param: { name: "x-org-id", in: "header" },
+    description: "Organization ID",
+    example: "550e8400-e29b-41d4-a716-446655440000",
   })
 );
 
@@ -289,7 +289,7 @@ registry.registerPath({
   description:
     "Search Apollo's people database. If runId is provided, results are stored in DB and costs tracked via runs-service.",
   request: {
-    headers: z.object({ "x-clerk-org-id": z.string() }),
+    headers: z.object({ "x-org-id": z.string() }),
     body: {
       content: { "application/json": { schema: SearchRequestSchema } },
       required: true,
@@ -410,7 +410,7 @@ registry.registerPath({
   description:
     "Server-managed pagination. First call with searchParams creates a cursor at page 1. Subsequent calls (with or without searchParams) return the next page. Each call returns one page of 25 people and advances the cursor. When done=true, all pages are exhausted. If searchParams differ from the stored cursor, pagination resets to page 1.",
   request: {
-    headers: z.object({ "x-clerk-org-id": z.string() }),
+    headers: z.object({ "x-org-id": z.string() }),
     body: {
       content: { "application/json": { schema: SearchNextRequestSchema } },
       required: true,
@@ -459,7 +459,7 @@ registry.registerPath({
   description:
     "Enrich a single person by Apollo person ID. Uses 12-month cache. If runId is provided, stores record and tracks costs.",
   request: {
-    headers: z.object({ "x-clerk-org-id": z.string() }),
+    headers: z.object({ "x-org-id": z.string() }),
     body: {
       content: { "application/json": { schema: EnrichRequestSchema } },
       required: true,
@@ -519,7 +519,7 @@ registry.registerPath({
   description:
     "Match a single person by firstName + lastName + organizationDomain. Uses 12-month cache. Costs tracked as apollo-person-match-credit (only charged when email is found).",
   request: {
-    headers: z.object({ "x-clerk-org-id": z.string() }),
+    headers: z.object({ "x-org-id": z.string() }),
     body: {
       content: { "application/json": { schema: MatchRequestSchema } },
       required: true,
@@ -594,7 +594,7 @@ registry.registerPath({
   description:
     "Match up to 10 people by firstName + lastName + organizationDomain. Each item is cached independently. A single run covers the whole batch; costs tracked per item (apollo-person-match-credit, only when email found).",
   request: {
-    headers: z.object({ "x-clerk-org-id": z.string() }),
+    headers: z.object({ "x-org-id": z.string() }),
     body: {
       content: { "application/json": { schema: MatchBulkRequestSchema } },
       required: true,
@@ -643,7 +643,7 @@ registry.registerPath({
   path: "/searches/{runId}",
   summary: "Get all searches for a run",
   request: {
-    headers: z.object({ "x-clerk-org-id": z.string() }),
+    headers: z.object({ "x-org-id": z.string() }),
     params: z.object({ runId: z.string() }),
   },
   responses: {
@@ -745,7 +745,7 @@ registry.registerPath({
   path: "/enrichments/{runId}",
   summary: "Get all enrichments for a run",
   request: {
-    headers: z.object({ "x-clerk-org-id": z.string() }),
+    headers: z.object({ "x-org-id": z.string() }),
     params: z.object({ runId: z.string() }),
   },
   responses: {
@@ -791,7 +791,7 @@ registry.registerPath({
   description:
     "Returns aggregated search and enrichment stats. All body filters are optional; orgId is always applied from auth.",
   request: {
-    headers: z.object({ "x-clerk-org-id": z.string() }),
+    headers: z.object({ "x-org-id": z.string() }),
     body: {
       content: { "application/json": { schema: StatsRequestSchema } },
       required: false,
@@ -824,7 +824,7 @@ registry.registerPath({
   path: "/reference/industries",
   summary: "Get Apollo industries list",
   request: {
-    headers: z.object({ "x-clerk-org-id": z.string() }),
+    headers: z.object({ "x-org-id": z.string() }),
   },
   responses: {
     200: {
@@ -856,7 +856,7 @@ registry.registerPath({
   path: "/reference/employee-ranges",
   summary: "Get employee range options",
   request: {
-    headers: z.object({ "x-clerk-org-id": z.string() }),
+    headers: z.object({ "x-org-id": z.string() }),
   },
   responses: {
     200: {
@@ -929,7 +929,7 @@ registry.registerPath({
   description:
     "Takes unstructured context (website content, target audience, etc.) and uses Claude to generate Apollo search filters. Validates against Apollo — if 0 results, retries with broadened filters (max 10 attempts). Returns validated search params guaranteed to produce results, or the best-effort params after 10 attempts.",
   request: {
-    headers: z.object({ "x-clerk-org-id": z.string() }),
+    headers: z.object({ "x-org-id": z.string() }),
     body: {
       content: { "application/json": { schema: SearchParamsRequestSchema } },
       required: true,
@@ -988,7 +988,7 @@ registry.registerPath({
   description:
     "Validates items against the specified endpoint schema (search, enrich, or bulk-enrich).",
   request: {
-    headers: z.object({ "x-clerk-org-id": z.string() }),
+    headers: z.object({ "x-org-id": z.string() }),
     body: {
       content: { "application/json": { schema: ValidateRequestSchema } },
       required: true,

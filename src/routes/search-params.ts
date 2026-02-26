@@ -29,16 +29,16 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
     const caller = { callerMethod: "POST", callerPath: "/search/params" };
     const apolloApiKey =
       keySource === "byok"
-        ? await getByokKey(req.clerkOrgId!, "apollo", caller)
+        ? await getByokKey(req.orgId!, "apollo", caller)
         : await getAppKey(appId, "apollo", caller);
     const anthropicApiKey =
       keySource === "byok"
-        ? await getByokKey(req.clerkOrgId!, "anthropic", caller)
+        ? await getByokKey(req.orgId!, "anthropic", caller)
         : await getAppKey(appId, "anthropic", caller);
 
     // Create child run for cost tracking
     const paramRun = await createRun({
-      clerkOrgId: req.clerkOrgId!,
+      orgId: req.orgId!,
       appId: appId || "mcpfactory",
       brandId,
       campaignId,
