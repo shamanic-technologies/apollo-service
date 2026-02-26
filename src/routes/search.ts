@@ -23,7 +23,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
     const { runId, appId, brandId, campaignId, workflowName, ...searchParams } = parsed.data;
 
     // Get Apollo API key from key-service
-    const apolloApiKey = await getByokKey(req.clerkOrgId!, "apollo", { callerMethod: "POST", callerPath: "/search" });
+    const apolloApiKey = await getByokKey(req.orgId!, "apollo", { callerMethod: "POST", callerPath: "/search" });
 
     // Call Apollo API
     const apolloParams = {
@@ -34,7 +34,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
     // Create a child run in runs-service for this search
     const searchRun = await createRun({
-      clerkOrgId: req.clerkOrgId!,
+      orgId: req.orgId!,
       appId: appId || "mcpfactory",
       brandId,
       campaignId,
@@ -183,7 +183,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
     if (cached) {
       // Create a run for traceability but no costs (cache hit)
       const cachedRun = await createRun({
-        clerkOrgId: req.clerkOrgId!,
+        orgId: req.orgId!,
         appId: appId || "mcpfactory",
         brandId,
         campaignId,
@@ -200,7 +200,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       });
     }
 
-    const apolloApiKey = await getByokKey(req.clerkOrgId!, "apollo", { callerMethod: "POST", callerPath: "/enrich" });
+    const apolloApiKey = await getByokKey(req.orgId!, "apollo", { callerMethod: "POST", callerPath: "/enrich" });
     const result = await enrichPerson(apolloApiKey, apolloPersonId);
     const person = result.person;
 
@@ -220,7 +220,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
       // Track cost in runs-service
       const enrichRun = await createRun({
-        clerkOrgId: req.clerkOrgId!,
+        orgId: req.orgId!,
         appId: appId || "mcpfactory",
         brandId,
         campaignId,
@@ -263,7 +263,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     const { campaignId, brandId, appId, searchParams, runId, workflowName } = parsed.data;
 
     // Get Apollo API key
-    const apolloApiKey = await getByokKey(req.clerkOrgId!, "apollo", { callerMethod: "POST", callerPath: "/search/next" });
+    const apolloApiKey = await getByokKey(req.orgId!, "apollo", { callerMethod: "POST", callerPath: "/search/next" });
 
     // Look up existing cursor for this campaign
     const [existingCursor] = await db
@@ -371,7 +371,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
 
     // Store search record (audit trail) and track costs
     const searchRun = await createRun({
-      clerkOrgId: req.clerkOrgId!,
+      orgId: req.orgId!,
       appId: appId || "mcpfactory",
       brandId,
       campaignId,
@@ -453,7 +453,7 @@ router.get("/enrichments/:runId", serviceAuth, async (req: AuthenticatedRequest,
       console.warn("[Apollo Service][GET /enrichments] ⚠ returned 0 enrichments", {
         runId,
         orgId: req.orgId,
-        hint: "Check: was POST /search called with this runId? Was x-clerk-org-id the same?",
+        hint: "Check: was POST /search called with this runId? Was x-org-id the same?",
       });
     }
 

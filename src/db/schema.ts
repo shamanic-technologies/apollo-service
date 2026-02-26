@@ -1,41 +1,11 @@
 import { pgTable, uuid, text, timestamp, uniqueIndex, index, integer, decimal, jsonb, boolean } from "drizzle-orm/pg-core";
 
-// Local users table (maps to Clerk)
-export const users = pgTable(
-  "users",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    clerkUserId: text("clerk_user_id").notNull().unique(),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [
-    uniqueIndex("idx_users_clerk_id").on(table.clerkUserId),
-  ]
-);
-
-// Local orgs table (maps to Clerk)
-export const orgs = pgTable(
-  "orgs",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    clerkOrgId: text("clerk_org_id").notNull().unique(),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [
-    uniqueIndex("idx_orgs_clerk_id").on(table.clerkOrgId),
-  ]
-);
-
 // Apollo people search results
 export const apolloPeopleSearches = pgTable(
   "apollo_people_searches",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    orgId: uuid("org_id")
-      .notNull()
-      .references(() => orgs.id, { onDelete: "cascade" }),
+    orgId: uuid("org_id").notNull(),
     runId: text("run_id").notNull(), // Reference to runs-service run ID
 
     // Hierarchy IDs
@@ -67,9 +37,7 @@ export const apolloPeopleEnrichments = pgTable(
   "apollo_people_enrichments",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    orgId: uuid("org_id")
-      .notNull()
-      .references(() => orgs.id, { onDelete: "cascade" }),
+    orgId: uuid("org_id").notNull(),
     runId: text("run_id").notNull(),
     searchId: uuid("search_id")
       .references(() => apolloPeopleSearches.id, { onDelete: "cascade" }),
@@ -165,9 +133,7 @@ export const apolloSearchCursors = pgTable(
   "apollo_search_cursors",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    orgId: uuid("org_id")
-      .notNull()
-      .references(() => orgs.id, { onDelete: "cascade" }),
+    orgId: uuid("org_id").notNull(),
     campaignId: text("campaign_id").notNull(),
     appId: text("app_id").notNull(),
     brandId: text("brand_id").notNull(),
@@ -184,10 +150,6 @@ export const apolloSearchCursors = pgTable(
   ]
 );
 
-export type User = typeof users.$inferSelect;
-export type NewUser = typeof users.$inferInsert;
-export type Org = typeof orgs.$inferSelect;
-export type NewOrg = typeof orgs.$inferInsert;
 export type ApolloPeopleSearch = typeof apolloPeopleSearches.$inferSelect;
 export type NewApolloPeopleSearch = typeof apolloPeopleSearches.$inferInsert;
 export type ApolloPeopleEnrichment = typeof apolloPeopleEnrichments.$inferSelect;

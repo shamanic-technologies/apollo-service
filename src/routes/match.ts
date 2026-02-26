@@ -57,7 +57,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
     if (cached) {
       const cachedRun = await createRun({
-        clerkOrgId: req.clerkOrgId!,
+        orgId: req.orgId!,
         appId: appId || "mcpfactory",
         brandId,
         campaignId,
@@ -76,12 +76,12 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
     }
 
     // Cache miss: call Apollo API
-    const apolloApiKey = await getByokKey(req.clerkOrgId!, "apollo", { callerMethod: "POST", callerPath: "/match" });
+    const apolloApiKey = await getByokKey(req.orgId!, "apollo", { callerMethod: "POST", callerPath: "/match" });
     const result = await matchPersonByName(apolloApiKey, firstName, lastName, organizationDomain);
     const person = result.person;
 
     const matchRun = await createRun({
-      clerkOrgId: req.clerkOrgId!,
+      orgId: req.orgId!,
       appId: appId || "mcpfactory",
       brandId,
       campaignId,
@@ -135,7 +135,7 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
     const { items, runId, appId, brandId, campaignId, workflowName } = parsed.data;
 
     const batchRun = await createRun({
-      clerkOrgId: req.clerkOrgId!,
+      orgId: req.orgId!,
       appId: appId || "mcpfactory",
       brandId,
       campaignId,
@@ -161,7 +161,7 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
     // Call Apollo bulk API for all misses in one request
     let apolloResults: (import("../lib/apollo-client.js").ApolloPerson | null)[] = [];
     if (missIndices.length > 0) {
-      const apolloApiKey = await getByokKey(req.clerkOrgId!, "apollo", { callerMethod: "POST", callerPath: "/match/bulk" });
+      const apolloApiKey = await getByokKey(req.orgId!, "apollo", { callerMethod: "POST", callerPath: "/match/bulk" });
       const missItems = missIndices.map((i) => ({
         first_name: items[i].firstName,
         last_name: items[i].lastName,

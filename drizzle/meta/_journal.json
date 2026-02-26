@@ -57,6 +57,13 @@
       "when": 1771397043612,
       "tag": "0007_fearless_tyger_tiger",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1772092800000,
+      "tag": "0008_drop_clerk_tables",
+      "breakpoints": true
     }
   ]
 }
