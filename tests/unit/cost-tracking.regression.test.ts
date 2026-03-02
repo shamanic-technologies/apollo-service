@@ -10,6 +10,7 @@ import request from "supertest";
  *
  * These tests verify:
  * - Correct cost names are used (apollo-enrichment-credit, apollo-search-credit)
+ * - costSource is included on every cost item
  * - One enrichment cost is posted per person
  * - One search cost is posted per search
  * - Runs-service failures propagate as 500 errors (hard fail, not soft)
@@ -30,6 +31,7 @@ vi.mock("../../src/lib/runs-client.js", () => ({
 vi.mock("../../src/middleware/auth.js", () => ({
   serviceAuth: (req: any, _res: any, next: any) => {
     req.orgId = req.headers["x-org-id"] || "org-internal-123";
+    req.userId = req.headers["x-user-id"] || "user-internal-456";
     next();
   },
 }));
@@ -72,7 +74,7 @@ vi.mock("../../src/db/schema.js", () => ({
 }));
 
 vi.mock("../../src/lib/keys-client.js", () => ({
-  getByokKey: vi.fn().mockResolvedValue("fake-apollo-key"),
+  decryptKey: vi.fn().mockResolvedValue({ key: "fake-apollo-key", keySource: "platform" }),
 }));
 
 // Mock Apollo client to return N people
@@ -198,9 +200,9 @@ describe("Apollo service cost tracking", () => {
       .post("/search")
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({
         runId: "campaign-run-abc",
-        appId: "app-1",
         brandId: "brand-1",
         campaignId: "campaign-1",
         personTitles: ["CEO"],
@@ -215,14 +217,14 @@ describe("Apollo service cost tracking", () => {
     expect(enrichmentCalls).toHaveLength(0);
   });
 
-  it("should post apollo-search-credit cost once per search", async () => {
+  it("should post apollo-search-credit cost with costSource once per search", async () => {
     await request(app)
       .post("/search")
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({
         runId: "campaign-run-abc",
-        appId: "app-1",
         brandId: "brand-1",
         campaignId: "campaign-1",
         personTitles: ["CEO"],
@@ -237,6 +239,7 @@ describe("Apollo service cost tracking", () => {
     const [, items] = searchCalls[0];
     const searchItem = items.find((i: { costName: string }) => i.costName === "apollo-search-credit");
     expect(searchItem.quantity).toBe(1);
+    expect(searchItem.costSource).toBe("platform");
   });
 
   it("should only post search credit from POST /search (no enrichment credits)", async () => {
@@ -244,9 +247,9 @@ describe("Apollo service cost tracking", () => {
       .post("/search")
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({
         runId: "campaign-run-abc",
-        appId: "app-1",
         brandId: "brand-1",
         campaignId: "campaign-1",
         personTitles: ["CEO"],
@@ -272,9 +275,9 @@ describe("Apollo service cost tracking", () => {
       .post("/search")
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({
         runId: "campaign-run-abc",
-        appId: "app-1",
         brandId: "brand-1",
         campaignId: "campaign-1",
         personTitles: ["CEO"],
@@ -298,9 +301,9 @@ describe("Apollo service cost tracking", () => {
       .post("/search")
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({
         runId: "campaign-run-abc",
-        appId: "app-1",
         brandId: "brand-1",
         campaignId: "campaign-1",
         personTitles: ["CEO"],
@@ -321,9 +324,9 @@ describe("Apollo service cost tracking", () => {
       .post("/search")
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({
         runId: "campaign-run-abc",
-        appId: "app-1",
         brandId: "brand-1",
         campaignId: "campaign-1",
         personTitles: ["CEO"],
@@ -340,9 +343,9 @@ describe("Apollo service cost tracking", () => {
       .post("/search")
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({
         runId: "campaign-run-abc",
-        appId: "app-1",
         brandId: "brand-1",
         campaignId: "campaign-1",
         personTitles: ["CEO"],
@@ -361,8 +364,8 @@ describe("Apollo service cost tracking", () => {
       .post("/search")
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({
-        appId: "app-1",
         brandId: "brand-1",
         campaignId: "campaign-1",
         personTitles: ["CEO"],
@@ -376,15 +379,15 @@ describe("Apollo service cost tracking", () => {
 
   // ─── POST /enrich cost tracking ─────────────────────────────────────────────
 
-  it("should post exactly 1 enrichment cost from POST /enrich", async () => {
+  it("should post exactly 1 enrichment cost with costSource from POST /enrich", async () => {
     await request(app)
       .post("/enrich")
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({
         apolloPersonId: "person-0",
         runId: "campaign-run-abc",
-        appId: "app-1",
         brandId: "brand-1",
         campaignId: "campaign-1",
       })
@@ -394,7 +397,11 @@ describe("Apollo service cost tracking", () => {
       items.some((i: { costName: string }) => i.costName === "apollo-enrichment-credit")
     );
     expect(enrichmentCalls).toHaveLength(1);
-    expect(enrichmentCalls[0][1][0].quantity).toBe(1);
+    expect(enrichmentCalls[0][1][0]).toEqual({
+      costName: "apollo-enrichment-credit",
+      costSource: "platform",
+      quantity: 1,
+    });
   });
 
   it("should NOT post enrichment cost when Apollo returns person without email (regression: no-email = no charge)", async () => {
@@ -430,10 +437,10 @@ describe("Apollo service cost tracking", () => {
       .post("/enrich")
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({
         apolloPersonId: "person-0",
         runId: "campaign-run-abc",
-        appId: "app-1",
         brandId: "brand-1",
         campaignId: "campaign-1",
       })
@@ -463,10 +470,10 @@ describe("Apollo service cost tracking", () => {
       .post("/enrich")
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({
         apolloPersonId: "person-0",
         runId: "campaign-run-abc",
-        appId: "app-1",
         brandId: "brand-1",
         campaignId: "campaign-1",
       })
@@ -510,10 +517,10 @@ describe("Apollo service cost tracking", () => {
       .post("/enrich")
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({
         apolloPersonId: "person-0",
         runId: "campaign-run-abc",
-        appId: "app-1",
         brandId: "brand-1",
         campaignId: "campaign-1",
       })
@@ -544,9 +551,9 @@ describe("Apollo service cost tracking", () => {
       .post("/enrich")
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({
         apolloPersonId: "person-0",
-        appId: "app-1",
         brandId: "brand-1",
         campaignId: "campaign-1",
       })
@@ -564,9 +571,9 @@ describe("Apollo service cost tracking", () => {
       .post("/search")
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({
         runId: "campaign-run-abc",
-        appId: "app-1",
         brandId: "brand-1",
         campaignId: "campaign-1",
         personTitles: ["CEO"],
@@ -584,10 +591,10 @@ describe("Apollo service cost tracking", () => {
       .post("/enrich")
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({
         apolloPersonId: "person-0",
         runId: "campaign-run-abc",
-        appId: "app-1",
         brandId: "brand-1",
         campaignId: "campaign-1",
         workflowName: "fetch-lead",

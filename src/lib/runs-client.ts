@@ -29,6 +29,7 @@ export interface RunCost {
   id: string;
   runId: string;
   costName: string;
+  costSource: "platform" | "org";
   quantity: string;
   unitCostInUsdCents: string;
   totalCostInUsdCents: string;
@@ -62,7 +63,6 @@ export interface RunWithCosts extends Run {
 export interface CreateRunParams {
   orgId: string;
   userId?: string;
-  appId: string;
   brandId?: string;
   campaignId?: string;
   serviceName: string;
@@ -73,13 +73,13 @@ export interface CreateRunParams {
 
 export interface CostItem {
   costName: string;
+  costSource: "platform" | "org";
   quantity: number;
 }
 
 export interface ListRunsParams {
   orgId: string;
   userId?: string;
-  appId?: string;
   brandId?: string;
   campaignId?: string;
   serviceName?: string;
@@ -129,9 +129,9 @@ export async function createRun(params: CreateRunParams): Promise<Run> {
   return runsRequest<Run>("/v1/runs", {
     method: "POST",
     body: {
-      clerkOrgId: params.orgId,
-      clerkUserId: params.userId,
-      appId: params.appId,
+      orgId: params.orgId,
+      userId: params.userId,
+      appId: "apollo",
       brandId: params.brandId,
       campaignId: params.campaignId,
       serviceName: params.serviceName,
@@ -158,6 +158,7 @@ export async function updateRun(
 /**
  * Add cost line items to a run.
  * Cost names must be registered in costs-service.
+ * costSource is required: "platform" or "org".
  */
 export async function addCosts(
   runId: string,
@@ -183,9 +184,8 @@ export async function listRuns(
   params: ListRunsParams
 ): Promise<{ runs: RunWithOwnCost[]; limit: number; offset: number }> {
   const searchParams = new URLSearchParams();
-  searchParams.set("clerkOrgId", params.orgId);
-  if (params.userId) searchParams.set("clerkUserId", params.userId);
-  if (params.appId) searchParams.set("appId", params.appId);
+  searchParams.set("orgId", params.orgId);
+  if (params.userId) searchParams.set("userId", params.userId);
   if (params.brandId) searchParams.set("brandId", params.brandId);
   if (params.campaignId) searchParams.set("campaignId", params.campaignId);
   if (params.serviceName) searchParams.set("serviceName", params.serviceName);

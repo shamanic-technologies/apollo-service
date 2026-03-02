@@ -9,7 +9,6 @@ export const apolloPeopleSearches = pgTable(
     runId: text("run_id").notNull(), // Reference to runs-service run ID
 
     // Hierarchy IDs
-    appId: text("app_id").notNull(),
     brandId: text("brand_id").notNull(),
     campaignId: text("campaign_id").notNull(),
 
@@ -43,7 +42,6 @@ export const apolloPeopleEnrichments = pgTable(
       .references(() => apolloPeopleSearches.id, { onDelete: "cascade" }),
 
     // Hierarchy IDs
-    appId: text("app_id").notNull(),
     brandId: text("brand_id").notNull(),
     campaignId: text("campaign_id").notNull(),
 
@@ -135,7 +133,6 @@ export const apolloSearchCursors = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     orgId: uuid("org_id").notNull(),
     campaignId: text("campaign_id").notNull(),
-    appId: text("app_id").notNull(),
     brandId: text("brand_id").notNull(),
     searchParams: jsonb("search_params").notNull(),
     currentPage: integer("current_page").notNull().default(1),

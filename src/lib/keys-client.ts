@@ -15,42 +15,24 @@ function callerHeaders(ctx: CallerContext): Record<string, string> {
   };
 }
 
-/**
- * Fetch a decrypted app-level key from key-service.
- * App keys are platform-owned (not user BYOK).
- */
-export async function getAppKey(
-  appId: string,
-  provider: string,
-  caller: CallerContext
-): Promise<string> {
-  const response = await fetch(
-    `${KEY_SERVICE_URL}/internal/app-keys/${provider}/decrypt?appId=${appId}`,
-    { headers: callerHeaders(caller) }
-  );
-
-  if (!response.ok) {
-    if (response.status === 404) {
-      throw new Error(`${provider} app key not configured for app ${appId}`);
-    }
-    const error = await response.text();
-    throw new Error(`Failed to fetch ${provider} app key: ${error}`);
-  }
-
-  const data = await response.json();
-  return data.key;
+export interface DecryptKeyResult {
+  key: string;
+  keySource: "org" | "platform";
 }
 
 /**
- * Client for fetching BYOK keys from key-service
+ * Decrypt an API key via key-service.
+ * Auto-resolves whether to use org or platform key based on the org's preference.
  */
-export async function getByokKey(
+export async function decryptKey(
   orgId: string,
+  userId: string,
   provider: string,
   caller: CallerContext
-): Promise<string> {
+): Promise<DecryptKeyResult> {
+  const params = new URLSearchParams({ orgId, userId });
   const response = await fetch(
-    `${KEY_SERVICE_URL}/internal/keys/${provider}/decrypt?clerkOrgId=${orgId}`,
+    `${KEY_SERVICE_URL}/keys/${provider}/decrypt?${params}`,
     { headers: callerHeaders(caller) }
   );
 
@@ -63,5 +45,5 @@ export async function getByokKey(
   }
 
   const data = await response.json();
-  return data.key;
+  return { key: data.key, keySource: data.keySource };
 }

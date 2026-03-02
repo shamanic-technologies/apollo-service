@@ -4,7 +4,7 @@ import { db } from "../db/index.js";
 import { apolloPeopleEnrichments } from "../db/schema.js";
 import { serviceAuth, type AuthenticatedRequest } from "../middleware/auth.js";
 import { matchPersonByName, bulkMatchPeopleByName } from "../lib/apollo-client.js";
-import { getByokKey } from "../lib/keys-client.js";
+import { decryptKey } from "../lib/keys-client.js";
 import { createRun, updateRun, addCosts } from "../lib/runs-client.js";
 import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment } from "../lib/transform.js";
 import { MatchRequestSchema, MatchBulkRequestSchema } from "../schemas.js";
@@ -50,7 +50,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
     if (!parsed.success) {
       return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
     }
-    const { firstName, lastName, organizationDomain, runId, appId, brandId, campaignId, workflowName } = parsed.data;
+    const { firstName, lastName, organizationDomain, runId, brandId, campaignId, workflowName } = parsed.data;
 
     // Check cache first
     const cached = await findCachedMatch(firstName, lastName, organizationDomain);
@@ -58,7 +58,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
     if (cached) {
       const cachedRun = await createRun({
         orgId: req.orgId!,
-        appId: appId || "mcpfactory",
+        userId: req.userId,
         brandId,
         campaignId,
         serviceName: "apollo-service",
@@ -76,13 +76,13 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
     }
 
     // Cache miss: call Apollo API
-    const apolloApiKey = await getByokKey(req.orgId!, "apollo", { callerMethod: "POST", callerPath: "/match" });
+    const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/match" });
     const result = await matchPersonByName(apolloApiKey, firstName, lastName, organizationDomain);
     const person = result.person;
 
     const matchRun = await createRun({
       orgId: req.orgId!,
-      appId: appId || "mcpfactory",
+      userId: req.userId,
       brandId,
       campaignId,
       serviceName: "apollo-service",
@@ -97,7 +97,6 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
       const [enrichment] = await db.insert(apolloPeopleEnrichments).values({
         orgId: req.orgId!,
         runId,
-        appId,
         brandId,
         campaignId,
         ...toEnrichmentDbValues(person),
@@ -107,7 +106,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
       enrichmentId = enrichment.id;
 
       if (person.email) {
-        await addCosts(matchRun.id, [{ costName: "apollo-person-match-credit", quantity: 1 }]);
+        await addCosts(matchRun.id, [{ costName: "apollo-person-match-credit", costSource: keySource, quantity: 1 }]);
       }
     }
 
@@ -132,11 +131,11 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
     if (!parsed.success) {
       return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
     }
-    const { items, runId, appId, brandId, campaignId, workflowName } = parsed.data;
+    const { items, runId, brandId, campaignId, workflowName } = parsed.data;
 
     const batchRun = await createRun({
       orgId: req.orgId!,
-      appId: appId || "mcpfactory",
+      userId: req.userId,
       brandId,
       campaignId,
       serviceName: "apollo-service",
@@ -160,8 +159,10 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
 
     // Call Apollo bulk API for all misses in one request
     let apolloResults: (import("../lib/apollo-client.js").ApolloPerson | null)[] = [];
+    let keySource: "org" | "platform" = "platform";
     if (missIndices.length > 0) {
-      const apolloApiKey = await getByokKey(req.orgId!, "apollo", { callerMethod: "POST", callerPath: "/match/bulk" });
+      const { key: apolloApiKey, keySource: ks } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/match/bulk" });
+      keySource = ks;
       const missItems = missIndices.map((i) => ({
         first_name: items[i].firstName,
         last_name: items[i].lastName,
@@ -182,12 +183,12 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
 
     let apolloResultIdx = 0;
     for (let i = 0; i < items.length; i++) {
-      const cached = cacheResults[i];
+      const cachedItem = cacheResults[i];
 
-      if (cached) {
+      if (cachedItem) {
         results.push({
           enrichmentId: null,
-          person: transformCachedEnrichment(cached.apolloPersonId ?? "", cached),
+          person: transformCachedEnrichment(cachedItem.apolloPersonId ?? "", cachedItem),
           cached: true,
         });
       } else {
@@ -200,7 +201,6 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
           const [enrichment] = await db.insert(apolloPeopleEnrichments).values({
             orgId: req.orgId!,
             runId,
-            appId,
             brandId,
             campaignId,
             ...toEnrichmentDbValues(person),
@@ -223,7 +223,7 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
     }
 
     if (totalCreditsToCharge > 0) {
-      await addCosts(batchRun.id, [{ costName: "apollo-person-match-credit", quantity: totalCreditsToCharge }]);
+      await addCosts(batchRun.id, [{ costName: "apollo-person-match-credit", costSource: keySource, quantity: totalCreditsToCharge }]);
     }
 
     await updateRun(batchRun.id, "completed");

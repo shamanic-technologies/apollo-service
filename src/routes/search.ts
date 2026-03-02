@@ -4,7 +4,7 @@ import { db } from "../db/index.js";
 import { apolloPeopleSearches, apolloPeopleEnrichments, apolloSearchCursors } from "../db/schema.js";
 import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
 import { searchPeople, enrichPerson, ApolloPerson } from "../lib/apollo-client.js";
-import { getByokKey } from "../lib/keys-client.js";
+import { decryptKey } from "../lib/keys-client.js";
 import { createRun, updateRun, addCosts } from "../lib/runs-client.js";
 import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment, toApolloSearchParams } from "../lib/transform.js";
 import { SearchRequestSchema, SearchNextRequestSchema, EnrichRequestSchema, StatsRequestSchema } from "../schemas.js";
@@ -20,10 +20,10 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
     if (!parsed.success) {
       return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
     }
-    const { runId, appId, brandId, campaignId, workflowName, ...searchParams } = parsed.data;
+    const { runId, brandId, campaignId, workflowName, ...searchParams } = parsed.data;
 
     // Get Apollo API key from key-service
-    const apolloApiKey = await getByokKey(req.orgId!, "apollo", { callerMethod: "POST", callerPath: "/search" });
+    const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/search" });
 
     // Call Apollo API
     const apolloParams = {
@@ -35,7 +35,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
     // Create a child run in runs-service for this search
     const searchRun = await createRun({
       orgId: req.orgId!,
-      appId: appId || "mcpfactory",
+      userId: req.userId,
       brandId,
       campaignId,
       serviceName: "apollo-service",
@@ -65,7 +65,6 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
       .values({
         orgId: req.orgId!,
         runId,
-        appId,
         brandId,
         campaignId,
         requestParams: apolloParams,
@@ -81,7 +80,6 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
         orgId: req.orgId!,
         runId,
         searchId: search.id,
-        appId,
         brandId,
         campaignId,
         ...toEnrichmentDbValues(person),
@@ -89,7 +87,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
     }
 
     // Track search cost and mark run as completed
-    await addCosts(searchRun.id, [{ costName: "apollo-search-credit", quantity: 1 }]);
+    await addCosts(searchRun.id, [{ costName: "apollo-search-credit", costSource: keySource, quantity: 1 }]);
     await updateRun(searchRun.id, "completed");
 
     // Fill in cached emails for people without email
@@ -161,7 +159,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
     if (!parsed.success) {
       return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
     }
-    const { apolloPersonId, runId, appId, brandId, campaignId, workflowName } = parsed.data;
+    const { apolloPersonId, runId, brandId, campaignId, workflowName } = parsed.data;
 
     // Check cache: existing enrichment for this personId within 12 months
     const twelveMonthsAgo = new Date();
@@ -184,7 +182,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       // Create a run for traceability but no costs (cache hit)
       const cachedRun = await createRun({
         orgId: req.orgId!,
-        appId: appId || "mcpfactory",
+        userId: req.userId,
         brandId,
         campaignId,
         serviceName: "apollo-service",
@@ -200,7 +198,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       });
     }
 
-    const apolloApiKey = await getByokKey(req.orgId!, "apollo", { callerMethod: "POST", callerPath: "/enrich" });
+    const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/enrich" });
     const result = await enrichPerson(apolloApiKey, apolloPersonId);
     const person = result.person;
 
@@ -210,7 +208,6 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       const [enrichment] = await db.insert(apolloPeopleEnrichments).values({
         orgId: req.orgId!,
         runId,
-        appId,
         brandId,
         campaignId,
         ...toEnrichmentDbValues(person),
@@ -221,7 +218,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       // Track cost in runs-service
       const enrichRun = await createRun({
         orgId: req.orgId!,
-        appId: appId || "mcpfactory",
+        userId: req.userId,
         brandId,
         campaignId,
         serviceName: "apollo-service",
@@ -235,7 +232,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
         .where(eq(apolloPeopleEnrichments.id, enrichment.id));
 
       if (person.email) {
-        await addCosts(enrichRun.id, [{ costName: "apollo-enrichment-credit", quantity: 1 }]);
+        await addCosts(enrichRun.id, [{ costName: "apollo-enrichment-credit", costSource: keySource, quantity: 1 }]);
       }
       await updateRun(enrichRun.id, "completed");
     }
@@ -260,10 +257,10 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     if (!parsed.success) {
       return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
     }
-    const { campaignId, brandId, appId, searchParams, runId, workflowName } = parsed.data;
+    const { campaignId, brandId, searchParams, runId, workflowName } = parsed.data;
 
     // Get Apollo API key
-    const apolloApiKey = await getByokKey(req.orgId!, "apollo", { callerMethod: "POST", callerPath: "/search/next" });
+    const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/search/next" });
 
     // Look up existing cursor for this campaign
     const [existingCursor] = await db
@@ -291,7 +288,6 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
         const [newCursor] = await db.insert(apolloSearchCursors).values({
           orgId: req.orgId!,
           campaignId,
-          appId,
           brandId,
           searchParams: searchParams as Record<string, unknown>,
           currentPage: 1,
@@ -372,7 +368,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     // Store search record (audit trail) and track costs
     const searchRun = await createRun({
       orgId: req.orgId!,
-      appId: appId || "mcpfactory",
+      userId: req.userId,
       brandId,
       campaignId,
       serviceName: "apollo-service",
@@ -384,7 +380,6 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     await db.insert(apolloPeopleSearches).values({
       orgId: req.orgId!,
       runId,
-      appId,
       brandId,
       campaignId,
       requestParams: apolloParams,
@@ -393,7 +388,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
       responseRaw: result,
     });
 
-    await addCosts(searchRun.id, [{ costName: "apollo-search-credit", quantity: 1 }]);
+    await addCosts(searchRun.id, [{ costName: "apollo-search-credit", costSource: keySource, quantity: 1 }]);
     await updateRun(searchRun.id, "completed");
 
     // Transform and respond
@@ -466,7 +461,7 @@ router.get("/enrichments/:runId", serviceAuth, async (req: AuthenticatedRequest,
 
 /**
  * POST /stats - Get aggregated stats with optional filters
- * Body: { runIds?: string[], appId?: string, brandId?: string, campaignId?: string }
+ * Body: { runIds?: string[], brandId?: string, campaignId?: string }
  * orgId is always applied from auth. All body filters are optional.
  */
 router.post("/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
@@ -475,19 +470,17 @@ router.post("/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
     if (!parsed.success) {
       return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
     }
-    const { runIds, appId, brandId, campaignId } = parsed.data;
+    const { runIds, brandId, campaignId } = parsed.data;
 
     // Build dynamic where conditions for enrichments
     const enrichConditions = [eq(apolloPeopleEnrichments.orgId, req.orgId!)];
     if (runIds?.length) enrichConditions.push(inArray(apolloPeopleEnrichments.runId, runIds));
-    if (appId) enrichConditions.push(eq(apolloPeopleEnrichments.appId, appId));
     if (brandId) enrichConditions.push(eq(apolloPeopleEnrichments.brandId, brandId));
     if (campaignId) enrichConditions.push(eq(apolloPeopleEnrichments.campaignId, campaignId));
 
     // Build dynamic where conditions for searches
     const searchConditions = [eq(apolloPeopleSearches.orgId, req.orgId!)];
     if (runIds?.length) searchConditions.push(inArray(apolloPeopleSearches.runId, runIds));
-    if (appId) searchConditions.push(eq(apolloPeopleSearches.appId, appId));
     if (brandId) searchConditions.push(eq(apolloPeopleSearches.brandId, brandId));
     if (campaignId) searchConditions.push(eq(apolloPeopleSearches.campaignId, campaignId));
 

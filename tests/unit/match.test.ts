@@ -23,6 +23,7 @@ vi.mock("../../src/lib/runs-client.js", () => ({
 vi.mock("../../src/middleware/auth.js", () => ({
   serviceAuth: (req: any, _res: any, next: any) => {
     req.orgId = req.headers["x-org-id"] || "org-internal-123";
+    req.userId = req.headers["x-user-id"] || "user-internal-456";
     next();
   },
 }));
@@ -59,9 +60,9 @@ vi.mock("../../src/db/schema.js", () => ({
   },
 }));
 
-const mockGetByokKey = vi.fn().mockResolvedValue("fake-apollo-key");
+const mockDecryptKey = vi.fn().mockResolvedValue({ key: "fake-apollo-key", keySource: "platform" });
 vi.mock("../../src/lib/keys-client.js", () => ({
-  getByokKey: (...args: unknown[]) => mockGetByokKey(...args),
+  decryptKey: (...args: unknown[]) => mockDecryptKey(...args),
 }));
 
 const MOCK_PERSON = {
@@ -103,7 +104,6 @@ function createTestApp() {
 
 const BASE_BODY = {
   runId: "run-abc",
-  appId: "app-1",
   brandId: "brand-1",
   campaignId: "campaign-1",
 };
@@ -119,6 +119,7 @@ describe("POST /match", () => {
     mockAddCosts.mockResolvedValue({ costs: [] });
     mockInsertReturning.mockResolvedValue([{ id: "record-1" }]);
     mockMatchPersonByName.mockResolvedValue({ person: MOCK_PERSON });
+    mockDecryptKey.mockResolvedValue({ key: "fake-apollo-key", keySource: "platform" });
 
     let callCount = 0;
     mockCreateRun.mockImplementation(() => {
@@ -137,6 +138,7 @@ describe("POST /match", () => {
     const res = await request(app)
       .post("/match")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({ lastName: "Doe", organizationDomain: "acme.com", ...BASE_BODY })
       .expect(400);
 
@@ -148,11 +150,11 @@ describe("POST /match", () => {
     await request(app)
       .post("/match")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({
         firstName: "John",
         lastName: "Doe",
         organizationDomain: "acme.com",
-        appId: "app-1",
         brandId: "brand-1",
         campaignId: "campaign-1",
       })
@@ -165,6 +167,7 @@ describe("POST /match", () => {
     const res = await request(app)
       .post("/match")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com", ...BASE_BODY })
       .expect(200);
 
@@ -178,10 +181,11 @@ describe("POST /match", () => {
 
   // ─── Cost tracking ───────────────────────────────────────────────────────
 
-  it("should charge apollo-person-match-credit when email is found", async () => {
+  it("should charge apollo-person-match-credit with costSource when email is found", async () => {
     await request(app)
       .post("/match")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com", ...BASE_BODY })
       .expect(200);
 
@@ -189,7 +193,11 @@ describe("POST /match", () => {
       items.some((i: { costName: string }) => i.costName === "apollo-person-match-credit")
     );
     expect(matchCalls).toHaveLength(1);
-    expect(matchCalls[0][1][0].quantity).toBe(1);
+    expect(matchCalls[0][1][0]).toEqual({
+      costName: "apollo-person-match-credit",
+      costSource: "platform",
+      quantity: 1,
+    });
   });
 
   it("should NOT charge when person has no email", async () => {
@@ -200,6 +208,7 @@ describe("POST /match", () => {
     await request(app)
       .post("/match")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com", ...BASE_BODY })
       .expect(200);
 
@@ -212,6 +221,7 @@ describe("POST /match", () => {
     const res = await request(app)
       .post("/match")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({ firstName: "Nobody", lastName: "Exists", organizationDomain: "none.com", ...BASE_BODY })
       .expect(200);
 
@@ -251,6 +261,7 @@ describe("POST /match", () => {
     const res = await request(app)
       .post("/match")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com", ...BASE_BODY })
       .expect(200);
 
@@ -267,6 +278,7 @@ describe("POST /match", () => {
     await request(app)
       .post("/match")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({
         firstName: "John",
         lastName: "Doe",
@@ -290,6 +302,7 @@ describe("POST /match", () => {
     const res = await request(app)
       .post("/match")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com", ...BASE_BODY })
       .expect(500);
 
@@ -304,6 +317,7 @@ describe("POST /match", () => {
     await request(app)
       .post("/match")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com", ...BASE_BODY })
       .expect(500);
 
@@ -322,6 +336,7 @@ describe("POST /match/bulk", () => {
     mockAddCosts.mockResolvedValue({ costs: [] });
     mockInsertReturning.mockResolvedValue([{ id: "record-1" }]);
     mockBulkMatchPeopleByName.mockResolvedValue({ matches: [MOCK_PERSON] });
+    mockDecryptKey.mockResolvedValue({ key: "fake-apollo-key", keySource: "platform" });
 
     let callCount = 0;
     mockCreateRun.mockImplementation(() => {
@@ -340,6 +355,7 @@ describe("POST /match/bulk", () => {
     await request(app)
       .post("/match/bulk")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({ items: [], ...BASE_BODY })
       .expect(400);
   });
@@ -354,6 +370,7 @@ describe("POST /match/bulk", () => {
     await request(app)
       .post("/match/bulk")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({ items, ...BASE_BODY })
       .expect(400);
   });
@@ -368,6 +385,7 @@ describe("POST /match/bulk", () => {
     await request(app)
       .post("/match/bulk")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({
         items: [
           { firstName: "John", lastName: "Doe", organizationDomain: "acme.com" },
@@ -395,6 +413,7 @@ describe("POST /match/bulk", () => {
     await request(app)
       .post("/match/bulk")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({
         items: [
           { firstName: "A", lastName: "B", organizationDomain: "acme.com" },
@@ -407,7 +426,7 @@ describe("POST /match/bulk", () => {
 
     expect(mockAddCosts).toHaveBeenCalledTimes(1);
     expect(mockAddCosts).toHaveBeenCalledWith("run-1", [
-      { costName: "apollo-person-match-credit", quantity: 2 },
+      { costName: "apollo-person-match-credit", costSource: "platform", quantity: 2 },
     ]);
   });
 
@@ -419,6 +438,7 @@ describe("POST /match/bulk", () => {
     const res = await request(app)
       .post("/match/bulk")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({
         items: [
           { firstName: "John", lastName: "Doe", organizationDomain: "acme.com" },
@@ -463,6 +483,7 @@ describe("POST /match/bulk", () => {
     const res = await request(app)
       .post("/match/bulk")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({
         items: [{ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" }],
         ...BASE_BODY,
@@ -482,6 +503,7 @@ describe("POST /match/bulk", () => {
     await request(app)
       .post("/match/bulk")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({
         items: [{ firstName: "A", lastName: "B", organizationDomain: "acme.com" }],
         ...BASE_BODY,
@@ -500,6 +522,7 @@ describe("POST /match/bulk", () => {
     await request(app)
       .post("/match/bulk")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({
         items: [{ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" }],
         ...BASE_BODY,
@@ -513,6 +536,7 @@ describe("POST /match/bulk", () => {
     await request(app)
       .post("/match/bulk")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({
         items: [{ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" }],
         ...BASE_BODY,
