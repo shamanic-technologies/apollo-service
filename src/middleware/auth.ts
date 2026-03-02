@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from "express";
 
 export interface AuthenticatedRequest extends Request {
   orgId?: string;
+  userId?: string;
 }
 
 /**
@@ -14,12 +15,18 @@ export async function serviceAuth(
 ) {
   try {
     const orgId = req.headers["x-org-id"] as string;
+    const userId = req.headers["x-user-id"] as string;
 
     if (!orgId) {
       return res.status(400).json({ error: "x-org-id header required" });
     }
 
+    if (!userId) {
+      return res.status(400).json({ error: "x-user-id header required" });
+    }
+
     req.orgId = orgId;
+    req.userId = userId;
     next();
   } catch (error) {
     console.error("[Apollo Service] Auth error:", error);

@@ -454,9 +454,6 @@
             "description": "Runs-service parent run ID. Required — results are stored in DB and costs tracked via runs-service.",
             "example": "run-abc-123"
           },
-          "appId": {
-            "type": "string"
-          },
           "brandId": {
             "type": "string"
           },
@@ -659,7 +656,6 @@
         },
         "required": [
           "runId",
-          "appId",
           "brandId",
           "campaignId"
         ],
@@ -704,11 +700,6 @@
             "description": "Brand ID.",
             "example": "brand-1"
           },
-          "appId": {
-            "type": "string",
-            "description": "App ID.",
-            "example": "my-app"
-          },
           "searchParams": {
             "$ref": "#/components/schemas/SearchFilters"
           },
@@ -726,7 +717,6 @@
         "required": [
           "campaignId",
           "brandId",
-          "appId",
           "runId"
         ],
         "description": "Request body for server-managed search pagination. The cursor is keyed by (orgId, campaignId)."
@@ -950,9 +940,6 @@
             "description": "Runs-service parent run ID. Required — enrichment record is stored and 1 apollo-enrichment-credit is tracked.",
             "example": "run-abc-123"
           },
-          "appId": {
-            "type": "string"
-          },
           "brandId": {
             "type": "string"
           },
@@ -968,7 +955,6 @@
         "required": [
           "apolloPersonId",
           "runId",
-          "appId",
           "brandId",
           "campaignId"
         ]
@@ -1021,9 +1007,6 @@
             "description": "Runs-service parent run ID. Required — match record is stored and costs tracked.",
             "example": "run-abc-123"
           },
-          "appId": {
-            "type": "string"
-          },
           "brandId": {
             "type": "string"
           },
@@ -1041,7 +1024,6 @@
           "lastName",
           "organizationDomain",
           "runId",
-          "appId",
           "brandId",
           "campaignId"
         ]
@@ -1104,9 +1086,6 @@
             "description": "Runs-service parent run ID. A single run covers the entire batch.",
             "example": "run-abc-123"
           },
-          "appId": {
-            "type": "string"
-          },
           "brandId": {
             "type": "string"
           },
@@ -1122,7 +1101,6 @@
         "required": [
           "items",
           "runId",
-          "appId",
           "brandId",
           "campaignId"
         ]
@@ -1177,9 +1155,6 @@
           "runId": {
             "type": "string"
           },
-          "appId": {
-            "type": "string"
-          },
           "brandId": {
             "type": "string"
           },
@@ -1212,7 +1187,6 @@
           "id",
           "orgId",
           "runId",
-          "appId",
           "brandId",
           "campaignId",
           "requestParams",
@@ -1254,9 +1228,6 @@
             "type": "string",
             "nullable": true,
             "format": "uuid"
-          },
-          "appId": {
-            "type": "string"
           },
           "brandId": {
             "type": "string"
@@ -1594,7 +1565,6 @@
           "id",
           "orgId",
           "runId",
-          "appId",
           "brandId",
           "campaignId",
           "apolloPersonId",
@@ -1644,9 +1614,6 @@
             "items": {
               "type": "string"
             }
-          },
-          "appId": {
-            "type": "string"
           },
           "brandId": {
             "type": "string"
@@ -1777,23 +1744,10 @@
             "description": "Unstructured context about the company — website content, target audience description, ICP notes, or any combination. The LLM extracts what it needs.",
             "example": "We are a B2B SaaS company selling developer tools. Target audience: engineering leaders at mid-size tech companies in the US."
           },
-          "keySource": {
-            "type": "string",
-            "enum": [
-              "byok",
-              "app"
-            ],
-            "description": "Where to fetch API keys (Apollo + Anthropic). \"byok\" = user's own keys from key-service, \"app\" = platform app keys.",
-            "example": "app"
-          },
           "runId": {
             "type": "string",
             "description": "Runs-service parent run ID for cost tracking.",
             "example": "run-abc-123"
-          },
-          "appId": {
-            "type": "string",
-            "example": "my-app"
           },
           "brandId": {
             "type": "string",
@@ -1811,9 +1765,7 @@
         },
         "required": [
           "context",
-          "keySource",
           "runId",
-          "appId",
           "brandId",
           "campaignId"
         ]
@@ -1965,6 +1917,14 @@
             "required": true,
             "name": "x-org-id",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
           }
         ],
         "requestBody": {
@@ -2022,6 +1982,14 @@
             },
             "required": true,
             "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-user-id",
             "in": "header"
           }
         ],
@@ -2081,6 +2049,14 @@
             "required": true,
             "name": "x-org-id",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
           }
         ],
         "requestBody": {
@@ -2139,6 +2115,14 @@
             "required": true,
             "name": "x-org-id",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
           }
         ],
         "requestBody": {
@@ -2196,6 +2180,14 @@
             },
             "required": true,
             "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-user-id",
             "in": "header"
           }
         ],
@@ -2262,6 +2254,14 @@
             "required": true,
             "name": "x-org-id",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
           }
         ],
         "responses": {
@@ -2307,6 +2307,14 @@
             "required": true,
             "name": "x-org-id",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
           }
         ],
         "responses": {
@@ -2344,6 +2352,14 @@
             },
             "required": true,
             "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-user-id",
             "in": "header"
           }
         ],
@@ -2392,6 +2408,14 @@
             "required": true,
             "name": "x-org-id",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
           }
         ],
         "responses": {
@@ -2428,6 +2452,14 @@
             },
             "required": true,
             "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-user-id",
             "in": "header"
           }
         ],
@@ -2466,6 +2498,14 @@
             },
             "required": true,
             "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-user-id",
             "in": "header"
           }
         ],
@@ -2524,6 +2564,14 @@
             },
             "required": true,
             "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-user-id",
             "in": "header"
           }
         ],

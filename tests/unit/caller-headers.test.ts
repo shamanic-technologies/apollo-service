@@ -16,19 +16,19 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function okResponse(key: string) {
-  return new Response(JSON.stringify({ key }), {
+function okResponse(key: string, keySource: "org" | "platform" = "platform") {
+  return new Response(JSON.stringify({ key, keySource }), {
     status: 200,
     headers: { "Content-Type": "application/json" },
   });
 }
 
-describe("getByokKey caller headers", () => {
+describe("decryptKey caller headers", () => {
   it("should send X-Caller-Service, X-Caller-Method, and X-Caller-Path headers", async () => {
-    mockFetch.mockResolvedValueOnce(okResponse("byok-key-123"));
+    mockFetch.mockResolvedValueOnce(okResponse("decrypted-key-123"));
 
-    const { getByokKey } = await import("../../src/lib/keys-client.js");
-    await getByokKey("org_test", "apollo", { callerMethod: "POST", callerPath: "/search" });
+    const { decryptKey } = await import("../../src/lib/keys-client.js");
+    await decryptKey("org_test", "user_test", "apollo", { callerMethod: "POST", callerPath: "/search" });
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
     const [, opts] = mockFetch.mock.calls[0];
@@ -38,21 +38,25 @@ describe("getByokKey caller headers", () => {
       "X-Caller-Path": "/search",
     });
   });
-});
 
-describe("getAppKey caller headers", () => {
-  it("should send X-Caller-Service, X-Caller-Method, and X-Caller-Path headers", async () => {
-    mockFetch.mockResolvedValueOnce(okResponse("app-key-456"));
+  it("should return key and keySource from response", async () => {
+    mockFetch.mockResolvedValueOnce(okResponse("my-key", "org"));
 
-    const { getAppKey } = await import("../../src/lib/keys-client.js");
-    await getAppKey("app-1", "apollo", { callerMethod: "POST", callerPath: "/search/params" });
+    const { decryptKey } = await import("../../src/lib/keys-client.js");
+    const result = await decryptKey("org_test", "user_test", "apollo", { callerMethod: "POST", callerPath: "/search" });
 
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-    const [, opts] = mockFetch.mock.calls[0];
-    expect(opts.headers).toMatchObject({
-      "X-Caller-Service": "apollo",
-      "X-Caller-Method": "POST",
-      "X-Caller-Path": "/search/params",
-    });
+    expect(result).toEqual({ key: "my-key", keySource: "org" });
+  });
+
+  it("should pass orgId and userId as query params", async () => {
+    mockFetch.mockResolvedValueOnce(okResponse("key-abc"));
+
+    const { decryptKey } = await import("../../src/lib/keys-client.js");
+    await decryptKey("org-uuid-1", "user-uuid-2", "anthropic", { callerMethod: "POST", callerPath: "/search/params" });
+
+    const [url] = mockFetch.mock.calls[0];
+    expect(url).toContain("/keys/anthropic/decrypt?");
+    expect(url).toContain("orgId=org-uuid-1");
+    expect(url).toContain("userId=user-uuid-2");
   });
 });

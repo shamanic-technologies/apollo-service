@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
 import { searchPeople } from "../lib/apollo-client.js";
-import { getByokKey, getAppKey } from "../lib/keys-client.js";
+import { decryptKey } from "../lib/keys-client.js";
 import { createRun, updateRun, addCosts } from "../lib/runs-client.js";
 import { callClaude } from "../lib/anthropic-client.js";
 import { getSystemPrompt, buildUserMessage, SearchAttempt } from "../lib/search-params-prompt.js";
@@ -23,23 +23,17 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
       return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
     }
 
-    const { context, keySource, runId, appId, brandId, campaignId, workflowName } = parsed.data;
+    const { context, runId, brandId, campaignId, workflowName } = parsed.data;
 
-    // Fetch keys — both Apollo and Anthropic use the same source
+    // Fetch keys — key-service auto-resolves source per provider
     const caller = { callerMethod: "POST", callerPath: "/search/params" };
-    const apolloApiKey =
-      keySource === "byok"
-        ? await getByokKey(req.orgId!, "apollo", caller)
-        : await getAppKey(appId, "apollo", caller);
-    const anthropicApiKey =
-      keySource === "byok"
-        ? await getByokKey(req.orgId!, "anthropic", caller)
-        : await getAppKey(appId, "anthropic", caller);
+    const { key: apolloApiKey, keySource: apolloKeySource } = await decryptKey(req.orgId!, req.userId!, "apollo", caller);
+    const { key: anthropicApiKey, keySource: anthropicKeySource } = await decryptKey(req.orgId!, req.userId!, "anthropic", caller);
 
     // Create child run for cost tracking
     const paramRun = await createRun({
       orgId: req.orgId!,
-      appId: appId || "mcpfactory",
+      userId: req.userId,
       brandId,
       campaignId,
       serviceName: "apollo-service",
@@ -61,8 +55,8 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
 
         // Track LLM token costs
         await addCosts(paramRun.id, [
-          { costName: "anthropic-sonnet-4.6-tokens-input", quantity: llmResponse.inputTokens },
-          { costName: "anthropic-sonnet-4.6-tokens-output", quantity: llmResponse.outputTokens },
+          { costName: "anthropic-sonnet-4.6-tokens-input", costSource: anthropicKeySource, quantity: llmResponse.inputTokens },
+          { costName: "anthropic-sonnet-4.6-tokens-output", costSource: anthropicKeySource, quantity: llmResponse.outputTokens },
         ]);
 
         // Parse LLM response as JSON
@@ -101,7 +95,7 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
         const totalResults = result.total_entries ?? result.pagination?.total_entries ?? 0;
 
         // Track Apollo search credit
-        await addCosts(paramRun.id, [{ costName: "apollo-search-credit", quantity: 1 }]);
+        await addCosts(paramRun.id, [{ costName: "apollo-search-credit", costSource: apolloKeySource, quantity: 1 }]);
 
         console.log(`[Apollo Service][POST /search/params] Attempt ${attempt}: ${totalResults} results`, {
           searchParams,

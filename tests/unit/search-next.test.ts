@@ -24,6 +24,7 @@ vi.mock("../../src/lib/runs-client.js", () => ({
 vi.mock("../../src/middleware/auth.js", () => ({
   serviceAuth: (req: any, _res: any, next: any) => {
     req.orgId = req.headers["x-org-id"] || "org-internal-123";
+    req.userId = req.headers["x-user-id"] || "user-internal-456";
     next();
   },
 }));
@@ -81,7 +82,7 @@ vi.mock("../../src/db/schema.js", () => ({
 }));
 
 vi.mock("../../src/lib/keys-client.js", () => ({
-  getByokKey: vi.fn().mockResolvedValue("fake-apollo-key"),
+  decryptKey: vi.fn().mockResolvedValue({ key: "fake-apollo-key", keySource: "platform" }),
 }));
 
 // Mock Apollo client
@@ -124,7 +125,6 @@ const SEARCH_PARAMS = { personTitles: ["CEO"] };
 const BASE_BODY = {
   campaignId: "campaign-1",
   brandId: "brand-1",
-  appId: "app-1",
   runId: "run-parent-1",
 };
 
@@ -159,6 +159,7 @@ describe("POST /search/next", () => {
       .post("/search/next")
       .set("X-API-Key", "test-key")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({ ...BASE_BODY, searchParams: SEARCH_PARAMS })
       .expect(200);
 
@@ -187,6 +188,7 @@ describe("POST /search/next", () => {
       .post("/search/next")
       .set("X-API-Key", "test-key")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send(BASE_BODY)
       .expect(200);
 
@@ -205,6 +207,7 @@ describe("POST /search/next", () => {
       .post("/search/next")
       .set("X-API-Key", "test-key")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send(BASE_BODY)
       .expect(400);
 
@@ -229,6 +232,7 @@ describe("POST /search/next", () => {
       .post("/search/next")
       .set("X-API-Key", "test-key")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({ ...BASE_BODY, searchParams: SEARCH_PARAMS })
       .expect(200);
 
@@ -260,6 +264,7 @@ describe("POST /search/next", () => {
       .post("/search/next")
       .set("X-API-Key", "test-key")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({ ...BASE_BODY, searchParams: SEARCH_PARAMS })
       .expect(200);
 
@@ -287,6 +292,7 @@ describe("POST /search/next", () => {
       .post("/search/next")
       .set("X-API-Key", "test-key")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send(BASE_BODY)
       .expect(200);
 
@@ -313,6 +319,7 @@ describe("POST /search/next", () => {
       .post("/search/next")
       .set("X-API-Key", "test-key")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send(BASE_BODY)
       .expect(200);
 
@@ -344,6 +351,7 @@ describe("POST /search/next", () => {
       .post("/search/next")
       .set("X-API-Key", "test-key")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send(BASE_BODY)
       .expect(200);
 
@@ -372,6 +380,7 @@ describe("POST /search/next", () => {
       .post("/search/next")
       .set("X-API-Key", "test-key")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send(BASE_BODY)
       .expect(200);
 
@@ -382,11 +391,12 @@ describe("POST /search/next", () => {
 
   // ─── Cost tracking ────────────────────────────────────────────────────────
 
-  it("tracks costs when runId provided", async () => {
+  it("tracks costs with costSource when runId provided", async () => {
     await request(app)
       .post("/search/next")
       .set("X-API-Key", "test-key")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({ ...BASE_BODY, searchParams: SEARCH_PARAMS, runId: "run-abc" })
       .expect(200);
 
@@ -394,7 +404,7 @@ describe("POST /search/next", () => {
       expect.objectContaining({ taskName: "people-search-next" })
     );
     expect(mockAddCosts).toHaveBeenCalledWith("run-1", [
-      { costName: "apollo-search-credit", quantity: 1 },
+      { costName: "apollo-search-credit", costSource: "platform", quantity: 1 },
     ]);
     expect(mockUpdateRun).toHaveBeenCalledWith("run-1", "completed");
   });
@@ -404,7 +414,8 @@ describe("POST /search/next", () => {
       .post("/search/next")
       .set("X-API-Key", "test-key")
       .set("X-Org-Id", "org_test")
-      .send({ campaignId: "campaign-1", brandId: "brand-1", appId: "app-1", searchParams: SEARCH_PARAMS })
+      .set("X-User-Id", "user_test")
+      .send({ campaignId: "campaign-1", brandId: "brand-1", searchParams: SEARCH_PARAMS })
       .expect(400);
 
     expect(res.body.error).toBe("Invalid request");
@@ -428,6 +439,7 @@ describe("POST /search/next", () => {
       .post("/search/next")
       .set("X-API-Key", "test-key")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send(BASE_BODY)
       .expect(200);
 
@@ -442,6 +454,7 @@ describe("POST /search/next", () => {
       .post("/search/next")
       .set("X-API-Key", "test-key")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({ ...BASE_BODY, searchParams: SEARCH_PARAMS, workflowName: "fetch-lead" })
       .expect(200);
 

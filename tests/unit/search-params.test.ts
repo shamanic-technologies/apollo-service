@@ -21,6 +21,7 @@ vi.mock("../../src/lib/runs-client.js", () => ({
 vi.mock("../../src/middleware/auth.js", () => ({
   serviceAuth: (req: any, _res: any, next: any) => {
     req.orgId = req.headers["x-org-id"] || "org-internal-123";
+    req.userId = req.headers["x-user-id"] || "user-internal-456";
     next();
   },
 }));
@@ -38,12 +39,10 @@ vi.mock("../../src/db/index.js", () => ({
 vi.mock("../../src/db/schema.js", () => ({}));
 
 // Mock keys-client
-const mockGetByokKey = vi.fn();
-const mockGetAppKey = vi.fn();
+const mockDecryptKey = vi.fn();
 
 vi.mock("../../src/lib/keys-client.js", () => ({
-  getByokKey: (...args: unknown[]) => mockGetByokKey(...args),
-  getAppKey: (...args: unknown[]) => mockGetAppKey(...args),
+  decryptKey: (...args: unknown[]) => mockDecryptKey(...args),
 }));
 
 // Mock Apollo client
@@ -62,9 +61,7 @@ vi.mock("../../src/lib/anthropic-client.js", () => ({
 
 const BASE_BODY = {
   context: "We sell B2B developer tools to engineering leaders",
-  keySource: "app" as const,
   runId: "run-parent-1",
-  appId: "app-1",
   brandId: "brand-1",
   campaignId: "campaign-1",
 };
@@ -81,8 +78,10 @@ describe("POST /search/params", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
 
-    mockGetByokKey.mockResolvedValue("fake-apollo-key");
-    mockGetAppKey.mockResolvedValue("fake-anthropic-key");
+    mockDecryptKey.mockImplementation((_orgId: string, _userId: string, provider: string) => {
+      if (provider === "anthropic") return Promise.resolve({ key: "fake-anthropic-key", keySource: "platform" });
+      return Promise.resolve({ key: "fake-apollo-key", keySource: "platform" });
+    });
 
     let runCount = 0;
     mockCreateRun.mockImplementation(() => {
@@ -112,6 +111,7 @@ describe("POST /search/params", () => {
     const res = await request(app)
       .post("/search/params")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send(BASE_BODY)
       .expect(200);
 
@@ -145,6 +145,7 @@ describe("POST /search/params", () => {
     const res = await request(app)
       .post("/search/params")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send(BASE_BODY)
       .expect(200);
 
@@ -169,6 +170,7 @@ describe("POST /search/params", () => {
     const res = await request(app)
       .post("/search/params")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send(BASE_BODY)
       .expect(200);
 
@@ -198,6 +200,7 @@ describe("POST /search/params", () => {
     const res = await request(app)
       .post("/search/params")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send(BASE_BODY)
       .expect(200);
 
@@ -209,7 +212,7 @@ describe("POST /search/params", () => {
 
   // ─── Cost tracking ──────────────────────────────────────────────────────
 
-  it("tracks LLM token costs and Apollo search credits", async () => {
+  it("tracks LLM token costs and Apollo search credits with costSource", async () => {
     mockCallClaude.mockResolvedValue({
       content: JSON.stringify({ personTitles: ["CTO"] }),
       inputTokens: 1234,
@@ -221,30 +224,31 @@ describe("POST /search/params", () => {
     await request(app)
       .post("/search/params")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send(BASE_BODY)
       .expect(200);
 
     // LLM token costs
     expect(mockAddCosts).toHaveBeenCalledWith("run-1", [
-      { costName: "anthropic-sonnet-4.6-tokens-input", quantity: 1234 },
-      { costName: "anthropic-sonnet-4.6-tokens-output", quantity: 56 },
+      { costName: "anthropic-sonnet-4.6-tokens-input", costSource: "platform", quantity: 1234 },
+      { costName: "anthropic-sonnet-4.6-tokens-output", costSource: "platform", quantity: 56 },
     ]);
 
     // Apollo search credit
     expect(mockAddCosts).toHaveBeenCalledWith("run-1", [
-      { costName: "apollo-search-credit", quantity: 1 },
+      { costName: "apollo-search-credit", costSource: "platform", quantity: 1 },
     ]);
 
     // Run completed
     expect(mockUpdateRun).toHaveBeenCalledWith("run-1", "completed");
   });
 
-  // ─── BYOK key source ────────────────────────────────────────────────────
+  // ─── Key resolution via decryptKey ─────────────────────────────────────
 
-  it("uses BYOK keys for both Apollo and Anthropic when keySource is byok", async () => {
-    mockGetByokKey.mockImplementation((_orgId: string, provider: string) => {
-      if (provider === "anthropic") return Promise.resolve("user-anthropic-key");
-      return Promise.resolve("user-apollo-key");
+  it("calls decryptKey for both Apollo and Anthropic providers", async () => {
+    mockDecryptKey.mockImplementation((_orgId: string, _userId: string, provider: string) => {
+      if (provider === "anthropic") return Promise.resolve({ key: "user-anthropic-key", keySource: "org" });
+      return Promise.resolve({ key: "user-apollo-key", keySource: "org" });
     });
 
     mockCallClaude.mockResolvedValue({
@@ -258,33 +262,31 @@ describe("POST /search/params", () => {
     await request(app)
       .post("/search/params")
       .set("X-Org-Id", "org_test")
-      .send({ ...BASE_BODY, keySource: "byok" })
+      .set("X-User-Id", "user_test")
+      .send(BASE_BODY)
       .expect(200);
 
-    // Should call getByokKey for both providers
+    // Should call decryptKey for both providers
     const expectedCaller = { callerMethod: "POST", callerPath: "/search/params" };
-    expect(mockGetByokKey).toHaveBeenCalledWith("org_test", "apollo", expectedCaller);
-    expect(mockGetByokKey).toHaveBeenCalledWith("org_test", "anthropic", expectedCaller);
-    expect(mockGetAppKey).not.toHaveBeenCalled();
-    // callClaude should receive the user's Anthropic key
+    expect(mockDecryptKey).toHaveBeenCalledWith("org_test", "user_test", "apollo", expectedCaller);
+    expect(mockDecryptKey).toHaveBeenCalledWith("org_test", "user_test", "anthropic", expectedCaller);
+    // callClaude should receive the Anthropic key
     expect(mockCallClaude).toHaveBeenCalledWith(
       "user-anthropic-key",
       expect.any(String),
       expect.any(String)
     );
-    // searchPeople should receive the user's Apollo key
+    // searchPeople should receive the Apollo key
     expect(mockSearchPeople).toHaveBeenCalledWith(
       "user-apollo-key",
       expect.any(Object)
     );
   });
 
-  // ─── App key source ──────────────────────────────────────────────────────
-
-  it("uses app keys for both Apollo and Anthropic when keySource is app", async () => {
-    mockGetAppKey.mockImplementation((_appId: string, provider: string) => {
-      if (provider === "anthropic") return Promise.resolve("platform-anthropic-key");
-      return Promise.resolve("platform-apollo-key");
+  it("uses correct costSource per provider when they differ", async () => {
+    mockDecryptKey.mockImplementation((_orgId: string, _userId: string, provider: string) => {
+      if (provider === "anthropic") return Promise.resolve({ key: "anthropic-key", keySource: "org" });
+      return Promise.resolve({ key: "apollo-key", keySource: "platform" });
     });
 
     mockCallClaude.mockResolvedValue({
@@ -298,23 +300,20 @@ describe("POST /search/params", () => {
     await request(app)
       .post("/search/params")
       .set("X-Org-Id", "org_test")
-      .send({ ...BASE_BODY, keySource: "app" })
+      .set("X-User-Id", "user_test")
+      .send(BASE_BODY)
       .expect(200);
 
-    // Should call getAppKey for both providers
-    const expectedCaller = { callerMethod: "POST", callerPath: "/search/params" };
-    expect(mockGetAppKey).toHaveBeenCalledWith("app-1", "apollo", expectedCaller);
-    expect(mockGetAppKey).toHaveBeenCalledWith("app-1", "anthropic", expectedCaller);
-    expect(mockGetByokKey).not.toHaveBeenCalled();
-    expect(mockCallClaude).toHaveBeenCalledWith(
-      "platform-anthropic-key",
-      expect.any(String),
-      expect.any(String)
-    );
-    expect(mockSearchPeople).toHaveBeenCalledWith(
-      "platform-apollo-key",
-      expect.any(Object)
-    );
+    // Anthropic costs should use "org" costSource
+    expect(mockAddCosts).toHaveBeenCalledWith("run-1", [
+      { costName: "anthropic-sonnet-4.6-tokens-input", costSource: "org", quantity: 100 },
+      { costName: "anthropic-sonnet-4.6-tokens-output", costSource: "org", quantity: 20 },
+    ]);
+
+    // Apollo costs should use "platform" costSource
+    expect(mockAddCosts).toHaveBeenCalledWith("run-1", [
+      { costName: "apollo-search-credit", costSource: "platform", quantity: 1 },
+    ]);
   });
 
   // ─── Request validation ──────────────────────────────────────────────────
@@ -323,31 +322,12 @@ describe("POST /search/params", () => {
     const res = await request(app)
       .post("/search/params")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({ ...BASE_BODY, context: undefined })
       .expect(400);
 
     expect(res.body.error).toBe("Invalid request");
     expect(mockCallClaude).not.toHaveBeenCalled();
-  });
-
-  it("returns 400 when keySource is missing", async () => {
-    const res = await request(app)
-      .post("/search/params")
-      .set("X-Org-Id", "org_test")
-      .send({ ...BASE_BODY, keySource: undefined })
-      .expect(400);
-
-    expect(res.body.error).toBe("Invalid request");
-  });
-
-  it("returns 400 when keySource is invalid value", async () => {
-    const res = await request(app)
-      .post("/search/params")
-      .set("X-Org-Id", "org_test")
-      .send({ ...BASE_BODY, keySource: "invalid" })
-      .expect(400);
-
-    expect(res.body.error).toBe("Invalid request");
   });
 
   // ─── LLM returns markdown-wrapped JSON ───────────────────────────────────
@@ -364,6 +344,7 @@ describe("POST /search/params", () => {
     const res = await request(app)
       .post("/search/params")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send(BASE_BODY)
       .expect(200);
 
@@ -385,6 +366,7 @@ describe("POST /search/params", () => {
     await request(app)
       .post("/search/params")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send({ ...BASE_BODY, workflowName: "fetch-lead" })
       .expect(200);
 
@@ -405,6 +387,7 @@ describe("POST /search/params", () => {
     await request(app)
       .post("/search/params")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send(BASE_BODY)
       .expect(200);
 
@@ -421,6 +404,7 @@ describe("POST /search/params", () => {
     const res = await request(app)
       .post("/search/params")
       .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
       .send(BASE_BODY)
       .expect(500);
 
