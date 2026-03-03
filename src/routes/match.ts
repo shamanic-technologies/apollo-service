@@ -46,11 +46,16 @@ async function findCachedMatch(
  */
 router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
+    const { runId, brandId, campaignId, workflowName } = req;
+    if (!runId || !brandId || !campaignId) {
+      return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
+    }
+
     const parsed = MatchRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
     }
-    const { firstName, lastName, organizationDomain, runId, brandId, campaignId, workflowName } = parsed.data;
+    const { firstName, lastName, organizationDomain } = parsed.data;
 
     // Check cache first
     const cached = await findCachedMatch(firstName, lastName, organizationDomain);
@@ -127,11 +132,16 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
  */
 router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
+    const { runId, brandId, campaignId, workflowName } = req;
+    if (!runId || !brandId || !campaignId) {
+      return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
+    }
+
     const parsed = MatchBulkRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
     }
-    const { items, runId, brandId, campaignId, workflowName } = parsed.data;
+    const { items } = parsed.data;
 
     const batchRun = await createRun({
       orgId: req.orgId!,

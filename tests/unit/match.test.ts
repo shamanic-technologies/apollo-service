@@ -24,6 +24,10 @@ vi.mock("../../src/middleware/auth.js", () => ({
   serviceAuth: (req: any, _res: any, next: any) => {
     req.orgId = req.headers["x-org-id"] || "org-internal-123";
     req.userId = req.headers["x-user-id"] || "user-internal-456";
+    if (req.headers["x-run-id"]) req.runId = req.headers["x-run-id"];
+    if (req.headers["x-brand-id"]) req.brandId = req.headers["x-brand-id"];
+    if (req.headers["x-campaign-id"]) req.campaignId = req.headers["x-campaign-id"];
+    if (req.headers["x-workflow-name"]) req.workflowName = req.headers["x-workflow-name"];
     next();
   },
 }));
@@ -102,11 +106,20 @@ function createTestApp() {
   return app;
 }
 
-const BASE_BODY = {
-  runId: "run-abc",
-  brandId: "brand-1",
-  campaignId: "campaign-1",
+const BASE_HEADERS = {
+  "X-Run-Id": "run-abc",
+  "X-Brand-Id": "brand-1",
+  "X-Campaign-Id": "campaign-1",
 };
+
+function setBaseHeaders(req: request.Test): request.Test {
+  return req
+    .set("X-Org-Id", "org_test")
+    .set("X-User-Id", "user_test")
+    .set("X-Run-Id", BASE_HEADERS["X-Run-Id"])
+    .set("X-Brand-Id", BASE_HEADERS["X-Brand-Id"])
+    .set("X-Campaign-Id", BASE_HEADERS["X-Campaign-Id"]);
+}
 
 // ─── POST /match ────────────────────────────────────────────────────────────
 
@@ -135,40 +148,36 @@ describe("POST /match", () => {
   // ─── Validation ──────────────────────────────────────────────────────────
 
   it("should return 400 when firstName is missing", async () => {
-    const res = await request(app)
-      .post("/match")
-      .set("X-Org-Id", "org_test")
-      .set("X-User-Id", "user_test")
-      .send({ lastName: "Doe", organizationDomain: "acme.com", ...BASE_BODY })
+    const res = await setBaseHeaders(request(app).post("/match"))
+      .send({ lastName: "Doe", organizationDomain: "acme.com" })
       .expect(400);
 
     expect(res.body.error).toBe("Invalid request");
     expect(mockCreateRun).not.toHaveBeenCalled();
   });
 
-  it("should return 400 when runId is missing", async () => {
-    await request(app)
+  it("should return 400 when x-run-id header is missing", async () => {
+    const res = await request(app)
       .post("/match")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
+      .set("X-Brand-Id", "brand-1")
+      .set("X-Campaign-Id", "campaign-1")
       .send({
         firstName: "John",
         lastName: "Doe",
         organizationDomain: "acme.com",
-        brandId: "brand-1",
-        campaignId: "campaign-1",
       })
       .expect(400);
+
+    expect(res.body.error).toContain("x-run-id");
   });
 
   // ─── Cache miss happy path ────────────────────────────────────────────────
 
   it("should call Apollo and return person on cache miss", async () => {
-    const res = await request(app)
-      .post("/match")
-      .set("X-Org-Id", "org_test")
-      .set("X-User-Id", "user_test")
-      .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com", ...BASE_BODY })
+    const res = await setBaseHeaders(request(app).post("/match"))
+      .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" })
       .expect(200);
 
     expect(mockMatchPersonByName).toHaveBeenCalledWith("fake-apollo-key", "John", "Doe", "acme.com");
@@ -182,11 +191,8 @@ describe("POST /match", () => {
   // ─── Cost tracking ───────────────────────────────────────────────────────
 
   it("should charge apollo-person-match-credit with costSource when email is found", async () => {
-    await request(app)
-      .post("/match")
-      .set("X-Org-Id", "org_test")
-      .set("X-User-Id", "user_test")
-      .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com", ...BASE_BODY })
+    await setBaseHeaders(request(app).post("/match"))
+      .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" })
       .expect(200);
 
     const matchCalls = mockAddCosts.mock.calls.filter(([, items]) =>
@@ -205,11 +211,8 @@ describe("POST /match", () => {
       person: { ...MOCK_PERSON, email: null, email_status: null },
     });
 
-    await request(app)
-      .post("/match")
-      .set("X-Org-Id", "org_test")
-      .set("X-User-Id", "user_test")
-      .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com", ...BASE_BODY })
+    await setBaseHeaders(request(app).post("/match"))
+      .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" })
       .expect(200);
 
     expect(mockAddCosts).not.toHaveBeenCalled();
@@ -218,11 +221,8 @@ describe("POST /match", () => {
   it("should NOT charge when Apollo returns no match", async () => {
     mockMatchPersonByName.mockResolvedValueOnce({ person: null });
 
-    const res = await request(app)
-      .post("/match")
-      .set("X-Org-Id", "org_test")
-      .set("X-User-Id", "user_test")
-      .send({ firstName: "Nobody", lastName: "Exists", organizationDomain: "none.com", ...BASE_BODY })
+    const res = await setBaseHeaders(request(app).post("/match"))
+      .send({ firstName: "Nobody", lastName: "Exists", organizationDomain: "none.com" })
       .expect(200);
 
     expect(res.body.person).toBeNull();
@@ -258,11 +258,8 @@ describe("POST /match", () => {
       }),
     } as any);
 
-    const res = await request(app)
-      .post("/match")
-      .set("X-Org-Id", "org_test")
-      .set("X-User-Id", "user_test")
-      .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com", ...BASE_BODY })
+    const res = await setBaseHeaders(request(app).post("/match"))
+      .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" })
       .expect(200);
 
     expect(res.body.cached).toBe(true);
@@ -275,16 +272,12 @@ describe("POST /match", () => {
   // ─── workflowName propagation ─────────────────────────────────────────────
 
   it("should pass workflowName to createRun", async () => {
-    await request(app)
-      .post("/match")
-      .set("X-Org-Id", "org_test")
-      .set("X-User-Id", "user_test")
+    await setBaseHeaders(request(app).post("/match"))
+      .set("X-Workflow-Name", "fetch-lead")
       .send({
         firstName: "John",
         lastName: "Doe",
         organizationDomain: "acme.com",
-        ...BASE_BODY,
-        workflowName: "fetch-lead",
       })
       .expect(200);
 
@@ -299,11 +292,8 @@ describe("POST /match", () => {
     mockMatchPersonByName.mockRejectedValueOnce(new Error("Apollo match failed: 429"));
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const res = await request(app)
-      .post("/match")
-      .set("X-Org-Id", "org_test")
-      .set("X-User-Id", "user_test")
-      .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com", ...BASE_BODY })
+    const res = await setBaseHeaders(request(app).post("/match"))
+      .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" })
       .expect(500);
 
     expect(res.body.error).toContain("Apollo match failed: 429");
@@ -314,11 +304,8 @@ describe("POST /match", () => {
     mockCreateRun.mockRejectedValue(new Error("runs-service down"));
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await request(app)
-      .post("/match")
-      .set("X-Org-Id", "org_test")
-      .set("X-User-Id", "user_test")
-      .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com", ...BASE_BODY })
+    await setBaseHeaders(request(app).post("/match"))
+      .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" })
       .expect(500);
 
     errorSpy.mockRestore();
@@ -352,11 +339,8 @@ describe("POST /match/bulk", () => {
   // ─── Validation ──────────────────────────────────────────────────────────
 
   it("should return 400 when items array is empty", async () => {
-    await request(app)
-      .post("/match/bulk")
-      .set("X-Org-Id", "org_test")
-      .set("X-User-Id", "user_test")
-      .send({ items: [], ...BASE_BODY })
+    await setBaseHeaders(request(app).post("/match/bulk"))
+      .send({ items: [] })
       .expect(400);
   });
 
@@ -367,11 +351,8 @@ describe("POST /match/bulk", () => {
       organizationDomain: `company${i}.com`,
     }));
 
-    await request(app)
-      .post("/match/bulk")
-      .set("X-Org-Id", "org_test")
-      .set("X-User-Id", "user_test")
-      .send({ items, ...BASE_BODY })
+    await setBaseHeaders(request(app).post("/match/bulk"))
+      .send({ items })
       .expect(400);
   });
 
@@ -382,16 +363,12 @@ describe("POST /match/bulk", () => {
       matches: [MOCK_PERSON, { ...MOCK_PERSON, id: "person-2", email: "p2@acme.com" }],
     });
 
-    await request(app)
-      .post("/match/bulk")
-      .set("X-Org-Id", "org_test")
-      .set("X-User-Id", "user_test")
+    await setBaseHeaders(request(app).post("/match/bulk"))
       .send({
         items: [
           { firstName: "John", lastName: "Doe", organizationDomain: "acme.com" },
           { firstName: "Jane", lastName: "Smith", organizationDomain: "acme.com" },
         ],
-        ...BASE_BODY,
       })
       .expect(200);
 
@@ -410,17 +387,13 @@ describe("POST /match/bulk", () => {
       ],
     });
 
-    await request(app)
-      .post("/match/bulk")
-      .set("X-Org-Id", "org_test")
-      .set("X-User-Id", "user_test")
+    await setBaseHeaders(request(app).post("/match/bulk"))
       .send({
         items: [
           { firstName: "A", lastName: "B", organizationDomain: "acme.com" },
           { firstName: "C", lastName: "D", organizationDomain: "acme.com" },
           { firstName: "E", lastName: "F", organizationDomain: "acme.com" },
         ],
-        ...BASE_BODY,
       })
       .expect(200);
 
@@ -435,16 +408,12 @@ describe("POST /match/bulk", () => {
       matches: [MOCK_PERSON, null],
     });
 
-    const res = await request(app)
-      .post("/match/bulk")
-      .set("X-Org-Id", "org_test")
-      .set("X-User-Id", "user_test")
+    const res = await setBaseHeaders(request(app).post("/match/bulk"))
       .send({
         items: [
           { firstName: "John", lastName: "Doe", organizationDomain: "acme.com" },
           { firstName: "Nobody", lastName: "Exists", organizationDomain: "none.com" },
         ],
-        ...BASE_BODY,
       })
       .expect(200);
 
@@ -480,13 +449,9 @@ describe("POST /match/bulk", () => {
       }),
     } as any);
 
-    const res = await request(app)
-      .post("/match/bulk")
-      .set("X-Org-Id", "org_test")
-      .set("X-User-Id", "user_test")
+    const res = await setBaseHeaders(request(app).post("/match/bulk"))
       .send({
         items: [{ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" }],
-        ...BASE_BODY,
       })
       .expect(200);
 
@@ -500,13 +465,9 @@ describe("POST /match/bulk", () => {
       matches: [{ ...MOCK_PERSON, email: null }],
     });
 
-    await request(app)
-      .post("/match/bulk")
-      .set("X-Org-Id", "org_test")
-      .set("X-User-Id", "user_test")
+    await setBaseHeaders(request(app).post("/match/bulk"))
       .send({
         items: [{ firstName: "A", lastName: "B", organizationDomain: "acme.com" }],
-        ...BASE_BODY,
       })
       .expect(200);
 
@@ -519,13 +480,9 @@ describe("POST /match/bulk", () => {
     mockBulkMatchPeopleByName.mockRejectedValueOnce(new Error("Apollo bulk match failed: 500"));
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await request(app)
-      .post("/match/bulk")
-      .set("X-Org-Id", "org_test")
-      .set("X-User-Id", "user_test")
+    await setBaseHeaders(request(app).post("/match/bulk"))
       .send({
         items: [{ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" }],
-        ...BASE_BODY,
       })
       .expect(500);
 
@@ -533,14 +490,10 @@ describe("POST /match/bulk", () => {
   });
 
   it("should pass workflowName to createRun", async () => {
-    await request(app)
-      .post("/match/bulk")
-      .set("X-Org-Id", "org_test")
-      .set("X-User-Id", "user_test")
+    await setBaseHeaders(request(app).post("/match/bulk"))
+      .set("X-Workflow-Name", "fetch-lead")
       .send({
         items: [{ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" }],
-        ...BASE_BODY,
-        workflowName: "fetch-lead",
       })
       .expect(200);
 

@@ -21,6 +21,10 @@ vi.mock("../../src/lib/runs-client.js", () => ({
 vi.mock("../../src/middleware/auth.js", () => ({
   serviceAuth: (req: any, _res: any, next: any) => {
     req.orgId = req.headers["x-org-id"] || "org-internal-123";
+    if (req.headers["x-run-id"]) req.runId = req.headers["x-run-id"];
+    if (req.headers["x-brand-id"]) req.brandId = req.headers["x-brand-id"];
+    if (req.headers["x-campaign-id"]) req.campaignId = req.headers["x-campaign-id"];
+    if (req.headers["x-workflow-name"]) req.workflowName = req.headers["x-workflow-name"];
     next();
   },
 }));

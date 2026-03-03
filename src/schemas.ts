@@ -148,6 +148,19 @@ const orgIdHeader = registry.registerParameter(
   })
 );
 
+// ─── Header schemas for OpenAPI ─────────────────────────────────────────────
+
+const basicHeaders = z.object({ "x-org-id": z.string(), "x-user-id": z.string() });
+
+const runContextHeaders = z.object({
+  "x-org-id": z.string(),
+  "x-user-id": z.string(),
+  "x-run-id": z.string().openapi({ description: "Caller's run ID — used as parentRunId when creating child runs", example: "run-abc-123" }),
+  "x-brand-id": z.string().openapi({ description: "Brand ID", example: "brand-1" }),
+  "x-campaign-id": z.string().openapi({ description: "Campaign ID", example: "campaign-1" }),
+  "x-workflow-name": z.string().optional().openapi({ description: "Workflow name for run tracking", example: "fetch-lead" }),
+});
+
 // ─── GET /health ─────────────────────────────────────────────────────────────
 
 const HealthResponseSchema = z
@@ -196,10 +209,6 @@ registry.registerPath({
 
 export const SearchRequestSchema = z
   .object({
-    runId: z.string().openapi({ description: "Runs-service parent run ID. Required — results are stored in DB and costs tracked via runs-service.", example: "run-abc-123" }),
-    brandId: z.string(),
-    campaignId: z.string(),
-    workflowName: z.string().optional().openapi({ description: "Workflow name for run tracking in runs-service.", example: "fetch-lead" }),
     personTitles: z.array(z.string().min(1)).optional().openapi({
       description: "Filter by job titles. Combined with other filters using AND.",
       example: ["CEO", "CTO", "VP Engineering"],
@@ -288,7 +297,7 @@ registry.registerPath({
   description:
     "Search Apollo's people database. If runId is provided, results are stored in DB and costs tracked via runs-service.",
   request: {
-    headers: z.object({ "x-org-id": z.string(), "x-user-id": z.string() }),
+    headers: runContextHeaders,
     body: {
       content: { "application/json": { schema: SearchRequestSchema } },
       required: true,
@@ -373,22 +382,12 @@ export const SearchFiltersSchema = z
 
 export const SearchNextRequestSchema = z
   .object({
-    campaignId: z.string().openapi({
-      description: "Campaign ID — used as the pagination cursor key. One cursor per (orgId, campaignId).",
-      example: "campaign-abc-123",
-    }),
-    brandId: z.string().openapi({ description: "Brand ID.", example: "brand-1" }),
     searchParams: SearchFiltersSchema.optional().openapi({
       description: "Search filters. On first call, provide filters to create a cursor at page 1. On subsequent calls, omit to continue from the last page. If provided and different from the stored filters, the cursor resets to page 1.",
     }),
-    runId: z.string().openapi({
-      description: "Runs-service parent run ID. Required — a search audit record is stored and 1 apollo-search-credit is tracked.",
-      example: "run-abc-123",
-    }),
-    workflowName: z.string().optional().openapi({ description: "Workflow name for run tracking in runs-service.", example: "fetch-lead" }),
   })
   .openapi("SearchNextRequest", {
-    description: "Request body for server-managed search pagination. The cursor is keyed by (orgId, campaignId).",
+    description: "Request body for server-managed search pagination. The cursor is keyed by (orgId, x-campaign-id header).",
   });
 
 const SearchNextResponseSchema = z
@@ -408,10 +407,9 @@ registry.registerPath({
   description:
     "Server-managed pagination. First call with searchParams creates a cursor at page 1. Subsequent calls (with or without searchParams) return the next page. Each call returns one page of 25 people and advances the cursor. When done=true, all pages are exhausted. If searchParams differ from the stored cursor, pagination resets to page 1.",
   request: {
-    headers: z.object({ "x-org-id": z.string(), "x-user-id": z.string() }),
+    headers: runContextHeaders,
     body: {
       content: { "application/json": { schema: SearchNextRequestSchema } },
-      required: true,
     },
   },
   responses: {
@@ -435,10 +433,6 @@ registry.registerPath({
 export const EnrichRequestSchema = z
   .object({
     apolloPersonId: z.string().min(1, "apolloPersonId is required"),
-    runId: z.string().openapi({ description: "Runs-service parent run ID. Required — enrichment record is stored and 1 apollo-enrichment-credit is tracked.", example: "run-abc-123" }),
-    brandId: z.string(),
-    campaignId: z.string(),
-    workflowName: z.string().optional().openapi({ description: "Workflow name for run tracking in runs-service.", example: "fetch-lead" }),
   })
   .openapi("EnrichRequest");
 
@@ -456,7 +450,7 @@ registry.registerPath({
   description:
     "Enrich a single person by Apollo person ID. Uses 12-month cache. If runId is provided, stores record and tracks costs.",
   request: {
-    headers: z.object({ "x-org-id": z.string(), "x-user-id": z.string() }),
+    headers: runContextHeaders,
     body: {
       content: { "application/json": { schema: EnrichRequestSchema } },
       required: true,
@@ -485,16 +479,6 @@ export const MatchRequestSchema = z
     firstName: z.string().min(1, "firstName is required"),
     lastName: z.string().min(1, "lastName is required"),
     organizationDomain: z.string().min(1, "organizationDomain is required"),
-    runId: z.string().openapi({
-      description: "Runs-service parent run ID. Required — match record is stored and costs tracked.",
-      example: "run-abc-123",
-    }),
-    brandId: z.string(),
-    campaignId: z.string(),
-    workflowName: z.string().optional().openapi({
-      description: "Workflow name for run tracking in runs-service.",
-      example: "fetch-lead",
-    }),
   })
   .openapi("MatchRequest");
 
@@ -515,7 +499,7 @@ registry.registerPath({
   description:
     "Match a single person by firstName + lastName + organizationDomain. Uses 12-month cache. Costs tracked as apollo-person-match-credit (only charged when email is found).",
   request: {
-    headers: z.object({ "x-org-id": z.string(), "x-user-id": z.string() }),
+    headers: runContextHeaders,
     body: {
       content: { "application/json": { schema: MatchRequestSchema } },
       required: true,
@@ -553,16 +537,6 @@ export const MatchBulkRequestSchema = z
       .array(MatchBulkItemSchema)
       .min(1, "At least one item required")
       .max(10, "Maximum 10 items per request"),
-    runId: z.string().openapi({
-      description: "Runs-service parent run ID. A single run covers the entire batch.",
-      example: "run-abc-123",
-    }),
-    brandId: z.string(),
-    campaignId: z.string(),
-    workflowName: z.string().optional().openapi({
-      description: "Workflow name for run tracking in runs-service.",
-      example: "fetch-lead",
-    }),
   })
   .openapi("MatchBulkRequest");
 
@@ -589,7 +563,7 @@ registry.registerPath({
   description:
     "Match up to 10 people by firstName + lastName + organizationDomain. Each item is cached independently. A single run covers the whole batch; costs tracked per item (apollo-person-match-credit, only when email found).",
   request: {
-    headers: z.object({ "x-org-id": z.string(), "x-user-id": z.string() }),
+    headers: runContextHeaders,
     body: {
       content: { "application/json": { schema: MatchBulkRequestSchema } },
       required: true,
@@ -637,7 +611,7 @@ registry.registerPath({
   path: "/searches/{runId}",
   summary: "Get all searches for a run",
   request: {
-    headers: z.object({ "x-org-id": z.string(), "x-user-id": z.string() }),
+    headers: basicHeaders,
     params: z.object({ runId: z.string() }),
   },
   responses: {
@@ -738,7 +712,7 @@ registry.registerPath({
   path: "/enrichments/{runId}",
   summary: "Get all enrichments for a run",
   request: {
-    headers: z.object({ "x-org-id": z.string(), "x-user-id": z.string() }),
+    headers: basicHeaders,
     params: z.object({ runId: z.string() }),
   },
   responses: {
@@ -783,7 +757,7 @@ registry.registerPath({
   description:
     "Returns aggregated search and enrichment stats. All body filters are optional; orgId is always applied from auth.",
   request: {
-    headers: z.object({ "x-org-id": z.string(), "x-user-id": z.string() }),
+    headers: basicHeaders,
     body: {
       content: { "application/json": { schema: StatsRequestSchema } },
       required: false,
@@ -816,7 +790,7 @@ registry.registerPath({
   path: "/reference/industries",
   summary: "Get Apollo industries list",
   request: {
-    headers: z.object({ "x-org-id": z.string(), "x-user-id": z.string() }),
+    headers: basicHeaders,
   },
   responses: {
     200: {
@@ -848,7 +822,7 @@ registry.registerPath({
   path: "/reference/employee-ranges",
   summary: "Get employee range options",
   request: {
-    headers: z.object({ "x-org-id": z.string(), "x-user-id": z.string() }),
+    headers: basicHeaders,
   },
   responses: {
     200: {
@@ -874,13 +848,6 @@ export const SearchParamsRequestSchema = z
       example:
         "We are a B2B SaaS company selling developer tools. Target audience: engineering leaders at mid-size tech companies in the US.",
     }),
-    runId: z.string().openapi({
-      description: "Runs-service parent run ID for cost tracking.",
-      example: "run-abc-123",
-    }),
-    brandId: z.string().openapi({ example: "brand-1" }),
-    campaignId: z.string().openapi({ example: "campaign-1" }),
-    workflowName: z.string().optional().openapi({ description: "Workflow name for run tracking in runs-service.", example: "fetch-lead" }),
   })
   .openapi("SearchParamsRequest");
 
@@ -915,7 +882,7 @@ registry.registerPath({
   description:
     "Takes unstructured context (website content, target audience, etc.) and uses Claude to generate Apollo search filters. Validates against Apollo — if 0 results, retries with broadened filters (max 10 attempts). Returns validated search params guaranteed to produce results, or the best-effort params after 10 attempts.",
   request: {
-    headers: z.object({ "x-org-id": z.string(), "x-user-id": z.string() }),
+    headers: runContextHeaders,
     body: {
       content: { "application/json": { schema: SearchParamsRequestSchema } },
       required: true,
@@ -974,7 +941,7 @@ registry.registerPath({
   description:
     "Validates items against the specified endpoint schema (search, enrich, or bulk-enrich).",
   request: {
-    headers: z.object({ "x-org-id": z.string(), "x-user-id": z.string() }),
+    headers: basicHeaders,
     body: {
       content: { "application/json": { schema: ValidateRequestSchema } },
       required: true,

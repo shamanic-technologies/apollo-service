@@ -32,6 +32,10 @@ vi.mock("../../src/middleware/auth.js", () => ({
   serviceAuth: (req: any, _res: any, next: any) => {
     req.orgId = req.headers["x-org-id"] || "org-internal-123";
     req.userId = req.headers["x-user-id"] || "user-internal-456";
+    if (req.headers["x-run-id"]) req.runId = req.headers["x-run-id"];
+    if (req.headers["x-brand-id"]) req.brandId = req.headers["x-brand-id"];
+    if (req.headers["x-campaign-id"]) req.campaignId = req.headers["x-campaign-id"];
+    if (req.headers["x-workflow-name"]) req.workflowName = req.headers["x-workflow-name"];
     next();
   },
 }));
@@ -201,10 +205,10 @@ describe("Apollo service cost tracking", () => {
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
+      .set("X-Run-Id", "campaign-run-abc")
+      .set("X-Brand-Id", "brand-1")
+      .set("X-Campaign-Id", "campaign-1")
       .send({
-        runId: "campaign-run-abc",
-        brandId: "brand-1",
-        campaignId: "campaign-1",
         personTitles: ["CEO"],
       })
       .expect(200);
@@ -223,10 +227,10 @@ describe("Apollo service cost tracking", () => {
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
+      .set("X-Run-Id", "campaign-run-abc")
+      .set("X-Brand-Id", "brand-1")
+      .set("X-Campaign-Id", "campaign-1")
       .send({
-        runId: "campaign-run-abc",
-        brandId: "brand-1",
-        campaignId: "campaign-1",
         personTitles: ["CEO"],
       })
       .expect(200);
@@ -248,10 +252,10 @@ describe("Apollo service cost tracking", () => {
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
+      .set("X-Run-Id", "campaign-run-abc")
+      .set("X-Brand-Id", "brand-1")
+      .set("X-Campaign-Id", "campaign-1")
       .send({
-        runId: "campaign-run-abc",
-        brandId: "brand-1",
-        campaignId: "campaign-1",
         personTitles: ["CEO"],
       })
       .expect(200);
@@ -276,10 +280,10 @@ describe("Apollo service cost tracking", () => {
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
+      .set("X-Run-Id", "campaign-run-abc")
+      .set("X-Brand-Id", "brand-1")
+      .set("X-Campaign-Id", "campaign-1")
       .send({
-        runId: "campaign-run-abc",
-        brandId: "brand-1",
-        campaignId: "campaign-1",
         personTitles: ["CEO"],
       })
       .expect(500);
@@ -302,10 +306,10 @@ describe("Apollo service cost tracking", () => {
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
+      .set("X-Run-Id", "campaign-run-abc")
+      .set("X-Brand-Id", "brand-1")
+      .set("X-Campaign-Id", "campaign-1")
       .send({
-        runId: "campaign-run-abc",
-        brandId: "brand-1",
-        campaignId: "campaign-1",
         personTitles: ["CEO"],
       })
       .expect(500);
@@ -325,10 +329,10 @@ describe("Apollo service cost tracking", () => {
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
+      .set("X-Run-Id", "campaign-run-abc")
+      .set("X-Brand-Id", "brand-1")
+      .set("X-Campaign-Id", "campaign-1")
       .send({
-        runId: "campaign-run-abc",
-        brandId: "brand-1",
-        campaignId: "campaign-1",
         personTitles: ["CEO"],
       })
       .expect(500);
@@ -344,10 +348,10 @@ describe("Apollo service cost tracking", () => {
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
+      .set("X-Run-Id", "campaign-run-abc")
+      .set("X-Brand-Id", "brand-1")
+      .set("X-Campaign-Id", "campaign-1")
       .send({
-        runId: "campaign-run-abc",
-        brandId: "brand-1",
-        campaignId: "campaign-1",
         personTitles: ["CEO"],
       })
       .expect(200);
@@ -359,20 +363,20 @@ describe("Apollo service cost tracking", () => {
     );
   });
 
-  it("should return 400 when no runId provided", async () => {
+  it("should return 400 when no x-run-id header provided", async () => {
     const res = await request(app)
       .post("/search")
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
+      .set("X-Brand-Id", "brand-1")
+      .set("X-Campaign-Id", "campaign-1")
       .send({
-        brandId: "brand-1",
-        campaignId: "campaign-1",
         personTitles: ["CEO"],
       })
       .expect(400);
 
-    expect(res.body.error).toBe("Invalid request");
+    expect(res.body.error).toContain("x-run-id");
     expect(mockCreateRun).not.toHaveBeenCalled();
     expect(mockSearchPeople).not.toHaveBeenCalled();
   });
@@ -385,11 +389,11 @@ describe("Apollo service cost tracking", () => {
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
+      .set("X-Run-Id", "campaign-run-abc")
+      .set("X-Brand-Id", "brand-1")
+      .set("X-Campaign-Id", "campaign-1")
       .send({
         apolloPersonId: "person-0",
-        runId: "campaign-run-abc",
-        brandId: "brand-1",
-        campaignId: "campaign-1",
       })
       .expect(200);
 
@@ -438,11 +442,11 @@ describe("Apollo service cost tracking", () => {
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
+      .set("X-Run-Id", "campaign-run-abc")
+      .set("X-Brand-Id", "brand-1")
+      .set("X-Campaign-Id", "campaign-1")
       .send({
         apolloPersonId: "person-0",
-        runId: "campaign-run-abc",
-        brandId: "brand-1",
-        campaignId: "campaign-1",
       })
       .expect(200);
 
@@ -471,11 +475,11 @@ describe("Apollo service cost tracking", () => {
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
+      .set("X-Run-Id", "campaign-run-abc")
+      .set("X-Brand-Id", "brand-1")
+      .set("X-Campaign-Id", "campaign-1")
       .send({
         apolloPersonId: "person-0",
-        runId: "campaign-run-abc",
-        brandId: "brand-1",
-        campaignId: "campaign-1",
       })
       .expect(500);
 
@@ -518,11 +522,11 @@ describe("Apollo service cost tracking", () => {
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
+      .set("X-Run-Id", "campaign-run-abc")
+      .set("X-Brand-Id", "brand-1")
+      .set("X-Campaign-Id", "campaign-1")
       .send({
         apolloPersonId: "person-0",
-        runId: "campaign-run-abc",
-        brandId: "brand-1",
-        campaignId: "campaign-1",
       })
       .expect(200);
 
@@ -546,20 +550,20 @@ describe("Apollo service cost tracking", () => {
     expect(mockEnrichPerson).not.toHaveBeenCalled();
   });
 
-  it("should return 400 for POST /enrich when no runId provided", async () => {
+  it("should return 400 for POST /enrich when no x-run-id header provided", async () => {
     const res = await request(app)
       .post("/enrich")
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
+      .set("X-Brand-Id", "brand-1")
+      .set("X-Campaign-Id", "campaign-1")
       .send({
         apolloPersonId: "person-0",
-        brandId: "brand-1",
-        campaignId: "campaign-1",
       })
       .expect(400);
 
-    expect(res.body.error).toBe("Invalid request");
+    expect(res.body.error).toContain("x-run-id");
     expect(mockCreateRun).not.toHaveBeenCalled();
     expect(mockEnrichPerson).not.toHaveBeenCalled();
   });
@@ -572,12 +576,12 @@ describe("Apollo service cost tracking", () => {
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
+      .set("X-Run-Id", "campaign-run-abc")
+      .set("X-Brand-Id", "brand-1")
+      .set("X-Campaign-Id", "campaign-1")
+      .set("X-Workflow-Name", "fetch-lead")
       .send({
-        runId: "campaign-run-abc",
-        brandId: "brand-1",
-        campaignId: "campaign-1",
         personTitles: ["CEO"],
-        workflowName: "fetch-lead",
       })
       .expect(200);
 
@@ -592,12 +596,12 @@ describe("Apollo service cost tracking", () => {
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
+      .set("X-Run-Id", "campaign-run-abc")
+      .set("X-Brand-Id", "brand-1")
+      .set("X-Campaign-Id", "campaign-1")
+      .set("X-Workflow-Name", "fetch-lead")
       .send({
         apolloPersonId: "person-0",
-        runId: "campaign-run-abc",
-        brandId: "brand-1",
-        campaignId: "campaign-1",
-        workflowName: "fetch-lead",
       })
       .expect(200);
 

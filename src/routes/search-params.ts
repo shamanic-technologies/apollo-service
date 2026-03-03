@@ -18,12 +18,17 @@ const MAX_ATTEMPTS = 10;
  */
 router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
+    const { runId, brandId, campaignId, workflowName } = req;
+    if (!runId || !brandId || !campaignId) {
+      return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
+    }
+
     const parsed = SearchParamsRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
     }
 
-    const { context, runId, brandId, campaignId, workflowName } = parsed.data;
+    const { context } = parsed.data;
 
     // Fetch keys — key-service auto-resolves source per provider
     const caller = { callerMethod: "POST", callerPath: "/search/params" };

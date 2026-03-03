@@ -22,6 +22,10 @@ vi.mock("../../src/middleware/auth.js", () => ({
   serviceAuth: (req: any, _res: any, next: any) => {
     req.orgId = req.headers["x-org-id"] || "org-internal-123";
     req.userId = req.headers["x-user-id"] || "user-internal-456";
+    if (req.headers["x-run-id"]) req.runId = req.headers["x-run-id"];
+    if (req.headers["x-brand-id"]) req.brandId = req.headers["x-brand-id"];
+    if (req.headers["x-campaign-id"]) req.campaignId = req.headers["x-campaign-id"];
+    if (req.headers["x-workflow-name"]) req.workflowName = req.headers["x-workflow-name"];
     next();
   },
 }));
@@ -61,9 +65,12 @@ vi.mock("../../src/lib/anthropic-client.js", () => ({
 
 const BASE_BODY = {
   context: "We sell B2B developer tools to engineering leaders",
-  runId: "run-parent-1",
-  brandId: "brand-1",
-  campaignId: "campaign-1",
+};
+
+const BASE_HEADERS = {
+  "X-Run-Id": "run-parent-1",
+  "X-Brand-Id": "brand-1",
+  "X-Campaign-Id": "campaign-1",
 };
 
 function createTestApp() {
@@ -112,6 +119,7 @@ describe("POST /search/params", () => {
       .post("/search/params")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
       .send(BASE_BODY)
       .expect(200);
 
@@ -146,6 +154,7 @@ describe("POST /search/params", () => {
       .post("/search/params")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
       .send(BASE_BODY)
       .expect(200);
 
@@ -171,6 +180,7 @@ describe("POST /search/params", () => {
       .post("/search/params")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
       .send(BASE_BODY)
       .expect(200);
 
@@ -201,6 +211,7 @@ describe("POST /search/params", () => {
       .post("/search/params")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
       .send(BASE_BODY)
       .expect(200);
 
@@ -225,6 +236,7 @@ describe("POST /search/params", () => {
       .post("/search/params")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
       .send(BASE_BODY)
       .expect(200);
 
@@ -263,6 +275,7 @@ describe("POST /search/params", () => {
       .post("/search/params")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
       .send(BASE_BODY)
       .expect(200);
 
@@ -301,6 +314,7 @@ describe("POST /search/params", () => {
       .post("/search/params")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
       .send(BASE_BODY)
       .expect(200);
 
@@ -323,6 +337,7 @@ describe("POST /search/params", () => {
       .post("/search/params")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
       .send({ ...BASE_BODY, context: undefined })
       .expect(400);
 
@@ -345,6 +360,7 @@ describe("POST /search/params", () => {
       .post("/search/params")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
       .send(BASE_BODY)
       .expect(200);
 
@@ -367,7 +383,8 @@ describe("POST /search/params", () => {
       .post("/search/params")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
-      .send({ ...BASE_BODY, workflowName: "fetch-lead" })
+      .set({ ...BASE_HEADERS, "X-Workflow-Name": "fetch-lead" })
+      .send(BASE_BODY)
       .expect(200);
 
     expect(mockCreateRun).toHaveBeenCalledWith(
@@ -388,6 +405,7 @@ describe("POST /search/params", () => {
       .post("/search/params")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
       .send(BASE_BODY)
       .expect(200);
 
@@ -405,6 +423,7 @@ describe("POST /search/params", () => {
       .post("/search/params")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
       .send(BASE_BODY)
       .expect(500);
 

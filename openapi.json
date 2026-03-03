@@ -449,22 +449,6 @@
       "SearchRequest": {
         "type": "object",
         "properties": {
-          "runId": {
-            "type": "string",
-            "description": "Runs-service parent run ID. Required — results are stored in DB and costs tracked via runs-service.",
-            "example": "run-abc-123"
-          },
-          "brandId": {
-            "type": "string"
-          },
-          "campaignId": {
-            "type": "string"
-          },
-          "workflowName": {
-            "type": "string",
-            "description": "Workflow name for run tracking in runs-service.",
-            "example": "fetch-lead"
-          },
           "personTitles": {
             "type": "array",
             "items": {
@@ -654,11 +638,6 @@
             "maximum": 100
           }
         },
-        "required": [
-          "runId",
-          "brandId",
-          "campaignId"
-        ],
         "description": "All search filters are combined using AND. Using too many filters simultaneously may return 0 results — start broad and narrow down."
       },
       "SearchNextResponse": {
@@ -690,36 +669,11 @@
       "SearchNextRequest": {
         "type": "object",
         "properties": {
-          "campaignId": {
-            "type": "string",
-            "description": "Campaign ID — used as the pagination cursor key. One cursor per (orgId, campaignId).",
-            "example": "campaign-abc-123"
-          },
-          "brandId": {
-            "type": "string",
-            "description": "Brand ID.",
-            "example": "brand-1"
-          },
           "searchParams": {
             "$ref": "#/components/schemas/SearchFilters"
-          },
-          "runId": {
-            "type": "string",
-            "description": "Runs-service parent run ID. Required — a search audit record is stored and 1 apollo-search-credit is tracked.",
-            "example": "run-abc-123"
-          },
-          "workflowName": {
-            "type": "string",
-            "description": "Workflow name for run tracking in runs-service.",
-            "example": "fetch-lead"
           }
         },
-        "required": [
-          "campaignId",
-          "brandId",
-          "runId"
-        ],
-        "description": "Request body for server-managed search pagination. The cursor is keyed by (orgId, campaignId)."
+        "description": "Request body for server-managed search pagination. The cursor is keyed by (orgId, x-campaign-id header)."
       },
       "SearchFilters": {
         "type": "object",
@@ -934,29 +888,10 @@
           "apolloPersonId": {
             "type": "string",
             "minLength": 1
-          },
-          "runId": {
-            "type": "string",
-            "description": "Runs-service parent run ID. Required — enrichment record is stored and 1 apollo-enrichment-credit is tracked.",
-            "example": "run-abc-123"
-          },
-          "brandId": {
-            "type": "string"
-          },
-          "campaignId": {
-            "type": "string"
-          },
-          "workflowName": {
-            "type": "string",
-            "description": "Workflow name for run tracking in runs-service.",
-            "example": "fetch-lead"
           }
         },
         "required": [
-          "apolloPersonId",
-          "runId",
-          "brandId",
-          "campaignId"
+          "apolloPersonId"
         ]
       },
       "MatchResponse": {
@@ -1001,31 +936,12 @@
           "organizationDomain": {
             "type": "string",
             "minLength": 1
-          },
-          "runId": {
-            "type": "string",
-            "description": "Runs-service parent run ID. Required — match record is stored and costs tracked.",
-            "example": "run-abc-123"
-          },
-          "brandId": {
-            "type": "string"
-          },
-          "campaignId": {
-            "type": "string"
-          },
-          "workflowName": {
-            "type": "string",
-            "description": "Workflow name for run tracking in runs-service.",
-            "example": "fetch-lead"
           }
         },
         "required": [
           "firstName",
           "lastName",
-          "organizationDomain",
-          "runId",
-          "brandId",
-          "campaignId"
+          "organizationDomain"
         ]
       },
       "MatchBulkResponse": {
@@ -1080,29 +996,10 @@
             },
             "minItems": 1,
             "maxItems": 10
-          },
-          "runId": {
-            "type": "string",
-            "description": "Runs-service parent run ID. A single run covers the entire batch.",
-            "example": "run-abc-123"
-          },
-          "brandId": {
-            "type": "string"
-          },
-          "campaignId": {
-            "type": "string"
-          },
-          "workflowName": {
-            "type": "string",
-            "description": "Workflow name for run tracking in runs-service.",
-            "example": "fetch-lead"
           }
         },
         "required": [
-          "items",
-          "runId",
-          "brandId",
-          "campaignId"
+          "items"
         ]
       },
       "MatchBulkItem": {
@@ -1743,31 +1640,10 @@
             "minLength": 1,
             "description": "Unstructured context about the company — website content, target audience description, ICP notes, or any combination. The LLM extracts what it needs.",
             "example": "We are a B2B SaaS company selling developer tools. Target audience: engineering leaders at mid-size tech companies in the US."
-          },
-          "runId": {
-            "type": "string",
-            "description": "Runs-service parent run ID for cost tracking.",
-            "example": "run-abc-123"
-          },
-          "brandId": {
-            "type": "string",
-            "example": "brand-1"
-          },
-          "campaignId": {
-            "type": "string",
-            "example": "campaign-1"
-          },
-          "workflowName": {
-            "type": "string",
-            "description": "Workflow name for run tracking in runs-service.",
-            "example": "fetch-lead"
           }
         },
         "required": [
-          "context",
-          "runId",
-          "brandId",
-          "campaignId"
+          "context"
         ]
       },
       "ValidateResponse": {
@@ -1925,6 +1801,50 @@
             "required": true,
             "name": "x-user-id",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Caller's run ID — used as parentRunId when creating child runs",
+              "example": "run-abc-123"
+            },
+            "required": true,
+            "description": "Caller's run ID — used as parentRunId when creating child runs",
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID",
+              "example": "brand-1"
+            },
+            "required": true,
+            "description": "Brand ID",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID",
+              "example": "campaign-1"
+            },
+            "required": true,
+            "description": "Campaign ID",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow name for run tracking",
+              "example": "fetch-lead"
+            },
+            "required": false,
+            "description": "Workflow name for run tracking",
+            "name": "x-workflow-name",
+            "in": "header"
           }
         ],
         "requestBody": {
@@ -1991,10 +1911,53 @@
             "required": true,
             "name": "x-user-id",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Caller's run ID — used as parentRunId when creating child runs",
+              "example": "run-abc-123"
+            },
+            "required": true,
+            "description": "Caller's run ID — used as parentRunId when creating child runs",
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID",
+              "example": "brand-1"
+            },
+            "required": true,
+            "description": "Brand ID",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID",
+              "example": "campaign-1"
+            },
+            "required": true,
+            "description": "Campaign ID",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow name for run tracking",
+              "example": "fetch-lead"
+            },
+            "required": false,
+            "description": "Workflow name for run tracking",
+            "name": "x-workflow-name",
+            "in": "header"
           }
         ],
         "requestBody": {
-          "required": true,
           "content": {
             "application/json": {
               "schema": {
@@ -2056,6 +2019,50 @@
             },
             "required": true,
             "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Caller's run ID — used as parentRunId when creating child runs",
+              "example": "run-abc-123"
+            },
+            "required": true,
+            "description": "Caller's run ID — used as parentRunId when creating child runs",
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID",
+              "example": "brand-1"
+            },
+            "required": true,
+            "description": "Brand ID",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID",
+              "example": "campaign-1"
+            },
+            "required": true,
+            "description": "Campaign ID",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow name for run tracking",
+              "example": "fetch-lead"
+            },
+            "required": false,
+            "description": "Workflow name for run tracking",
+            "name": "x-workflow-name",
             "in": "header"
           }
         ],
@@ -2123,6 +2130,50 @@
             "required": true,
             "name": "x-user-id",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Caller's run ID — used as parentRunId when creating child runs",
+              "example": "run-abc-123"
+            },
+            "required": true,
+            "description": "Caller's run ID — used as parentRunId when creating child runs",
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID",
+              "example": "brand-1"
+            },
+            "required": true,
+            "description": "Brand ID",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID",
+              "example": "campaign-1"
+            },
+            "required": true,
+            "description": "Campaign ID",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow name for run tracking",
+              "example": "fetch-lead"
+            },
+            "required": false,
+            "description": "Workflow name for run tracking",
+            "name": "x-workflow-name",
+            "in": "header"
           }
         ],
         "requestBody": {
@@ -2188,6 +2239,50 @@
             },
             "required": true,
             "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Caller's run ID — used as parentRunId when creating child runs",
+              "example": "run-abc-123"
+            },
+            "required": true,
+            "description": "Caller's run ID — used as parentRunId when creating child runs",
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID",
+              "example": "brand-1"
+            },
+            "required": true,
+            "description": "Brand ID",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID",
+              "example": "campaign-1"
+            },
+            "required": true,
+            "description": "Campaign ID",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow name for run tracking",
+              "example": "fetch-lead"
+            },
+            "required": false,
+            "description": "Workflow name for run tracking",
+            "name": "x-workflow-name",
             "in": "header"
           }
         ],
@@ -2506,6 +2601,50 @@
             },
             "required": true,
             "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Caller's run ID — used as parentRunId when creating child runs",
+              "example": "run-abc-123"
+            },
+            "required": true,
+            "description": "Caller's run ID — used as parentRunId when creating child runs",
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID",
+              "example": "brand-1"
+            },
+            "required": true,
+            "description": "Brand ID",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID",
+              "example": "campaign-1"
+            },
+            "required": true,
+            "description": "Campaign ID",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow name for run tracking",
+              "example": "fetch-lead"
+            },
+            "required": false,
+            "description": "Workflow name for run tracking",
+            "name": "x-workflow-name",
             "in": "header"
           }
         ],
