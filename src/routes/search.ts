@@ -16,11 +16,16 @@ const router = Router();
  */
 router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
+    const { runId, brandId, campaignId, workflowName } = req;
+    if (!runId || !brandId || !campaignId) {
+      return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
+    }
+
     const parsed = SearchRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
     }
-    const { runId, brandId, campaignId, workflowName, ...searchParams } = parsed.data;
+    const searchParams = parsed.data;
 
     // Get Apollo API key from key-service
     const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/search" });
@@ -155,11 +160,16 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
  */
 router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
+    const { runId, brandId, campaignId, workflowName } = req;
+    if (!runId || !brandId || !campaignId) {
+      return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
+    }
+
     const parsed = EnrichRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
     }
-    const { apolloPersonId, runId, brandId, campaignId, workflowName } = parsed.data;
+    const { apolloPersonId } = parsed.data;
 
     // Check cache: existing enrichment for this personId within 12 months
     const twelveMonthsAgo = new Date();
@@ -253,11 +263,16 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
  */
 router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
+    const { runId, brandId, campaignId, workflowName } = req;
+    if (!runId || !brandId || !campaignId) {
+      return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
+    }
+
     const parsed = SearchNextRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
     }
-    const { campaignId, brandId, searchParams, runId, workflowName } = parsed.data;
+    const { searchParams } = parsed.data;
 
     // Get Apollo API key
     const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/search/next" });

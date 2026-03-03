@@ -25,6 +25,10 @@ vi.mock("../../src/middleware/auth.js", () => ({
   serviceAuth: (req: any, _res: any, next: any) => {
     req.orgId = req.headers["x-org-id"] || "org-internal-123";
     req.userId = req.headers["x-user-id"] || "user-internal-456";
+    if (req.headers["x-run-id"]) req.runId = req.headers["x-run-id"];
+    if (req.headers["x-brand-id"]) req.brandId = req.headers["x-brand-id"];
+    if (req.headers["x-campaign-id"]) req.campaignId = req.headers["x-campaign-id"];
+    if (req.headers["x-workflow-name"]) req.workflowName = req.headers["x-workflow-name"];
     next();
   },
 }));
@@ -122,10 +126,10 @@ function createTestApp() {
 }
 
 const SEARCH_PARAMS = { personTitles: ["CEO"] };
-const BASE_BODY = {
-  campaignId: "campaign-1",
-  brandId: "brand-1",
-  runId: "run-parent-1",
+const BASE_HEADERS = {
+  "X-Campaign-Id": "campaign-1",
+  "X-Brand-Id": "brand-1",
+  "X-Run-Id": "run-parent-1",
 };
 
 describe("POST /search/next", () => {
@@ -160,7 +164,8 @@ describe("POST /search/next", () => {
       .set("X-API-Key", "test-key")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
-      .send({ ...BASE_BODY, searchParams: SEARCH_PARAMS })
+      .set(BASE_HEADERS)
+      .send({ searchParams: SEARCH_PARAMS })
       .expect(200);
 
     expect(res.body.people).toHaveLength(3);
@@ -189,7 +194,8 @@ describe("POST /search/next", () => {
       .set("X-API-Key", "test-key")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
-      .send(BASE_BODY)
+      .set(BASE_HEADERS)
+      .send({})
       .expect(200);
 
     expect(res.body.people).toHaveLength(3);
@@ -208,7 +214,8 @@ describe("POST /search/next", () => {
       .set("X-API-Key", "test-key")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
-      .send(BASE_BODY)
+      .set(BASE_HEADERS)
+      .send({})
       .expect(400);
 
     expect(res.body.error).toContain("No search cursor found");
@@ -233,7 +240,8 @@ describe("POST /search/next", () => {
       .set("X-API-Key", "test-key")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
-      .send({ ...BASE_BODY, searchParams: SEARCH_PARAMS })
+      .set(BASE_HEADERS)
+      .send({ searchParams: SEARCH_PARAMS })
       .expect(200);
 
     // Should reset and call Apollo with page 1
@@ -265,7 +273,8 @@ describe("POST /search/next", () => {
       .set("X-API-Key", "test-key")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
-      .send({ ...BASE_BODY, searchParams: SEARCH_PARAMS })
+      .set(BASE_HEADERS)
+      .send({ searchParams: SEARCH_PARAMS })
       .expect(200);
 
     // Should use existing page 4, not reset to 1
@@ -293,7 +302,8 @@ describe("POST /search/next", () => {
       .set("X-API-Key", "test-key")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
-      .send(BASE_BODY)
+      .set(BASE_HEADERS)
+      .send({})
       .expect(200);
 
     expect(res.body.people).toHaveLength(0);
@@ -320,7 +330,8 @@ describe("POST /search/next", () => {
       .set("X-API-Key", "test-key")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
-      .send(BASE_BODY)
+      .set(BASE_HEADERS)
+      .send({})
       .expect(200);
 
     // Should advance cursor from page 2 to page 3
@@ -352,7 +363,8 @@ describe("POST /search/next", () => {
       .set("X-API-Key", "test-key")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
-      .send(BASE_BODY)
+      .set(BASE_HEADERS)
+      .send({})
       .expect(200);
 
     expect(res.body.people).toHaveLength(0);
@@ -381,7 +393,8 @@ describe("POST /search/next", () => {
       .set("X-API-Key", "test-key")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
-      .send(BASE_BODY)
+      .set(BASE_HEADERS)
+      .send({})
       .expect(200);
 
     // All 3 people returned — no dedup filtering
@@ -397,7 +410,9 @@ describe("POST /search/next", () => {
       .set("X-API-Key", "test-key")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
-      .send({ ...BASE_BODY, searchParams: SEARCH_PARAMS, runId: "run-abc" })
+      .set(BASE_HEADERS)
+      .set("X-Run-Id", "run-abc")
+      .send({ searchParams: SEARCH_PARAMS })
       .expect(200);
 
     expect(mockCreateRun).toHaveBeenCalledWith(
@@ -409,16 +424,18 @@ describe("POST /search/next", () => {
     expect(mockUpdateRun).toHaveBeenCalledWith("run-1", "completed");
   });
 
-  it("returns 400 when no runId provided", async () => {
+  it("returns 400 when no runId header provided", async () => {
     const res = await request(app)
       .post("/search/next")
       .set("X-API-Key", "test-key")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
-      .send({ campaignId: "campaign-1", brandId: "brand-1", searchParams: SEARCH_PARAMS })
+      .set("X-Campaign-Id", "campaign-1")
+      .set("X-Brand-Id", "brand-1")
+      .send({ searchParams: SEARCH_PARAMS })
       .expect(400);
 
-    expect(res.body.error).toBe("Invalid request");
+    expect(res.body.error).toContain("x-run-id");
     expect(mockSearchPeople).not.toHaveBeenCalled();
   });
 
@@ -440,7 +457,8 @@ describe("POST /search/next", () => {
       .set("X-API-Key", "test-key")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
-      .send(BASE_BODY)
+      .set(BASE_HEADERS)
+      .send({})
       .expect(200);
 
     // Exactly 1 Apollo call — no looping/retrying
@@ -455,7 +473,9 @@ describe("POST /search/next", () => {
       .set("X-API-Key", "test-key")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
-      .send({ ...BASE_BODY, searchParams: SEARCH_PARAMS, workflowName: "fetch-lead" })
+      .set(BASE_HEADERS)
+      .set("X-Workflow-Name", "fetch-lead")
+      .send({ searchParams: SEARCH_PARAMS })
       .expect(200);
 
     expect(mockCreateRun).toHaveBeenCalledWith(
