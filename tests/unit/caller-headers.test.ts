@@ -48,15 +48,18 @@ describe("decryptKey caller headers", () => {
     expect(result).toEqual({ key: "my-key", keySource: "org" });
   });
 
-  it("should pass orgId and userId as query params", async () => {
+  it("should pass orgId and userId as x-org-id/x-user-id headers", async () => {
     mockFetch.mockResolvedValueOnce(okResponse("key-abc"));
 
     const { decryptKey } = await import("../../src/lib/keys-client.js");
     await decryptKey("org-uuid-1", "user-uuid-2", "anthropic", { callerMethod: "POST", callerPath: "/search/params" });
 
-    const [url] = mockFetch.mock.calls[0];
-    expect(url).toContain("/keys/anthropic/decrypt?");
-    expect(url).toContain("orgId=org-uuid-1");
-    expect(url).toContain("userId=user-uuid-2");
+    const [url, opts] = mockFetch.mock.calls[0];
+    expect(url).toContain("/keys/anthropic/decrypt");
+    expect(url).not.toContain("orgId=");
+    expect(opts.headers).toMatchObject({
+      "x-org-id": "org-uuid-1",
+      "x-user-id": "user-uuid-2",
+    });
   });
 });

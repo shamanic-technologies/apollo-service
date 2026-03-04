@@ -240,19 +240,21 @@ describe("POST /search/params", () => {
       .send(BASE_BODY)
       .expect(200);
 
+    const expectedIdentity = expect.objectContaining({ orgId: "org_test" });
+
     // LLM token costs
     expect(mockAddCosts).toHaveBeenCalledWith("run-1", [
       { costName: "anthropic-sonnet-4.6-tokens-input", costSource: "platform", quantity: 1234 },
       { costName: "anthropic-sonnet-4.6-tokens-output", costSource: "platform", quantity: 56 },
-    ]);
+    ], expectedIdentity);
 
     // Apollo search credit
     expect(mockAddCosts).toHaveBeenCalledWith("run-1", [
       { costName: "apollo-search-credit", costSource: "platform", quantity: 1 },
-    ]);
+    ], expectedIdentity);
 
     // Run completed
-    expect(mockUpdateRun).toHaveBeenCalledWith("run-1", "completed");
+    expect(mockUpdateRun).toHaveBeenCalledWith("run-1", "completed", expectedIdentity);
   });
 
   // ─── Key resolution via decryptKey ─────────────────────────────────────
@@ -318,16 +320,18 @@ describe("POST /search/params", () => {
       .send(BASE_BODY)
       .expect(200);
 
+    const expectedIdentity = expect.objectContaining({ orgId: "org_test" });
+
     // Anthropic costs should use "org" costSource
     expect(mockAddCosts).toHaveBeenCalledWith("run-1", [
       { costName: "anthropic-sonnet-4.6-tokens-input", costSource: "org", quantity: 100 },
       { costName: "anthropic-sonnet-4.6-tokens-output", costSource: "org", quantity: 20 },
-    ]);
+    ], expectedIdentity);
 
     // Apollo costs should use "platform" costSource
     expect(mockAddCosts).toHaveBeenCalledWith("run-1", [
       { costName: "apollo-search-credit", costSource: "platform", quantity: 1 },
-    ]);
+    ], expectedIdentity);
   });
 
   // ─── Request validation ──────────────────────────────────────────────────
@@ -428,6 +432,6 @@ describe("POST /search/params", () => {
       .expect(500);
 
     expect(res.body.error).toBe("API key invalid");
-    expect(mockUpdateRun).toHaveBeenCalledWith("run-1", "failed");
+    expect(mockUpdateRun).toHaveBeenCalledWith("run-1", "failed", expect.objectContaining({ orgId: "org_test" }));
   });
 });

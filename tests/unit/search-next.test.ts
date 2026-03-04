@@ -420,8 +420,8 @@ describe("POST /search/next", () => {
     );
     expect(mockAddCosts).toHaveBeenCalledWith("run-1", [
       { costName: "apollo-search-credit", costSource: "platform", quantity: 1 },
-    ]);
-    expect(mockUpdateRun).toHaveBeenCalledWith("run-1", "completed");
+    ], expect.objectContaining({ orgId: "org_test" }));
+    expect(mockUpdateRun).toHaveBeenCalledWith("run-1", "completed", expect.objectContaining({ orgId: "org_test" }));
   });
 
   it("returns 400 when no runId header provided", async () => {

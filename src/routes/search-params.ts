@@ -2,7 +2,7 @@ import { Router } from "express";
 import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
 import { searchPeople } from "../lib/apollo-client.js";
 import { decryptKey } from "../lib/keys-client.js";
-import { createRun, updateRun, addCosts } from "../lib/runs-client.js";
+import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/runs-client.js";
 import { callClaude } from "../lib/anthropic-client.js";
 import { getSystemPrompt, buildUserMessage, SearchAttempt } from "../lib/search-params-prompt.js";
 import { toApolloSearchParams } from "../lib/transform.js";
@@ -22,6 +22,7 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
     if (!runId || !brandId || !campaignId) {
       return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
+    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId };
 
     const parsed = SearchParamsRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -62,7 +63,7 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
         await addCosts(paramRun.id, [
           { costName: "anthropic-sonnet-4.6-tokens-input", costSource: anthropicKeySource, quantity: llmResponse.inputTokens },
           { costName: "anthropic-sonnet-4.6-tokens-output", costSource: anthropicKeySource, quantity: llmResponse.outputTokens },
-        ]);
+        ], identity);
 
         // Parse LLM response as JSON
         let rawParams: Record<string, unknown>;
@@ -100,7 +101,7 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
         const totalResults = result.total_entries ?? result.pagination?.total_entries ?? 0;
 
         // Track Apollo search credit
-        await addCosts(paramRun.id, [{ costName: "apollo-search-credit", costSource: apolloKeySource, quantity: 1 }]);
+        await addCosts(paramRun.id, [{ costName: "apollo-search-credit", costSource: apolloKeySource, quantity: 1 }], identity);
 
         console.log(`[Apollo Service][POST /search/params] Attempt ${attempt}: ${totalResults} results`, {
           searchParams,
@@ -115,9 +116,9 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
         }
       }
 
-      await updateRun(paramRun.id, "completed");
+      await updateRun(paramRun.id, "completed", identity);
     } catch (error) {
-      await updateRun(paramRun.id, "failed").catch(() => {});
+      await updateRun(paramRun.id, "failed", identity).catch(() => {});
       throw error;
     }
 

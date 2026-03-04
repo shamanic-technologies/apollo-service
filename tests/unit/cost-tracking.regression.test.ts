@@ -461,6 +461,11 @@ describe("Apollo service cost tracking", () => {
 
     // Should still mark run as completed
     expect(mockUpdateRun).toHaveBeenCalledTimes(1);
+    expect(mockUpdateRun).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ orgId: "org_test" })
+    );
   });
 
   // ─── Hard failure on runs-service errors (POST /enrich) ──────────────────────

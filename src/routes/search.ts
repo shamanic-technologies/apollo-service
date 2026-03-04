@@ -5,7 +5,7 @@ import { apolloPeopleSearches, apolloPeopleEnrichments, apolloSearchCursors } fr
 import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
 import { searchPeople, enrichPerson, ApolloPerson } from "../lib/apollo-client.js";
 import { decryptKey } from "../lib/keys-client.js";
-import { createRun, updateRun, addCosts } from "../lib/runs-client.js";
+import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/runs-client.js";
 import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment, toApolloSearchParams } from "../lib/transform.js";
 import { SearchRequestSchema, SearchNextRequestSchema, EnrichRequestSchema, StatsRequestSchema } from "../schemas.js";
 
@@ -20,6 +20,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
     if (!runId || !brandId || !campaignId) {
       return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
+    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId };
 
     const parsed = SearchRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -92,8 +93,8 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
     }
 
     // Track search cost and mark run as completed
-    await addCosts(searchRun.id, [{ costName: "apollo-search-credit", costSource: keySource, quantity: 1 }]);
-    await updateRun(searchRun.id, "completed");
+    await addCosts(searchRun.id, [{ costName: "apollo-search-credit", costSource: keySource, quantity: 1 }], identity);
+    await updateRun(searchRun.id, "completed", identity);
 
     // Fill in cached emails for people without email
     const personIdsWithoutEmail = result.people
@@ -164,6 +165,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
     if (!runId || !brandId || !campaignId) {
       return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
+    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId };
 
     const parsed = EnrichRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -200,7 +202,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
         parentRunId: runId,
         workflowName,
       });
-      await updateRun(cachedRun.id, "completed");
+      await updateRun(cachedRun.id, "completed", identity);
 
       return res.json({
         enrichmentId: null,
@@ -242,9 +244,9 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
         .where(eq(apolloPeopleEnrichments.id, enrichment.id));
 
       if (person.email) {
-        await addCosts(enrichRun.id, [{ costName: "apollo-enrichment-credit", costSource: keySource, quantity: 1 }]);
+        await addCosts(enrichRun.id, [{ costName: "apollo-enrichment-credit", costSource: keySource, quantity: 1 }], identity);
       }
-      await updateRun(enrichRun.id, "completed");
+      await updateRun(enrichRun.id, "completed", identity);
     }
 
     const transformed = person ? transformApolloPerson(person) : null;
@@ -267,6 +269,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     if (!runId || !brandId || !campaignId) {
       return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
+    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId };
 
     const parsed = SearchNextRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -403,8 +406,8 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
       responseRaw: result,
     });
 
-    await addCosts(searchRun.id, [{ costName: "apollo-search-credit", costSource: keySource, quantity: 1 }]);
-    await updateRun(searchRun.id, "completed");
+    await addCosts(searchRun.id, [{ costName: "apollo-search-credit", costSource: keySource, quantity: 1 }], identity);
+    await updateRun(searchRun.id, "completed", identity);
 
     // Transform and respond
     const transformedPeople = people.map((person: ApolloPerson) =>

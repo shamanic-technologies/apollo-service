@@ -92,18 +92,30 @@ export interface ListRunsParams {
   offset?: number;
 }
 
+// ─── Identity headers ────────────────────────────────────────────────────────
+
+export interface IdentityHeaders {
+  orgId: string;
+  userId?: string;
+  runId?: string;
+}
+
 // ─── HTTP helpers ────────────────────────────────────────────────────────────
 
 async function runsRequest<T>(
   path: string,
-  options: { method?: string; body?: unknown } = {}
+  options: { method?: string; body?: unknown; identity?: IdentityHeaders } = {}
 ): Promise<T> {
-  const { method = "GET", body } = options;
+  const { method = "GET", body, identity } = options;
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "X-API-Key": RUNS_SERVICE_API_KEY,
   };
+
+  if (identity?.orgId) headers["x-org-id"] = identity.orgId;
+  if (identity?.userId) headers["x-user-id"] = identity.userId;
+  if (identity?.runId) headers["x-run-id"] = identity.runId;
 
   const response = await fetch(`${RUNS_SERVICE_URL}${path}`, {
     method,
@@ -123,20 +135,22 @@ async function runsRequest<T>(
 
 /**
  * Create a new run in runs-service.
- * Organizations are resolved automatically from orgId.
+ * orgId/userId sent as x-org-id/x-user-id headers.
+ * parentRunId sent as x-run-id header (becomes parentRunId on runs-service side).
  */
 export async function createRun(params: CreateRunParams): Promise<Run> {
   return runsRequest<Run>("/v1/runs", {
     method: "POST",
-    body: {
+    identity: {
       orgId: params.orgId,
       userId: params.userId,
-      appId: "apollo",
+      runId: params.parentRunId,
+    },
+    body: {
       brandId: params.brandId,
       campaignId: params.campaignId,
       serviceName: params.serviceName,
       taskName: params.taskName,
-      parentRunId: params.parentRunId,
       workflowName: params.workflowName,
     },
   });
@@ -147,10 +161,12 @@ export async function createRun(params: CreateRunParams): Promise<Run> {
  */
 export async function updateRun(
   runId: string,
-  status: "completed" | "failed"
+  status: "completed" | "failed",
+  identity: IdentityHeaders
 ): Promise<Run> {
   return runsRequest<Run>(`/v1/runs/${runId}`, {
     method: "PATCH",
+    identity: { ...identity, runId },
     body: { status },
   });
 }
@@ -162,10 +178,12 @@ export async function updateRun(
  */
 export async function addCosts(
   runId: string,
-  items: CostItem[]
+  items: CostItem[],
+  identity: IdentityHeaders
 ): Promise<{ costs: RunCost[] }> {
   return runsRequest<{ costs: RunCost[] }>(`/v1/runs/${runId}/costs`, {
     method: "POST",
+    identity: { ...identity, runId },
     body: { items },
   });
 }
@@ -173,18 +191,20 @@ export async function addCosts(
 /**
  * Get a single run with costs (including descendant runs and their costs).
  */
-export async function getRun(runId: string): Promise<RunWithCosts> {
-  return runsRequest<RunWithCosts>(`/v1/runs/${runId}`);
+export async function getRun(runId: string, identity: IdentityHeaders): Promise<RunWithCosts> {
+  return runsRequest<RunWithCosts>(`/v1/runs/${runId}`, {
+    identity: { ...identity, runId },
+  });
 }
 
 /**
  * List runs with filters.
+ * orgId sent as x-org-id header (not query param).
  */
 export async function listRuns(
   params: ListRunsParams
 ): Promise<{ runs: RunWithOwnCost[]; limit: number; offset: number }> {
   const searchParams = new URLSearchParams();
-  searchParams.set("orgId", params.orgId);
   if (params.userId) searchParams.set("userId", params.userId);
   if (params.brandId) searchParams.set("brandId", params.brandId);
   if (params.campaignId) searchParams.set("campaignId", params.campaignId);
@@ -198,7 +218,8 @@ export async function listRuns(
   if (params.offset) searchParams.set("offset", String(params.offset));
 
   return runsRequest<{ runs: RunWithOwnCost[]; limit: number; offset: number }>(
-    `/v1/runs?${searchParams.toString()}`
+    `/v1/runs?${searchParams.toString()}`,
+    { identity: { orgId: params.orgId, userId: params.userId } }
   );
 }
 
@@ -207,9 +228,10 @@ export async function listRuns(
  * Returns a Map of runId → RunWithCosts.
  */
 export async function getRunsBatch(
-  runIds: string[]
+  runIds: string[],
+  identity: IdentityHeaders
 ): Promise<Map<string, RunWithCosts>> {
   if (runIds.length === 0) return new Map();
-  const results = await Promise.all(runIds.map((id) => getRun(id)));
+  const results = await Promise.all(runIds.map((id) => getRun(id, identity)));
   return new Map(results.map((r) => [r.id, r]));
 }
