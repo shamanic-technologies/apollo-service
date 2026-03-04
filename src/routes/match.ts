@@ -5,7 +5,7 @@ import { apolloPeopleEnrichments } from "../db/schema.js";
 import { serviceAuth, type AuthenticatedRequest } from "../middleware/auth.js";
 import { matchPersonByName, bulkMatchPeopleByName } from "../lib/apollo-client.js";
 import { decryptKey } from "../lib/keys-client.js";
-import { createRun, updateRun, addCosts } from "../lib/runs-client.js";
+import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/runs-client.js";
 import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment } from "../lib/transform.js";
 import { MatchRequestSchema, MatchBulkRequestSchema } from "../schemas.js";
 
@@ -50,6 +50,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
     if (!runId || !brandId || !campaignId) {
       return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
+    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId };
 
     const parsed = MatchRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -71,7 +72,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
         parentRunId: runId,
         workflowName,
       });
-      await updateRun(cachedRun.id, "completed");
+      await updateRun(cachedRun.id, "completed", identity);
 
       return res.json({
         enrichmentId: null,
@@ -111,11 +112,11 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
       enrichmentId = enrichment.id;
 
       if (person.email) {
-        await addCosts(matchRun.id, [{ costName: "apollo-person-match-credit", costSource: keySource, quantity: 1 }]);
+        await addCosts(matchRun.id, [{ costName: "apollo-person-match-credit", costSource: keySource, quantity: 1 }], identity);
       }
     }
 
-    await updateRun(matchRun.id, "completed");
+    await updateRun(matchRun.id, "completed", identity);
 
     const transformed = person ? transformApolloPerson(person) : null;
 
@@ -136,6 +137,7 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
     if (!runId || !brandId || !campaignId) {
       return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
+    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId };
 
     const parsed = MatchBulkRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -233,10 +235,10 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
     }
 
     if (totalCreditsToCharge > 0) {
-      await addCosts(batchRun.id, [{ costName: "apollo-person-match-credit", costSource: keySource, quantity: totalCreditsToCharge }]);
+      await addCosts(batchRun.id, [{ costName: "apollo-person-match-credit", costSource: keySource, quantity: totalCreditsToCharge }], identity);
     }
 
-    await updateRun(batchRun.id, "completed");
+    await updateRun(batchRun.id, "completed", identity);
 
     res.json({ results });
   } catch (error) {

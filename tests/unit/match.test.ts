@@ -400,7 +400,7 @@ describe("POST /match/bulk", () => {
     expect(mockAddCosts).toHaveBeenCalledTimes(1);
     expect(mockAddCosts).toHaveBeenCalledWith("run-1", [
       { costName: "apollo-person-match-credit", costSource: "platform", quantity: 2 },
-    ]);
+    ], expect.objectContaining({ orgId: "org_test" }));
   });
 
   it("should return results in same order as input", async () => {

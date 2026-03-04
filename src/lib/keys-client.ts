@@ -23,6 +23,7 @@ export interface DecryptKeyResult {
 /**
  * Decrypt an API key via key-service.
  * Auto-resolves whether to use org or platform key based on the org's preference.
+ * orgId/userId sent as x-org-id/x-user-id headers per key-service spec.
  */
 export async function decryptKey(
   orgId: string,
@@ -30,10 +31,15 @@ export async function decryptKey(
   provider: string,
   caller: CallerContext
 ): Promise<DecryptKeyResult> {
-  const params = new URLSearchParams({ orgId, userId });
   const response = await fetch(
-    `${KEY_SERVICE_URL}/keys/${provider}/decrypt?${params}`,
-    { headers: callerHeaders(caller) }
+    `${KEY_SERVICE_URL}/keys/${provider}/decrypt`,
+    {
+      headers: {
+        ...callerHeaders(caller),
+        "x-org-id": orgId,
+        "x-user-id": userId,
+      },
+    }
   );
 
   if (!response.ok) {
