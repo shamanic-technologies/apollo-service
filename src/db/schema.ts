@@ -11,6 +11,7 @@ export const apolloPeopleSearches = pgTable(
     // Hierarchy IDs
     brandId: text("brand_id").notNull(),
     campaignId: text("campaign_id").notNull(),
+    workflowName: text("workflow_name"),
 
     // Request params (for debugging/replay)
     requestParams: jsonb("request_params"),
@@ -44,6 +45,7 @@ export const apolloPeopleEnrichments = pgTable(
     // Hierarchy IDs
     brandId: text("brand_id").notNull(),
     campaignId: text("campaign_id").notNull(),
+    workflowName: text("workflow_name"),
 
     // Apollo person ID
     apolloPersonId: text("apollo_person_id"),
@@ -134,6 +136,7 @@ export const apolloSearchCursors = pgTable(
     orgId: uuid("org_id").notNull(),
     campaignId: text("campaign_id").notNull(),
     brandId: text("brand_id").notNull(),
+    workflowName: text("workflow_name"),
     searchParams: jsonb("search_params").notNull(),
     currentPage: integer("current_page").notNull().default(1),
     totalEntries: integer("total_entries").notNull().default(0),

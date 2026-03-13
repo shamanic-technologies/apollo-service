@@ -25,12 +25,24 @@ export interface DecryptKeyResult {
  * Auto-resolves whether to use org or platform key based on the org's preference.
  * orgId/userId sent as x-org-id/x-user-id headers per key-service spec.
  */
+export interface TrackingContext {
+  brandId?: string;
+  campaignId?: string;
+  workflowName?: string;
+}
+
 export async function decryptKey(
   orgId: string,
   userId: string,
   provider: string,
-  caller: CallerContext
+  caller: CallerContext,
+  tracking?: TrackingContext
 ): Promise<DecryptKeyResult> {
+  const trackingHeaders: Record<string, string> = {};
+  if (tracking?.brandId) trackingHeaders["x-brand-id"] = tracking.brandId;
+  if (tracking?.campaignId) trackingHeaders["x-campaign-id"] = tracking.campaignId;
+  if (tracking?.workflowName) trackingHeaders["x-workflow-name"] = tracking.workflowName;
+
   const response = await fetch(
     `${KEY_SERVICE_URL}/keys/${provider}/decrypt`,
     {
@@ -38,6 +50,7 @@ export async function decryptKey(
         ...callerHeaders(caller),
         "x-org-id": orgId,
         "x-user-id": userId,
+        ...trackingHeaders,
       },
     }
   );

@@ -20,7 +20,8 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
     if (!runId || !brandId || !campaignId) {
       return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
-    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId };
+    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, workflowName };
+    const tracking = { brandId, campaignId, workflowName };
 
     const parsed = SearchRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -29,7 +30,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
     const searchParams = parsed.data;
 
     // Get Apollo API key from key-service
-    const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/search" });
+    const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/search" }, tracking);
 
     // Call Apollo API
     const apolloParams = {
@@ -73,6 +74,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
         runId,
         brandId,
         campaignId,
+        workflowName,
         requestParams: apolloParams,
         peopleCount: result.people.length,
         totalEntries,
@@ -88,6 +90,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
         searchId: search.id,
         brandId,
         campaignId,
+        workflowName,
         ...toEnrichmentDbValues(person),
       });
     }
@@ -165,7 +168,8 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
     if (!runId || !brandId || !campaignId) {
       return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
-    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId };
+    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, workflowName };
+    const tracking = { brandId, campaignId, workflowName };
 
     const parsed = EnrichRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -210,7 +214,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       });
     }
 
-    const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/enrich" });
+    const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/enrich" }, tracking);
     const result = await enrichPerson(apolloApiKey, apolloPersonId);
     const person = result.person;
 
@@ -222,6 +226,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
         runId,
         brandId,
         campaignId,
+        workflowName,
         ...toEnrichmentDbValues(person),
       }).returning();
 
@@ -269,7 +274,8 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     if (!runId || !brandId || !campaignId) {
       return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
-    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId };
+    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, workflowName };
+    const tracking = { brandId, campaignId, workflowName };
 
     const parsed = SearchNextRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -278,7 +284,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     const { searchParams } = parsed.data;
 
     // Get Apollo API key
-    const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/search/next" });
+    const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/search/next" }, tracking);
 
     // Look up existing cursor for this campaign
     const [existingCursor] = await db
@@ -307,6 +313,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
           orgId: req.orgId!,
           campaignId,
           brandId,
+          workflowName,
           searchParams: searchParams as Record<string, unknown>,
           currentPage: 1,
           totalEntries: 0,
@@ -400,6 +407,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
       runId,
       brandId,
       campaignId,
+      workflowName,
       requestParams: apolloParams,
       peopleCount: people.length,
       totalEntries,

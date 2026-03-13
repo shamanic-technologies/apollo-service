@@ -50,7 +50,8 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
     if (!runId || !brandId || !campaignId) {
       return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
-    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId };
+    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, workflowName };
+    const tracking = { brandId, campaignId, workflowName };
 
     const parsed = MatchRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -82,7 +83,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
     }
 
     // Cache miss: call Apollo API
-    const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/match" });
+    const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/match" }, tracking);
     const result = await matchPersonByName(apolloApiKey, firstName, lastName, organizationDomain);
     const person = result.person;
 
@@ -105,6 +106,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
         runId,
         brandId,
         campaignId,
+        workflowName,
         ...toEnrichmentDbValues(person),
         enrichmentRunId: matchRun.id,
       }).returning();
@@ -137,7 +139,8 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
     if (!runId || !brandId || !campaignId) {
       return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
-    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId };
+    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, workflowName };
+    const tracking = { brandId, campaignId, workflowName };
 
     const parsed = MatchBulkRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -173,7 +176,7 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
     let apolloResults: (import("../lib/apollo-client.js").ApolloPerson | null)[] = [];
     let keySource: "org" | "platform" = "platform";
     if (missIndices.length > 0) {
-      const { key: apolloApiKey, keySource: ks } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/match/bulk" });
+      const { key: apolloApiKey, keySource: ks } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/match/bulk" }, tracking);
       keySource = ks;
       const missItems = missIndices.map((i) => ({
         first_name: items[i].firstName,
@@ -215,6 +218,7 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
             runId,
             brandId,
             campaignId,
+            workflowName,
             ...toEnrichmentDbValues(person),
             enrichmentRunId: batchRun.id,
           }).returning();

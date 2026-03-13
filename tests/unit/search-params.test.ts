@@ -283,8 +283,9 @@ describe("POST /search/params", () => {
 
     // Should call decryptKey for both providers
     const expectedCaller = { callerMethod: "POST", callerPath: "/search/params" };
-    expect(mockDecryptKey).toHaveBeenCalledWith("org_test", "user_test", "apollo", expectedCaller);
-    expect(mockDecryptKey).toHaveBeenCalledWith("org_test", "user_test", "anthropic", expectedCaller);
+    const expectedTracking = { brandId: "brand-1", campaignId: "campaign-1", workflowName: undefined };
+    expect(mockDecryptKey).toHaveBeenCalledWith("org_test", "user_test", "apollo", expectedCaller, expectedTracking);
+    expect(mockDecryptKey).toHaveBeenCalledWith("org_test", "user_test", "anthropic", expectedCaller, expectedTracking);
     // callClaude should receive the Anthropic key
     expect(mockCallClaude).toHaveBeenCalledWith(
       "user-anthropic-key",
