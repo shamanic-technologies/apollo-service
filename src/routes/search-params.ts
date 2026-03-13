@@ -22,7 +22,8 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
     if (!runId || !brandId || !campaignId) {
       return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
-    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId };
+    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, workflowName };
+    const tracking = { brandId, campaignId, workflowName };
 
     const parsed = SearchParamsRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -33,8 +34,8 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
 
     // Fetch keys — key-service auto-resolves source per provider
     const caller = { callerMethod: "POST", callerPath: "/search/params" };
-    const { key: apolloApiKey, keySource: apolloKeySource } = await decryptKey(req.orgId!, req.userId!, "apollo", caller);
-    const { key: anthropicApiKey, keySource: anthropicKeySource } = await decryptKey(req.orgId!, req.userId!, "anthropic", caller);
+    const { key: apolloApiKey, keySource: apolloKeySource } = await decryptKey(req.orgId!, req.userId!, "apollo", caller, tracking);
+    const { key: anthropicApiKey, keySource: anthropicKeySource } = await decryptKey(req.orgId!, req.userId!, "anthropic", caller, tracking);
 
     // Create child run for cost tracking
     const paramRun = await createRun({

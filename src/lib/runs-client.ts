@@ -98,6 +98,9 @@ export interface IdentityHeaders {
   orgId: string;
   userId?: string;
   runId?: string;
+  brandId?: string;
+  campaignId?: string;
+  workflowName?: string;
 }
 
 // ─── HTTP helpers ────────────────────────────────────────────────────────────
@@ -116,6 +119,9 @@ async function runsRequest<T>(
   if (identity?.orgId) headers["x-org-id"] = identity.orgId;
   if (identity?.userId) headers["x-user-id"] = identity.userId;
   if (identity?.runId) headers["x-run-id"] = identity.runId;
+  if (identity?.brandId) headers["x-brand-id"] = identity.brandId;
+  if (identity?.campaignId) headers["x-campaign-id"] = identity.campaignId;
+  if (identity?.workflowName) headers["x-workflow-name"] = identity.workflowName;
 
   const response = await fetch(`${RUNS_SERVICE_URL}${path}`, {
     method,
