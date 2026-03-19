@@ -78,6 +78,13 @@
       "when": 1773619200000,
       "tag": "0010_add_workflow_name",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1774060800000,
+      "tag": "0011_add_search_params_cache",
+      "breakpoints": true
     }
   ]
 }
