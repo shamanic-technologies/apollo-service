@@ -872,6 +872,9 @@ const SearchParamsResponseSchema = z
     attemptHistory: z.array(SearchParamsAttemptSchema).openapi({
       description: "Full history of all attempts for debugging.",
     }),
+    cached: z.boolean().openapi({
+      description: "True if the result was served from the 24h cache (no LLM or Apollo calls made).",
+    }),
   })
   .openapi("SearchParamsResponse");
 

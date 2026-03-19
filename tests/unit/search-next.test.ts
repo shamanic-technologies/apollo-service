@@ -465,6 +465,51 @@ describe("POST /search/next", () => {
     expect(mockSearchPeople).toHaveBeenCalledTimes(1);
   });
 
+  // ─── JSONB key reorder regression ─────────────────────────────────────
+
+  it("does NOT reset cursor when same params arrive with different key order (JSONB regression)", async () => {
+    // Simulate Postgres JSONB alphabetical key reordering
+    mockCursor = {
+      id: "cursor-1",
+      orgId: "org-internal-123",
+      campaignId: "campaign-1",
+      searchParams: {
+        organizationNumEmployeesRanges: ["1,10"],  // alphabetical order (from Postgres)
+        personTitles: ["CEO"],
+        qOrganizationIndustryTagIds: ["Construction"],
+      },
+      currentPage: 5,
+      totalEntries: 8000000,
+      exhausted: false,
+    };
+
+    // Send params with different key order (as lead-service would)
+    await request(app)
+      .post("/search/next")
+      .set("X-API-Key", "test-key")
+      .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
+      .send({
+        searchParams: {
+          personTitles: ["CEO"],                        // different order
+          qOrganizationIndustryTagIds: ["Construction"],
+          organizationNumEmployeesRanges: ["1,10"],
+        },
+      })
+      .expect(200);
+
+    // Should use existing page 5, NOT reset to page 1
+    expect(mockSearchPeople).toHaveBeenCalledWith(
+      "fake-apollo-key",
+      expect.objectContaining({ page: 5 })
+    );
+    // Should NOT call updateSet to reset cursor
+    expect(mockUpdateSet).not.toHaveBeenCalledWith(
+      expect.objectContaining({ currentPage: 1, exhausted: false })
+    );
+  });
+
   // ─── workflowName propagation ──────────────────────────────────────────
 
   it("passes workflowName to createRun when provided", async () => {

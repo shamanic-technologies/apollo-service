@@ -1,4 +1,8 @@
+import { createHash } from "node:crypto";
 import { Router } from "express";
+import { eq, and, gt } from "drizzle-orm";
+import { db } from "../db/index.js";
+import { apolloSearchParamsCache } from "../db/schema.js";
 import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
 import { searchPeople } from "../lib/apollo-client.js";
 import { decryptKey } from "../lib/keys-client.js";
@@ -11,10 +15,16 @@ import { SearchParamsRequestSchema, SearchFiltersSchema } from "../schemas.js";
 const router = Router();
 
 const MAX_ATTEMPTS = 10;
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+function hashContext(context: string): string {
+  return createHash("sha256").update(context).digest("hex");
+}
 
 /**
  * POST /search/params — Generate Apollo search parameters from context using LLM.
  * Validates against Apollo and retries with broadened filters if 0 results.
+ * Results are cached for 24h per (orgId, brandId, contextHash).
  */
 router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
@@ -31,13 +41,58 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
     }
 
     const { context } = parsed.data;
+    const contextHash = hashContext(context);
 
-    // Fetch keys — key-service auto-resolves source per provider
+    // Check cache — same (orgId, brandId, context) within 24h
+    const cacheThreshold = new Date(Date.now() - CACHE_TTL_MS);
+    const [cached] = await db
+      .select()
+      .from(apolloSearchParamsCache)
+      .where(
+        and(
+          eq(apolloSearchParamsCache.orgId, req.orgId!),
+          eq(apolloSearchParamsCache.brandId, brandId),
+          eq(apolloSearchParamsCache.contextHash, contextHash),
+          gt(apolloSearchParamsCache.createdAt, cacheThreshold)
+        )
+      )
+      .limit(1);
+
+    if (cached) {
+      console.log("[Apollo Service][POST /search/params] Cache hit", {
+        orgId: req.orgId,
+        brandId,
+        contextHash,
+        cachedAt: cached.createdAt,
+      });
+
+      // Still create a run for traceability (no costs — cache hit)
+      const cachedRun = await createRun({
+        orgId: req.orgId!,
+        userId: req.userId,
+        brandId,
+        campaignId,
+        serviceName: "apollo-service",
+        taskName: "search-params-generation",
+        parentRunId: runId,
+        workflowName,
+      });
+      await updateRun(cachedRun.id, "completed", identity);
+
+      return res.json({
+        searchParams: cached.searchParams,
+        totalResults: cached.totalResults,
+        attempts: cached.attempts,
+        attemptHistory: cached.attemptHistory ?? [],
+        cached: true,
+      });
+    }
+
+    // Cache miss — generate via LLM
     const caller = { callerMethod: "POST", callerPath: "/search/params" };
     const { key: apolloApiKey, keySource: apolloKeySource } = await decryptKey(req.orgId!, req.userId!, "apollo", caller, tracking);
     const { key: anthropicApiKey, keySource: anthropicKeySource } = await decryptKey(req.orgId!, req.userId!, "anthropic", caller, tracking);
 
-    // Create child run for cost tracking
     const paramRun = await createRun({
       orgId: req.orgId!,
       userId: req.userId,
@@ -56,17 +111,14 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
 
     try {
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-        // Call LLM
         const userMessage = buildUserMessage(context, attemptHistory);
         const llmResponse = await callClaude(anthropicApiKey, systemPrompt, userMessage);
 
-        // Track LLM token costs
         await addCosts(paramRun.id, [
           { costName: "anthropic-sonnet-4.6-tokens-input", costSource: anthropicKeySource, quantity: llmResponse.inputTokens },
           { costName: "anthropic-sonnet-4.6-tokens-output", costSource: anthropicKeySource, quantity: llmResponse.outputTokens },
         ], identity);
 
-        // Parse LLM response as JSON
         let rawParams: Record<string, unknown>;
         try {
           const cleaned = llmResponse.content.trim().replace(/^```json?\s*/, "").replace(/\s*```$/, "");
@@ -79,7 +131,6 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
           continue;
         }
 
-        // Validate against SearchFiltersSchema
         const validated = SearchFiltersSchema.safeParse(rawParams);
         if (!validated.success) {
           console.warn(`[Apollo Service][POST /search/params] Attempt ${attempt}: schema validation failed`, {
@@ -91,7 +142,6 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
 
         const searchParams = validated.data as Record<string, unknown>;
 
-        // Validate against Apollo — just check the count
         const apolloParams = {
           ...toApolloSearchParams(searchParams),
           page: 1,
@@ -101,7 +151,6 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
         const result = await searchPeople(apolloApiKey, apolloParams);
         const totalResults = result.total_entries ?? result.pagination?.total_entries ?? 0;
 
-        // Track Apollo search credit
         await addCosts(paramRun.id, [{ costName: "apollo-search-credit", costSource: apolloKeySource, quantity: 1 }], identity);
 
         console.log(`[Apollo Service][POST /search/params] Attempt ${attempt}: ${totalResults} results`, {
@@ -123,11 +172,35 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
       throw error;
     }
 
+    // Store in cache (upsert — replace expired entries)
+    await db
+      .insert(apolloSearchParamsCache)
+      .values({
+        orgId: req.orgId!,
+        brandId,
+        contextHash,
+        searchParams: finalParams,
+        totalResults: finalTotalResults,
+        attempts: attemptHistory.length,
+        attemptHistory: attemptHistory as unknown as Record<string, unknown>,
+      })
+      .onConflictDoUpdate({
+        target: [apolloSearchParamsCache.orgId, apolloSearchParamsCache.brandId, apolloSearchParamsCache.contextHash],
+        set: {
+          searchParams: finalParams,
+          totalResults: finalTotalResults,
+          attempts: attemptHistory.length,
+          attemptHistory: attemptHistory as unknown as Record<string, unknown>,
+          createdAt: new Date(), // Reset TTL
+        },
+      });
+
     res.json({
       searchParams: finalParams,
       totalResults: finalTotalResults,
       attempts: attemptHistory.length,
       attemptHistory,
+      cached: false,
     });
   } catch (error) {
     console.error("[Apollo Service][POST /search/params] ERROR:", error);

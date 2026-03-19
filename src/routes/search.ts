@@ -8,6 +8,7 @@ import { decryptKey } from "../lib/keys-client.js";
 import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/runs-client.js";
 import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment, toApolloSearchParams } from "../lib/transform.js";
 import { SearchRequestSchema, SearchNextRequestSchema, EnrichRequestSchema, StatsRequestSchema } from "../schemas.js";
+import { deepEqual } from "../lib/deep-equal.js";
 
 const router = Router();
 
@@ -305,8 +306,6 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     let cursorId: string | undefined = existingCursor?.id;
 
     if (searchParams) {
-      const paramsJson = JSON.stringify(searchParams);
-
       if (!existingCursor) {
         // Create new cursor
         const [newCursor] = await db.insert(apolloSearchCursors).values({
@@ -322,7 +321,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
         cursorId = newCursor.id;
         cursorSearchParams = searchParams as Record<string, unknown>;
         currentPage = 1;
-      } else if (JSON.stringify(existingCursor.searchParams) !== paramsJson) {
+      } else if (!deepEqual(existingCursor.searchParams, searchParams)) {
         // Params changed — reset cursor
         await db
           .update(apolloSearchCursors)

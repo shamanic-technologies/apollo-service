@@ -30,9 +30,33 @@ vi.mock("../../src/middleware/auth.js", () => ({
   },
 }));
 
-// Mock DB (search-params route doesn't use DB directly, but auth mock needs it)
+// Stateful DB mock for cache
+let mockCacheResult: Record<string, unknown> | null = null;
+const mockInsertValues = vi.fn();
+const mockOnConflictDoUpdate = vi.fn().mockResolvedValue(undefined);
+
 vi.mock("../../src/db/index.js", () => ({
   db: {
+    select: vi.fn().mockImplementation(() => ({
+      from: vi.fn().mockImplementation(() => ({
+        where: vi.fn().mockImplementation(() => ({
+          limit: vi.fn().mockImplementation(() =>
+            Promise.resolve(mockCacheResult ? [mockCacheResult] : [])
+          ),
+        })),
+      })),
+    })),
+    insert: vi.fn().mockImplementation(() => ({
+      values: (...args: unknown[]) => {
+        mockInsertValues(...args);
+        return {
+          onConflictDoUpdate: (...ocArgs: unknown[]) => {
+            mockOnConflictDoUpdate(...ocArgs);
+            return Promise.resolve();
+          },
+        };
+      },
+    })),
     query: {
       apolloPeopleSearches: { findMany: vi.fn().mockResolvedValue([]) },
       apolloPeopleEnrichments: { findMany: vi.fn().mockResolvedValue([]) },
@@ -40,7 +64,14 @@ vi.mock("../../src/db/index.js", () => ({
   },
 }));
 
-vi.mock("../../src/db/schema.js", () => ({}));
+vi.mock("../../src/db/schema.js", () => ({
+  apolloSearchParamsCache: {
+    orgId: { name: "org_id" },
+    brandId: { name: "brand_id" },
+    contextHash: { name: "context_hash" },
+    createdAt: { name: "created_at" },
+  },
+}));
 
 // Mock keys-client
 const mockDecryptKey = vi.fn();
@@ -84,6 +115,7 @@ describe("POST /search/params", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mockCacheResult = null;
 
     mockDecryptKey.mockImplementation((_orgId: string, _userId: string, provider: string) => {
       if (provider === "anthropic") return Promise.resolve({ key: "fake-anthropic-key", keySource: "platform" });
@@ -434,5 +466,74 @@ describe("POST /search/params", () => {
 
     expect(res.body.error).toBe("API key invalid");
     expect(mockUpdateRun).toHaveBeenCalledWith("run-1", "failed", expect.objectContaining({ orgId: "org_test" }));
+  });
+
+  // ─── 24h cache ──────────────────────────────────────────────────────────
+
+  it("returns cached result without calling LLM when cache hit within 24h", async () => {
+    mockCacheResult = {
+      orgId: "org_test",
+      brandId: "brand-1",
+      contextHash: "abc",
+      searchParams: { personTitles: ["CEO"] },
+      totalResults: 42,
+      attempts: 1,
+      attemptHistory: [{ searchParams: { personTitles: ["CEO"] }, totalResults: 42 }],
+      createdAt: new Date(), // fresh
+    };
+
+    const res = await request(app)
+      .post("/search/params")
+      .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
+      .send(BASE_BODY)
+      .expect(200);
+
+    expect(res.body.searchParams).toEqual({ personTitles: ["CEO"] });
+    expect(res.body.totalResults).toBe(42);
+    expect(res.body.cached).toBe(true);
+    // No LLM or Apollo calls
+    expect(mockCallClaude).not.toHaveBeenCalled();
+    expect(mockSearchPeople).not.toHaveBeenCalled();
+    expect(mockDecryptKey).not.toHaveBeenCalled();
+    // Still creates a run for traceability
+    expect(mockCreateRun).toHaveBeenCalledTimes(1);
+    expect(mockUpdateRun).toHaveBeenCalledWith(expect.any(String), "completed", expect.any(Object));
+  });
+
+  it("calls LLM on cache miss and stores result in cache", async () => {
+    // No cache hit
+    mockCacheResult = null;
+
+    mockCallClaude.mockResolvedValue({
+      content: JSON.stringify({ personTitles: ["CTO"] }),
+      inputTokens: 500,
+      outputTokens: 50,
+    });
+
+    mockSearchPeople.mockResolvedValue({ people: [{ id: "p1" }], total_entries: 100 });
+
+    const res = await request(app)
+      .post("/search/params")
+      .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
+      .send(BASE_BODY)
+      .expect(200);
+
+    expect(res.body.cached).toBe(false);
+    expect(res.body.searchParams).toEqual({ personTitles: ["CTO"] });
+    // Should have called LLM
+    expect(mockCallClaude).toHaveBeenCalledTimes(1);
+    // Should store in cache via insert
+    expect(mockInsertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orgId: "org_test",
+        brandId: "brand-1",
+        searchParams: { personTitles: ["CTO"] },
+        totalResults: 100,
+      })
+    );
   });
 });
