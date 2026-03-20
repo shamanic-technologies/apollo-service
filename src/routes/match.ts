@@ -88,7 +88,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
     if (keySource === "platform") {
       const auth = await authorizeCredit({
-        requiredCents: 1,
+        items: [{ costName: "apollo-person-match-credit", quantity: 1 }],
         description: "apollo-person-match-credit",
         orgId: req.orgId!,
         userId: req.userId!,
@@ -101,7 +101,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
         return res.status(402).json({
           error: "Insufficient credits",
           balance_cents: auth.balance_cents,
-          required_cents: 1,
+          required_cents: auth.required_cents,
         });
       }
     }
@@ -203,7 +203,7 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
 
       if (keySource === "platform") {
         const auth = await authorizeCredit({
-          requiredCents: missIndices.length,
+          items: [{ costName: "apollo-person-match-credit", quantity: missIndices.length }],
           description: `apollo-person-match-credit x${missIndices.length}`,
           orgId: req.orgId!,
           userId: req.userId!,
@@ -217,7 +217,7 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
           return res.status(402).json({
             error: "Insufficient credits",
             balance_cents: auth.balance_cents,
-            required_cents: missIndices.length,
+            required_cents: auth.required_cents,
           });
         }
       }

@@ -1,8 +1,13 @@
 const BILLING_SERVICE_URL = process.env.BILLING_SERVICE_URL || "http://localhost:3006";
 const BILLING_SERVICE_API_KEY = process.env.BILLING_SERVICE_API_KEY || "";
 
+export interface CreditItem {
+  costName: string;
+  quantity: number;
+}
+
 export interface AuthorizeCreditParams {
-  requiredCents: number;
+  items: CreditItem[];
   description: string;
   orgId: string;
   userId: string;
@@ -15,6 +20,7 @@ export interface AuthorizeCreditParams {
 export interface AuthorizeCreditResult {
   sufficient: boolean;
   balance_cents: number;
+  required_cents: number;
 }
 
 export async function authorizeCredit(
@@ -36,7 +42,7 @@ export async function authorizeCredit(
     method: "POST",
     headers,
     body: JSON.stringify({
-      required_cents: params.requiredCents,
+      items: params.items,
       description: params.description,
     }),
   });

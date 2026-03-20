@@ -95,10 +95,21 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
     const { key: anthropicApiKey, keySource: anthropicKeySource } = await decryptKey(req.orgId!, req.userId!, "anthropic", caller, tracking);
 
     // Authorize credit before executing paid operations (platform keys only)
-    // Estimate: 1 LLM call + 1 Apollo search (best case). Actual costs tracked per-iteration.
-    if (apolloKeySource === "platform" || anthropicKeySource === "platform") {
+    // Estimate: 1 LLM call (~1000 input + ~500 output tokens) + 1 Apollo search (best case).
+    // Actual costs tracked per-iteration via addCosts.
+    const authItems: { costName: string; quantity: number }[] = [];
+    if (anthropicKeySource === "platform") {
+      authItems.push(
+        { costName: "anthropic-sonnet-4.6-tokens-input", quantity: 1000 },
+        { costName: "anthropic-sonnet-4.6-tokens-output", quantity: 500 },
+      );
+    }
+    if (apolloKeySource === "platform") {
+      authItems.push({ costName: "apollo-search-credit", quantity: 1 });
+    }
+    if (authItems.length > 0) {
       const auth = await authorizeCredit({
-        requiredCents: 1,
+        items: authItems,
         description: "apollo-search-params-generation",
         orgId: req.orgId!,
         userId: req.userId!,
@@ -111,7 +122,7 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
         return res.status(402).json({
           error: "Insufficient credits",
           balance_cents: auth.balance_cents,
-          required_cents: 1,
+          required_cents: auth.required_cents,
         });
       }
     }
