@@ -24,6 +24,10 @@ vi.mock("../../src/lib/keys-client.js", () => ({
   decryptKey: (...args: unknown[]) => mockDecryptKey(...args),
 }));
 
+vi.mock("../../src/lib/billing-client.js", () => ({
+  authorizeCredit: vi.fn().mockResolvedValue({ sufficient: true, balance_cents: 99999 }),
+}));
+
 vi.mock("../../src/middleware/auth.js", () => ({
   serviceAuth: (req: any, _res: any, next: any) => {
     req.orgId = req.headers["x-org-id"] || "org-1";

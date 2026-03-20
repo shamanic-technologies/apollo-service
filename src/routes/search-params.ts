@@ -7,6 +7,7 @@ import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
 import { searchPeople } from "../lib/apollo-client.js";
 import { decryptKey } from "../lib/keys-client.js";
 import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/runs-client.js";
+import { authorizeCredit } from "../lib/billing-client.js";
 import { callClaude } from "../lib/anthropic-client.js";
 import { getSystemPrompt, buildUserMessage, SearchAttempt } from "../lib/search-params-prompt.js";
 import { toApolloSearchParams } from "../lib/transform.js";
@@ -92,6 +93,28 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
     const caller = { callerMethod: "POST", callerPath: "/search/params" };
     const { key: apolloApiKey, keySource: apolloKeySource } = await decryptKey(req.orgId!, req.userId!, "apollo", caller, tracking);
     const { key: anthropicApiKey, keySource: anthropicKeySource } = await decryptKey(req.orgId!, req.userId!, "anthropic", caller, tracking);
+
+    // Authorize credit before executing paid operations (platform keys only)
+    // Estimate: 1 LLM call + 1 Apollo search (best case). Actual costs tracked per-iteration.
+    if (apolloKeySource === "platform" || anthropicKeySource === "platform") {
+      const auth = await authorizeCredit({
+        requiredCents: 1,
+        description: "apollo-search-params-generation",
+        orgId: req.orgId!,
+        userId: req.userId!,
+        runId,
+        brandId,
+        campaignId,
+        workflowName,
+      });
+      if (!auth.sufficient) {
+        return res.status(402).json({
+          error: "Insufficient credits",
+          balance_cents: auth.balance_cents,
+          required_cents: 1,
+        });
+      }
+    }
 
     const paramRun = await createRun({
       orgId: req.orgId!,

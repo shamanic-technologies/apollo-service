@@ -6,6 +6,7 @@ import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
 import { searchPeople, enrichPerson, ApolloPerson } from "../lib/apollo-client.js";
 import { decryptKey } from "../lib/keys-client.js";
 import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/runs-client.js";
+import { authorizeCredit } from "../lib/billing-client.js";
 import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment, toApolloSearchParams } from "../lib/transform.js";
 import { SearchRequestSchema, SearchNextRequestSchema, EnrichRequestSchema, StatsRequestSchema } from "../schemas.js";
 import { deepEqual } from "../lib/deep-equal.js";
@@ -32,6 +33,27 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
     // Get Apollo API key from key-service
     const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/search" }, tracking);
+
+    // Authorize credit before executing paid operation (platform keys only)
+    if (keySource === "platform") {
+      const auth = await authorizeCredit({
+        requiredCents: 1,
+        description: "apollo-search-credit",
+        orgId: req.orgId!,
+        userId: req.userId!,
+        runId,
+        brandId,
+        campaignId,
+        workflowName,
+      });
+      if (!auth.sufficient) {
+        return res.status(402).json({
+          error: "Insufficient credits",
+          balance_cents: auth.balance_cents,
+          required_cents: 1,
+        });
+      }
+    }
 
     // Call Apollo API
     const apolloParams = {
@@ -216,6 +238,28 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
     }
 
     const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/enrich" }, tracking);
+
+    // Authorize credit before executing paid operation (platform keys only)
+    if (keySource === "platform") {
+      const auth = await authorizeCredit({
+        requiredCents: 1,
+        description: "apollo-enrichment-credit",
+        orgId: req.orgId!,
+        userId: req.userId!,
+        runId,
+        brandId,
+        campaignId,
+        workflowName,
+      });
+      if (!auth.sufficient) {
+        return res.status(402).json({
+          error: "Insufficient credits",
+          balance_cents: auth.balance_cents,
+          required_cents: 1,
+        });
+      }
+    }
+
     const result = await enrichPerson(apolloApiKey, apolloPersonId);
     const person = result.person;
 
@@ -286,6 +330,27 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
 
     // Get Apollo API key
     const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/search/next" }, tracking);
+
+    // Authorize credit before executing paid operation (platform keys only)
+    if (keySource === "platform") {
+      const auth = await authorizeCredit({
+        requiredCents: 1,
+        description: "apollo-search-credit",
+        orgId: req.orgId!,
+        userId: req.userId!,
+        runId,
+        brandId,
+        campaignId,
+        workflowName,
+      });
+      if (!auth.sufficient) {
+        return res.status(402).json({
+          error: "Insufficient credits",
+          balance_cents: auth.balance_cents,
+          required_cents: 1,
+        });
+      }
+    }
 
     // Look up existing cursor for this campaign
     const [existingCursor] = await db
