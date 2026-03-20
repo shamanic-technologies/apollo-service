@@ -37,7 +37,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
     // Authorize credit before executing paid operation (platform keys only)
     if (keySource === "platform") {
       const auth = await authorizeCredit({
-        requiredCents: 1,
+        items: [{ costName: "apollo-search-credit", quantity: 1 }],
         description: "apollo-search-credit",
         orgId: req.orgId!,
         userId: req.userId!,
@@ -50,7 +50,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
         return res.status(402).json({
           error: "Insufficient credits",
           balance_cents: auth.balance_cents,
-          required_cents: 1,
+          required_cents: auth.required_cents,
         });
       }
     }
@@ -242,7 +242,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
     // Authorize credit before executing paid operation (platform keys only)
     if (keySource === "platform") {
       const auth = await authorizeCredit({
-        requiredCents: 1,
+        items: [{ costName: "apollo-enrichment-credit", quantity: 1 }],
         description: "apollo-enrichment-credit",
         orgId: req.orgId!,
         userId: req.userId!,
@@ -255,7 +255,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
         return res.status(402).json({
           error: "Insufficient credits",
           balance_cents: auth.balance_cents,
-          required_cents: 1,
+          required_cents: auth.required_cents,
         });
       }
     }
@@ -334,7 +334,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     // Authorize credit before executing paid operation (platform keys only)
     if (keySource === "platform") {
       const auth = await authorizeCredit({
-        requiredCents: 1,
+        items: [{ costName: "apollo-search-credit", quantity: 1 }],
         description: "apollo-search-credit",
         orgId: req.orgId!,
         userId: req.userId!,
@@ -347,7 +347,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
         return res.status(402).json({
           error: "Insufficient credits",
           balance_cents: auth.balance_cents,
-          required_cents: 1,
+          required_cents: auth.required_cents,
         });
       }
     }
