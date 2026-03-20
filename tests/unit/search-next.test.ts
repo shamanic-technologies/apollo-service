@@ -89,6 +89,10 @@ vi.mock("../../src/lib/keys-client.js", () => ({
   decryptKey: vi.fn().mockResolvedValue({ key: "fake-apollo-key", keySource: "platform" }),
 }));
 
+vi.mock("../../src/lib/billing-client.js", () => ({
+  authorizeCredit: vi.fn().mockResolvedValue({ sufficient: true, balance_cents: 99999 }),
+}));
+
 // Mock Apollo client
 const mockSearchPeople = vi.fn();
 

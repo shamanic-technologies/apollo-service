@@ -69,6 +69,10 @@ vi.mock("../../src/lib/keys-client.js", () => ({
   decryptKey: (...args: unknown[]) => mockDecryptKey(...args),
 }));
 
+vi.mock("../../src/lib/billing-client.js", () => ({
+  authorizeCredit: vi.fn().mockResolvedValue({ sufficient: true, balance_cents: 99999 }),
+}));
+
 const MOCK_PERSON = {
   id: "person-match-1",
   first_name: "John",

@@ -6,6 +6,7 @@ import { serviceAuth, type AuthenticatedRequest } from "../middleware/auth.js";
 import { matchPersonByName, bulkMatchPeopleByName } from "../lib/apollo-client.js";
 import { decryptKey } from "../lib/keys-client.js";
 import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/runs-client.js";
+import { authorizeCredit } from "../lib/billing-client.js";
 import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment } from "../lib/transform.js";
 import { MatchRequestSchema, MatchBulkRequestSchema } from "../schemas.js";
 
@@ -84,6 +85,27 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
     // Cache miss: call Apollo API
     const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/match" }, tracking);
+
+    if (keySource === "platform") {
+      const auth = await authorizeCredit({
+        requiredCents: 1,
+        description: "apollo-person-match-credit",
+        orgId: req.orgId!,
+        userId: req.userId!,
+        runId,
+        brandId,
+        campaignId,
+        workflowName,
+      });
+      if (!auth.sufficient) {
+        return res.status(402).json({
+          error: "Insufficient credits",
+          balance_cents: auth.balance_cents,
+          required_cents: 1,
+        });
+      }
+    }
+
     const result = await matchPersonByName(apolloApiKey, firstName, lastName, organizationDomain);
     const person = result.person;
 
@@ -178,6 +200,28 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
     if (missIndices.length > 0) {
       const { key: apolloApiKey, keySource: ks } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/match/bulk" }, tracking);
       keySource = ks;
+
+      if (keySource === "platform") {
+        const auth = await authorizeCredit({
+          requiredCents: missIndices.length,
+          description: `apollo-person-match-credit x${missIndices.length}`,
+          orgId: req.orgId!,
+          userId: req.userId!,
+          runId,
+          brandId,
+          campaignId,
+          workflowName,
+        });
+        if (!auth.sufficient) {
+          await updateRun(batchRun.id, "failed", identity);
+          return res.status(402).json({
+            error: "Insufficient credits",
+            balance_cents: auth.balance_cents,
+            required_cents: missIndices.length,
+          });
+        }
+      }
+
       const missItems = missIndices.map((i) => ({
         first_name: items[i].firstName,
         last_name: items[i].lastName,

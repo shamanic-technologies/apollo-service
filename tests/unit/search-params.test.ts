@@ -80,6 +80,10 @@ vi.mock("../../src/lib/keys-client.js", () => ({
   decryptKey: (...args: unknown[]) => mockDecryptKey(...args),
 }));
 
+vi.mock("../../src/lib/billing-client.js", () => ({
+  authorizeCredit: vi.fn().mockResolvedValue({ sufficient: true, balance_cents: 99999 }),
+}));
+
 // Mock Apollo client
 const mockSearchPeople = vi.fn();
 
