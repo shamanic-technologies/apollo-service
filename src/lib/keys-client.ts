@@ -28,6 +28,7 @@ export interface DecryptKeyResult {
 export interface TrackingContext {
   brandId?: string;
   campaignId?: string;
+  featureSlug?: string;
   workflowName?: string;
 }
 
@@ -41,6 +42,7 @@ export async function decryptKey(
   const trackingHeaders: Record<string, string> = {};
   if (tracking?.brandId) trackingHeaders["x-brand-id"] = tracking.brandId;
   if (tracking?.campaignId) trackingHeaders["x-campaign-id"] = tracking.campaignId;
+  if (tracking?.featureSlug) trackingHeaders["x-feature-slug"] = tracking.featureSlug;
   if (tracking?.workflowName) trackingHeaders["x-workflow-name"] = tracking.workflowName;
 
   const response = await fetch(

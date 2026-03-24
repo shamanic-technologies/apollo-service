@@ -6,6 +6,7 @@ export interface AuthenticatedRequest extends Request {
   runId?: string;
   brandId?: string;
   campaignId?: string;
+  featureSlug?: string;
   workflowName?: string;
 }
 
@@ -38,11 +39,13 @@ export async function serviceAuth(
     const runId = req.headers["x-run-id"] as string | undefined;
     const brandId = req.headers["x-brand-id"] as string | undefined;
     const campaignId = req.headers["x-campaign-id"] as string | undefined;
+    const featureSlug = req.headers["x-feature-slug"] as string | undefined;
     const workflowName = req.headers["x-workflow-name"] as string | undefined;
 
     if (runId) req.runId = runId;
     if (brandId) req.brandId = brandId;
     if (campaignId) req.campaignId = campaignId;
+    if (featureSlug) req.featureSlug = featureSlug;
     if (workflowName) req.workflowName = workflowName;
 
     next();

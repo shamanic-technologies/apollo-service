@@ -85,6 +85,13 @@
       "when": 1774060800000,
       "tag": "0011_add_search_params_cache",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1774656000000,
+      "tag": "0012_add_feature_slug",
+      "breakpoints": true
     }
   ]
 }

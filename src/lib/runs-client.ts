@@ -65,6 +65,7 @@ export interface CreateRunParams {
   userId?: string;
   brandId?: string;
   campaignId?: string;
+  featureSlug?: string;
   serviceName: string;
   taskName: string;
   parentRunId?: string;
@@ -82,6 +83,7 @@ export interface ListRunsParams {
   userId?: string;
   brandId?: string;
   campaignId?: string;
+  featureSlug?: string;
   serviceName?: string;
   taskName?: string;
   status?: string;
@@ -100,6 +102,7 @@ export interface IdentityHeaders {
   runId?: string;
   brandId?: string;
   campaignId?: string;
+  featureSlug?: string;
   workflowName?: string;
 }
 
@@ -121,6 +124,7 @@ async function runsRequest<T>(
   if (identity?.runId) headers["x-run-id"] = identity.runId;
   if (identity?.brandId) headers["x-brand-id"] = identity.brandId;
   if (identity?.campaignId) headers["x-campaign-id"] = identity.campaignId;
+  if (identity?.featureSlug) headers["x-feature-slug"] = identity.featureSlug;
   if (identity?.workflowName) headers["x-workflow-name"] = identity.workflowName;
 
   const response = await fetch(`${RUNS_SERVICE_URL}${path}`, {
@@ -155,6 +159,7 @@ export async function createRun(params: CreateRunParams): Promise<Run> {
     body: {
       brandId: params.brandId,
       campaignId: params.campaignId,
+      featureSlug: params.featureSlug,
       serviceName: params.serviceName,
       taskName: params.taskName,
       workflowName: params.workflowName,

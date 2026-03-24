@@ -11,6 +11,7 @@ export const apolloPeopleSearches = pgTable(
     // Hierarchy IDs
     brandId: text("brand_id").notNull(),
     campaignId: text("campaign_id").notNull(),
+    featureSlug: text("feature_slug"),
     workflowName: text("workflow_name"),
 
     // Request params (for debugging/replay)
@@ -29,6 +30,7 @@ export const apolloPeopleSearches = pgTable(
     index("idx_searches_org").on(table.orgId),
     index("idx_searches_run").on(table.runId),
     index("idx_searches_campaign").on(table.campaignId),
+    index("idx_searches_feature_slug").on(table.featureSlug),
   ]
 );
 
@@ -45,6 +47,7 @@ export const apolloPeopleEnrichments = pgTable(
     // Hierarchy IDs
     brandId: text("brand_id").notNull(),
     campaignId: text("campaign_id").notNull(),
+    featureSlug: text("feature_slug"),
     workflowName: text("workflow_name"),
 
     // Apollo person ID
@@ -125,6 +128,7 @@ export const apolloPeopleEnrichments = pgTable(
     index("idx_enrichments_email").on(table.email),
     index("idx_enrichments_person_id").on(table.apolloPersonId),
     index("idx_enrichments_campaign").on(table.campaignId),
+    index("idx_enrichments_feature_slug").on(table.featureSlug),
   ]
 );
 
@@ -136,6 +140,7 @@ export const apolloSearchCursors = pgTable(
     orgId: uuid("org_id").notNull(),
     campaignId: text("campaign_id").notNull(),
     brandId: text("brand_id").notNull(),
+    featureSlug: text("feature_slug"),
     workflowName: text("workflow_name"),
     searchParams: jsonb("search_params").notNull(),
     currentPage: integer("current_page").notNull().default(1),

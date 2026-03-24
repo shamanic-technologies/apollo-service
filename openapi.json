@@ -1843,6 +1843,17 @@
           {
             "schema": {
               "type": "string",
+              "description": "Feature slug for tracking",
+              "example": "lead-gen"
+            },
+            "required": false,
+            "description": "Feature slug for tracking",
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
               "description": "Workflow name for run tracking",
               "example": "fetch-lead"
             },
@@ -1953,6 +1964,17 @@
           {
             "schema": {
               "type": "string",
+              "description": "Feature slug for tracking",
+              "example": "lead-gen"
+            },
+            "required": false,
+            "description": "Feature slug for tracking",
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
               "description": "Workflow name for run tracking",
               "example": "fetch-lead"
             },
@@ -2057,6 +2079,17 @@
             "required": true,
             "description": "Campaign ID",
             "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking",
+              "example": "lead-gen"
+            },
+            "required": false,
+            "description": "Feature slug for tracking",
+            "name": "x-feature-slug",
             "in": "header"
           },
           {
@@ -2172,6 +2205,17 @@
           {
             "schema": {
               "type": "string",
+              "description": "Feature slug for tracking",
+              "example": "lead-gen"
+            },
+            "required": false,
+            "description": "Feature slug for tracking",
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
               "description": "Workflow name for run tracking",
               "example": "fetch-lead"
             },
@@ -2277,6 +2321,17 @@
             "required": true,
             "description": "Campaign ID",
             "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking",
+              "example": "lead-gen"
+            },
+            "required": false,
+            "description": "Feature slug for tracking",
+            "name": "x-feature-slug",
             "in": "header"
           },
           {
@@ -2639,6 +2694,17 @@
             "required": true,
             "description": "Campaign ID",
             "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking",
+              "example": "lead-gen"
+            },
+            "required": false,
+            "description": "Feature slug for tracking",
+            "name": "x-feature-slug",
             "in": "header"
           },
           {
