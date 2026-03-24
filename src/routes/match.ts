@@ -47,12 +47,12 @@ async function findCachedMatch(
  */
 router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const { runId, brandId, campaignId, workflowName } = req;
+    const { runId, brandId, campaignId, featureSlug, workflowName } = req;
     if (!runId || !brandId || !campaignId) {
       return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
-    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, workflowName };
-    const tracking = { brandId, campaignId, workflowName };
+    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, featureSlug, workflowName };
+    const tracking = { brandId, campaignId, featureSlug, workflowName };
 
     const parsed = MatchRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -95,6 +95,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
         runId,
         brandId,
         campaignId,
+        featureSlug,
         workflowName,
       });
       if (!auth.sufficient) {
@@ -114,6 +115,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
       userId: req.userId,
       brandId,
       campaignId,
+      featureSlug,
       serviceName: "apollo-service",
       taskName: "person-match",
       parentRunId: runId,
@@ -128,6 +130,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
         runId,
         brandId,
         campaignId,
+        featureSlug,
         workflowName,
         ...toEnrichmentDbValues(person),
         enrichmentRunId: matchRun.id,
@@ -157,12 +160,12 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
  */
 router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const { runId, brandId, campaignId, workflowName } = req;
+    const { runId, brandId, campaignId, featureSlug, workflowName } = req;
     if (!runId || !brandId || !campaignId) {
       return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
-    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, workflowName };
-    const tracking = { brandId, campaignId, workflowName };
+    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, featureSlug, workflowName };
+    const tracking = { brandId, campaignId, featureSlug, workflowName };
 
     const parsed = MatchBulkRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -175,6 +178,7 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
       userId: req.userId,
       brandId,
       campaignId,
+      featureSlug,
       serviceName: "apollo-service",
       taskName: "person-match-bulk",
       parentRunId: runId,
@@ -210,6 +214,7 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
           runId,
           brandId,
           campaignId,
+          featureSlug,
           workflowName,
         });
         if (!auth.sufficient) {
@@ -262,6 +267,7 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
             runId,
             brandId,
             campaignId,
+            featureSlug,
             workflowName,
             ...toEnrichmentDbValues(person),
             enrichmentRunId: batchRun.id,

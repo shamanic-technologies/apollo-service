@@ -18,12 +18,12 @@ const router = Router();
  */
 router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const { runId, brandId, campaignId, workflowName } = req;
+    const { runId, brandId, campaignId, featureSlug, workflowName } = req;
     if (!runId || !brandId || !campaignId) {
       return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
-    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, workflowName };
-    const tracking = { brandId, campaignId, workflowName };
+    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, featureSlug, workflowName };
+    const tracking = { brandId, campaignId, featureSlug, workflowName };
 
     const parsed = SearchRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -44,6 +44,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
         runId,
         brandId,
         campaignId,
+        featureSlug,
         workflowName,
       });
       if (!auth.sufficient) {
@@ -68,6 +69,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
       userId: req.userId,
       brandId,
       campaignId,
+      featureSlug,
       serviceName: "apollo-service",
       taskName: "people-search",
       parentRunId: runId,
@@ -97,6 +99,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
         runId,
         brandId,
         campaignId,
+        featureSlug,
         workflowName,
         requestParams: apolloParams,
         peopleCount: result.people.length,
@@ -113,6 +116,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
         searchId: search.id,
         brandId,
         campaignId,
+        featureSlug,
         workflowName,
         ...toEnrichmentDbValues(person),
       });
@@ -187,12 +191,12 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
  */
 router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const { runId, brandId, campaignId, workflowName } = req;
+    const { runId, brandId, campaignId, featureSlug, workflowName } = req;
     if (!runId || !brandId || !campaignId) {
       return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
-    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, workflowName };
-    const tracking = { brandId, campaignId, workflowName };
+    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, featureSlug, workflowName };
+    const tracking = { brandId, campaignId, featureSlug, workflowName };
 
     const parsed = EnrichRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -249,6 +253,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
         runId,
         brandId,
         campaignId,
+        featureSlug,
         workflowName,
       });
       if (!auth.sufficient) {
@@ -271,6 +276,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
         runId,
         brandId,
         campaignId,
+        featureSlug,
         workflowName,
         ...toEnrichmentDbValues(person),
       }).returning();
@@ -315,12 +321,12 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
  */
 router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const { runId, brandId, campaignId, workflowName } = req;
+    const { runId, brandId, campaignId, featureSlug, workflowName } = req;
     if (!runId || !brandId || !campaignId) {
       return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
-    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, workflowName };
-    const tracking = { brandId, campaignId, workflowName };
+    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, featureSlug, workflowName };
+    const tracking = { brandId, campaignId, featureSlug, workflowName };
 
     const parsed = SearchNextRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -341,6 +347,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
         runId,
         brandId,
         campaignId,
+        featureSlug,
         workflowName,
       });
       if (!auth.sufficient) {
@@ -377,6 +384,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
           orgId: req.orgId!,
           campaignId,
           brandId,
+          featureSlug,
           workflowName,
           searchParams: searchParams as Record<string, unknown>,
           currentPage: 1,
@@ -460,6 +468,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
       userId: req.userId,
       brandId,
       campaignId,
+      featureSlug,
       serviceName: "apollo-service",
       taskName: "people-search-next",
       parentRunId: runId,
@@ -471,6 +480,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
       runId,
       brandId,
       campaignId,
+      featureSlug,
       workflowName,
       requestParams: apolloParams,
       peopleCount: people.length,

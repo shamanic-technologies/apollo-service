@@ -35,6 +35,7 @@ vi.mock("../../src/middleware/auth.js", () => ({
     if (req.headers["x-run-id"]) req.runId = req.headers["x-run-id"];
     if (req.headers["x-brand-id"]) req.brandId = req.headers["x-brand-id"];
     if (req.headers["x-campaign-id"]) req.campaignId = req.headers["x-campaign-id"];
+    if (req.headers["x-feature-slug"]) req.featureSlug = req.headers["x-feature-slug"];
     if (req.headers["x-workflow-name"]) req.workflowName = req.headers["x-workflow-name"];
     next();
   },
@@ -110,6 +111,7 @@ const TRACKING_HEADERS = {
   "X-Run-Id": "run-parent",
   "X-Brand-Id": "brand-abc",
   "X-Campaign-Id": "campaign-xyz",
+  "X-Feature-Slug": "lead-gen",
   "X-Workflow-Name": "lead-search-workflow",
 };
 
@@ -141,7 +143,7 @@ describe("tracking headers forwarding", () => {
       "user-1",
       "apollo",
       expect.any(Object),
-      { brandId: "brand-abc", campaignId: "campaign-xyz", workflowName: "lead-search-workflow" }
+      { brandId: "brand-abc", campaignId: "campaign-xyz", featureSlug: "lead-gen", workflowName: "lead-search-workflow" }
     );
   });
 
@@ -163,6 +165,7 @@ describe("tracking headers forwarding", () => {
       expect.objectContaining({
         brandId: "brand-abc",
         campaignId: "campaign-xyz",
+        featureSlug: "lead-gen",
         workflowName: "lead-search-workflow",
       })
     );
@@ -174,6 +177,7 @@ describe("tracking headers forwarding", () => {
       expect.objectContaining({
         brandId: "brand-abc",
         campaignId: "campaign-xyz",
+        featureSlug: "lead-gen",
         workflowName: "lead-search-workflow",
       })
     );
@@ -197,6 +201,40 @@ describe("tracking headers forwarding", () => {
         campaignId: "campaign-xyz",
       })
     );
+  });
+
+  it("forwards featureSlug to createRun", async () => {
+    const { default: searchRouter } = await import("../../src/routes/search.js");
+    const app = createApp();
+    app.use(searchRouter);
+
+    await request(app)
+      .post("/search")
+      .set(TRACKING_HEADERS)
+      .send({ personTitles: ["CEO"] })
+      .expect(200);
+
+    expect(mockCreateRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        featureSlug: "lead-gen",
+      })
+    );
+  });
+
+  it("stores featureSlug in DB insert", async () => {
+    const { default: searchRouter } = await import("../../src/routes/search.js");
+    const app = createApp();
+    app.use(searchRouter);
+
+    await request(app)
+      .post("/search")
+      .set(TRACKING_HEADERS)
+      .send({ personTitles: ["CEO"] })
+      .expect(200);
+
+    expect(lastInsertValues).toMatchObject({
+      featureSlug: "lead-gen",
+    });
   });
 
   it("stores workflowName in DB insert", async () => {

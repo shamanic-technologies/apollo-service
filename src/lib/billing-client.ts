@@ -14,6 +14,7 @@ export interface AuthorizeCreditParams {
   runId?: string;
   brandId?: string;
   campaignId?: string;
+  featureSlug?: string;
   workflowName?: string;
 }
 
@@ -36,6 +37,7 @@ export async function authorizeCredit(
   if (params.runId) headers["x-run-id"] = params.runId;
   if (params.brandId) headers["x-brand-id"] = params.brandId;
   if (params.campaignId) headers["x-campaign-id"] = params.campaignId;
+  if (params.featureSlug) headers["x-feature-slug"] = params.featureSlug;
   if (params.workflowName) headers["x-workflow-name"] = params.workflowName;
 
   const response = await fetch(`${BILLING_SERVICE_URL}/v1/credits/authorize`, {
