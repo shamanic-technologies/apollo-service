@@ -9,9 +9,11 @@ import { decryptKey } from "../lib/keys-client.js";
 import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/runs-client.js";
 import { authorizeCredit } from "../lib/billing-client.js";
 import { callClaude } from "../lib/anthropic-client.js";
-import { getSystemPrompt, buildUserMessage, SearchAttempt } from "../lib/search-params-prompt.js";
+import { getSystemPrompt, buildUserMessage, SearchAttempt, PromptEnrichment } from "../lib/search-params-prompt.js";
 import { toApolloSearchParams } from "../lib/transform.js";
 import { SearchParamsRequestSchema, SearchFiltersSchema } from "../schemas.js";
+import { getFeatureInputs } from "../lib/campaign-client.js";
+import { extractBrandFields } from "../lib/brand-fields-client.js";
 
 const router = Router();
 
@@ -128,6 +130,24 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
       }
     }
 
+    // Fetch brand fields + campaign context in parallel (Convention 1 & 2)
+    const [brandFieldResults, featureInputs] = await Promise.all([
+      extractBrandFields(brandId, [
+        { key: "industry", description: "The brand's primary industry vertical" },
+        { key: "target_geography", description: "Priority geographic markets for outreach" },
+        { key: "ideal_lead_type", description: "Type of leads to target (decision-makers, executives, managers...)" },
+        { key: "target_job_titles", description: "Job titles to prioritize in outreach" },
+      ], identity),
+      getFeatureInputs(campaignId, identity),
+    ]);
+
+    const brandFields: Record<string, unknown> = {};
+    for (const f of brandFieldResults) {
+      if (f.value != null) brandFields[f.key] = f.value;
+    }
+
+    const enrichment: PromptEnrichment = { brandFields, featureInputs };
+
     const paramRun = await createRun({
       orgId: req.orgId!,
       userId: req.userId,
@@ -147,7 +167,7 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
 
     try {
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-        const userMessage = buildUserMessage(context, attemptHistory);
+        const userMessage = buildUserMessage(context, attemptHistory, enrichment);
         const llmResponse = await callClaude(anthropicApiKey, systemPrompt, userMessage);
 
         await addCosts(paramRun.id, [

@@ -107,26 +107,46 @@ export interface SearchAttempt {
   totalResults: number;
 }
 
+export interface PromptEnrichment {
+  brandFields?: Record<string, unknown>;
+  featureInputs?: Record<string, unknown> | null;
+}
+
 export function buildUserMessage(
   context: string,
-  previousAttempts: SearchAttempt[]
+  previousAttempts: SearchAttempt[],
+  enrichment?: PromptEnrichment
 ): string {
   const contextBlock = context.substring(0, 100000);
 
-  if (previousAttempts.length === 0) {
-    return contextBlock;
+  const sections: string[] = [contextBlock];
+
+  // Inject brand-extracted fields (Convention 1)
+  if (enrichment?.brandFields && Object.keys(enrichment.brandFields).length > 0) {
+    sections.push(
+      "---\n\n## Brand intelligence (extracted from the brand's website)\n" +
+      JSON.stringify(enrichment.brandFields, null, 2)
+    );
   }
 
-  const historyBlock = previousAttempts
-    .map(
-      (a, i) =>
-        `Attempt ${i + 1}: ${JSON.stringify(a.searchParams)} → ${a.totalResults} results`
-    )
-    .join("\n");
+  // Inject campaign feature inputs (Convention 2)
+  if (enrichment?.featureInputs && Object.keys(enrichment.featureInputs).length > 0) {
+    sections.push(
+      "---\n\n## Campaign context (user-specified inputs for this campaign)\n" +
+      JSON.stringify(enrichment.featureInputs, null, 2)
+    );
+  }
 
-  return `${contextBlock}
+  if (previousAttempts.length > 0) {
+    const historyBlock = previousAttempts
+      .map(
+        (a, i) =>
+          `Attempt ${i + 1}: ${JSON.stringify(a.searchParams)} → ${a.totalResults} results`
+      )
+      .join("\n");
 
----
+    sections.push(
+      `---
 
 IMPORTANT: Your previous searches returned 0 results. Here is the history:
 ${historyBlock}
@@ -134,5 +154,9 @@ ${historyBlock}
 Broaden the filters to get at least 1 result while staying as close as possible to the original intent.
 Strategies: remove a filter, add more title variations, use broader keywords, widen geography, try different industries.
 Do NOT repeat a combination that already failed.
-Output ONLY valid JSON.`;
+Output ONLY valid JSON.`
+    );
+  }
+
+  return sections.join("\n\n");
 }

@@ -85,6 +85,21 @@ vi.mock("../../src/lib/billing-client.js", () => ({
   authorizeCredit: vi.fn().mockResolvedValue({ sufficient: true, balance_cents: 99999 }),
 }));
 
+// Mock campaign-client
+const mockGetFeatureInputs = vi.fn();
+
+vi.mock("../../src/lib/campaign-client.js", () => ({
+  getFeatureInputs: (...args: unknown[]) => mockGetFeatureInputs(...args),
+  clearFeatureInputsCache: vi.fn(),
+}));
+
+// Mock brand-fields-client
+const mockExtractBrandFields = vi.fn();
+
+vi.mock("../../src/lib/brand-fields-client.js", () => ({
+  extractBrandFields: (...args: unknown[]) => mockExtractBrandFields(...args),
+}));
+
 // Mock Apollo client
 const mockSearchPeople = vi.fn();
 
@@ -126,6 +141,9 @@ describe("POST /search/params", () => {
       if (provider === "anthropic") return Promise.resolve({ key: "fake-anthropic-key", keySource: "platform" });
       return Promise.resolve({ key: "fake-apollo-key", keySource: "platform" });
     });
+
+    mockGetFeatureInputs.mockResolvedValue(null);
+    mockExtractBrandFields.mockResolvedValue([]);
 
     let runCount = 0;
     mockCreateRun.mockImplementation(() => {
@@ -471,6 +489,113 @@ describe("POST /search/params", () => {
 
     expect(res.body.error).toBe("API key invalid");
     expect(mockUpdateRun).toHaveBeenCalledWith("run-1", "failed", expect.objectContaining({ orgId: "org_test" }));
+  });
+
+  // ─── Convention 2: Campaign context in LLM calls ─────────────────────────
+
+  it("fetches campaign featureInputs and injects them into the LLM prompt", async () => {
+    mockGetFeatureInputs.mockResolvedValue({
+      angle: "sustainability",
+      target_region: "Europe",
+    });
+
+    mockCallClaude.mockResolvedValue({
+      content: JSON.stringify({ personTitles: ["CTO"] }),
+      inputTokens: 500,
+      outputTokens: 50,
+    });
+
+    mockSearchPeople.mockResolvedValue({ people: [{ id: "p1" }], total_entries: 10 });
+
+    await request(app)
+      .post("/search/params")
+      .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
+      .send(BASE_BODY)
+      .expect(200);
+
+    expect(mockGetFeatureInputs).toHaveBeenCalledWith("campaign-1", expect.objectContaining({ orgId: "org_test" }));
+
+    // The LLM user message should contain the campaign context
+    const userMessage = mockCallClaude.mock.calls[0][2];
+    expect(userMessage).toContain("Campaign context");
+    expect(userMessage).toContain("sustainability");
+    expect(userMessage).toContain("Europe");
+  });
+
+  // ─── Convention 1: Brand Service fields in LLM calls ─────────────────────
+
+  it("fetches brand fields and injects them into the LLM prompt", async () => {
+    mockExtractBrandFields.mockResolvedValue([
+      { key: "industry", value: "Renewable Energy", cached: true },
+      { key: "target_geography", value: "North America", cached: true },
+      { key: "target_job_titles", value: ["VP Sustainability", "Head of ESG"], cached: false },
+      { key: "ideal_lead_type", value: null, cached: false },
+    ]);
+
+    mockCallClaude.mockResolvedValue({
+      content: JSON.stringify({ personTitles: ["VP Sustainability"] }),
+      inputTokens: 500,
+      outputTokens: 50,
+    });
+
+    mockSearchPeople.mockResolvedValue({ people: [{ id: "p1" }], total_entries: 5 });
+
+    await request(app)
+      .post("/search/params")
+      .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
+      .send(BASE_BODY)
+      .expect(200);
+
+    expect(mockExtractBrandFields).toHaveBeenCalledWith(
+      "brand-1",
+      expect.arrayContaining([
+        expect.objectContaining({ key: "industry" }),
+        expect.objectContaining({ key: "target_geography" }),
+        expect.objectContaining({ key: "target_job_titles" }),
+        expect.objectContaining({ key: "ideal_lead_type" }),
+      ]),
+      expect.objectContaining({ orgId: "org_test" })
+    );
+
+    // The LLM user message should contain brand intelligence (non-null fields only)
+    const userMessage = mockCallClaude.mock.calls[0][2];
+    expect(userMessage).toContain("Brand intelligence");
+    expect(userMessage).toContain("Renewable Energy");
+    expect(userMessage).toContain("North America");
+    expect(userMessage).toContain("VP Sustainability");
+    // null fields should not appear
+    expect(userMessage).not.toContain("ideal_lead_type");
+  });
+
+  it("still works when brand-service and campaign-service return nothing", async () => {
+    mockExtractBrandFields.mockResolvedValue([]);
+    mockGetFeatureInputs.mockResolvedValue(null);
+
+    mockCallClaude.mockResolvedValue({
+      content: JSON.stringify({ personTitles: ["CEO"] }),
+      inputTokens: 500,
+      outputTokens: 50,
+    });
+
+    mockSearchPeople.mockResolvedValue({ people: [{ id: "p1" }], total_entries: 10 });
+
+    const res = await request(app)
+      .post("/search/params")
+      .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
+      .send(BASE_BODY)
+      .expect(200);
+
+    expect(res.body.searchParams).toEqual({ personTitles: ["CEO"] });
+    // No enrichment sections in the prompt
+    const userMessage = mockCallClaude.mock.calls[0][2];
+    expect(userMessage).not.toContain("Brand intelligence");
+    expect(userMessage).not.toContain("Campaign context");
   });
 
   // ─── 24h cache ──────────────────────────────────────────────────────────
