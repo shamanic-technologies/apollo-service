@@ -3,7 +3,7 @@ import express from "express";
 import request from "supertest";
 
 /**
- * Regression test: x-campaign-id, x-brand-id, x-workflow-name headers
+ * Regression test: x-campaign-id, x-brand-id, x-workflow-slug headers
  * must be forwarded on all downstream HTTP calls (runs-service, key-service)
  * and stored in the database.
  */
@@ -36,7 +36,7 @@ vi.mock("../../src/middleware/auth.js", () => ({
     if (req.headers["x-brand-id"]) req.brandId = req.headers["x-brand-id"];
     if (req.headers["x-campaign-id"]) req.campaignId = req.headers["x-campaign-id"];
     if (req.headers["x-feature-slug"]) req.featureSlug = req.headers["x-feature-slug"];
-    if (req.headers["x-workflow-name"]) req.workflowName = req.headers["x-workflow-name"];
+    if (req.headers["x-workflow-slug"]) req.workflowSlug = req.headers["x-workflow-slug"];
     next();
   },
 }));
@@ -112,7 +112,7 @@ const TRACKING_HEADERS = {
   "X-Brand-Id": "brand-abc",
   "X-Campaign-Id": "campaign-xyz",
   "X-Feature-Slug": "lead-gen",
-  "X-Workflow-Name": "lead-search-workflow",
+  "X-Workflow-Slug": "lead-search-workflow",
 };
 
 function createApp() {
@@ -127,7 +127,7 @@ beforeEach(() => {
 });
 
 describe("tracking headers forwarding", () => {
-  it("forwards x-brand-id, x-campaign-id, x-workflow-name to key-service via decryptKey", async () => {
+  it("forwards x-brand-id, x-campaign-id, x-workflow-slug to key-service via decryptKey", async () => {
     const { default: searchRouter } = await import("../../src/routes/search.js");
     const app = createApp();
     app.use(searchRouter);
@@ -143,7 +143,7 @@ describe("tracking headers forwarding", () => {
       "user-1",
       "apollo",
       expect.any(Object),
-      { brandId: "brand-abc", campaignId: "campaign-xyz", featureSlug: "lead-gen", workflowName: "lead-search-workflow" }
+      { brandId: "brand-abc", campaignId: "campaign-xyz", featureSlug: "lead-gen", workflowSlug: "lead-search-workflow" }
     );
   });
 
@@ -166,7 +166,7 @@ describe("tracking headers forwarding", () => {
         brandId: "brand-abc",
         campaignId: "campaign-xyz",
         featureSlug: "lead-gen",
-        workflowName: "lead-search-workflow",
+        workflowSlug: "lead-search-workflow",
       })
     );
 
@@ -178,12 +178,12 @@ describe("tracking headers forwarding", () => {
         brandId: "brand-abc",
         campaignId: "campaign-xyz",
         featureSlug: "lead-gen",
-        workflowName: "lead-search-workflow",
+        workflowSlug: "lead-search-workflow",
       })
     );
   });
 
-  it("passes workflowName to createRun", async () => {
+  it("passes workflowSlug to createRun", async () => {
     const { default: searchRouter } = await import("../../src/routes/search.js");
     const app = createApp();
     app.use(searchRouter);
@@ -196,7 +196,7 @@ describe("tracking headers forwarding", () => {
 
     expect(mockCreateRun).toHaveBeenCalledWith(
       expect.objectContaining({
-        workflowName: "lead-search-workflow",
+        workflowSlug: "lead-search-workflow",
         brandId: "brand-abc",
         campaignId: "campaign-xyz",
       })
@@ -237,7 +237,7 @@ describe("tracking headers forwarding", () => {
     });
   });
 
-  it("stores workflowName in DB insert", async () => {
+  it("stores workflowSlug in DB insert", async () => {
     const { default: searchRouter } = await import("../../src/routes/search.js");
     const app = createApp();
     app.use(searchRouter);
@@ -250,17 +250,17 @@ describe("tracking headers forwarding", () => {
 
     // The first insert is the search record
     expect(lastInsertValues).toMatchObject({
-      workflowName: "lead-search-workflow",
+      workflowSlug: "lead-search-workflow",
     });
   });
 
-  it("works without x-workflow-name header (optional)", async () => {
+  it("works without x-workflow-slug header (optional)", async () => {
     const { default: searchRouter } = await import("../../src/routes/search.js");
     const app = createApp();
     app.use(searchRouter);
 
     const headersWithout = { ...TRACKING_HEADERS };
-    delete (headersWithout as any)["X-Workflow-Name"];
+    delete (headersWithout as any)["X-Workflow-Slug"];
 
     await request(app)
       .post("/search")
@@ -268,10 +268,10 @@ describe("tracking headers forwarding", () => {
       .send({ personTitles: ["CEO"] })
       .expect(200);
 
-    // Should still work — workflowName is undefined
+    // Should still work — workflowSlug is undefined
     expect(mockCreateRun).toHaveBeenCalledWith(
       expect.objectContaining({
-        workflowName: undefined,
+        workflowSlug: undefined,
       })
     );
   });

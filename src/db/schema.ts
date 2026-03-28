@@ -12,7 +12,7 @@ export const apolloPeopleSearches = pgTable(
     brandId: text("brand_id").notNull(),
     campaignId: text("campaign_id").notNull(),
     featureSlug: text("feature_slug"),
-    workflowName: text("workflow_name"),
+    workflowSlug: text("workflow_slug"),
 
     // Request params (for debugging/replay)
     requestParams: jsonb("request_params"),
@@ -48,7 +48,7 @@ export const apolloPeopleEnrichments = pgTable(
     brandId: text("brand_id").notNull(),
     campaignId: text("campaign_id").notNull(),
     featureSlug: text("feature_slug"),
-    workflowName: text("workflow_name"),
+    workflowSlug: text("workflow_slug"),
 
     // Apollo person ID
     apolloPersonId: text("apollo_person_id"),
@@ -141,7 +141,7 @@ export const apolloSearchCursors = pgTable(
     campaignId: text("campaign_id").notNull(),
     brandId: text("brand_id").notNull(),
     featureSlug: text("feature_slug"),
-    workflowName: text("workflow_name"),
+    workflowSlug: text("workflow_slug"),
     searchParams: jsonb("search_params").notNull(),
     currentPage: integer("current_page").notNull().default(1),
     totalEntries: integer("total_entries").notNull().default(0),

@@ -69,11 +69,11 @@ describe("brand-fields-client", () => {
     await extractBrandFields("brand-1", fields, {
       ...identity,
       featureSlug: "lead-gen",
-      workflowName: "fetch-lead",
+      workflowSlug: "fetch-lead",
     });
 
     const headers = mockFetch.mock.calls[0][1].headers;
     expect(headers["x-feature-slug"]).toBe("lead-gen");
-    expect(headers["x-workflow-name"]).toBe("fetch-lead");
+    expect(headers["x-workflow-slug"]).toBe("fetch-lead");
   });
 });

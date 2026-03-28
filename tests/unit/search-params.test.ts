@@ -26,7 +26,7 @@ vi.mock("../../src/middleware/auth.js", () => ({
     if (req.headers["x-brand-id"]) req.brandId = req.headers["x-brand-id"];
     if (req.headers["x-campaign-id"]) req.campaignId = req.headers["x-campaign-id"];
     if (req.headers["x-feature-slug"]) req.featureSlug = req.headers["x-feature-slug"];
-    if (req.headers["x-workflow-name"]) req.workflowName = req.headers["x-workflow-name"];
+    if (req.headers["x-workflow-slug"]) req.workflowSlug = req.headers["x-workflow-slug"];
     next();
   },
 }));
@@ -338,7 +338,7 @@ describe("POST /search/params", () => {
 
     // Should call decryptKey for both providers
     const expectedCaller = { callerMethod: "POST", callerPath: "/search/params" };
-    const expectedTracking = { brandId: "brand-1", campaignId: "campaign-1", workflowName: undefined };
+    const expectedTracking = { brandId: "brand-1", campaignId: "campaign-1", workflowSlug: undefined };
     expect(mockDecryptKey).toHaveBeenCalledWith("org_test", "user_test", "apollo", expectedCaller, expectedTracking);
     expect(mockDecryptKey).toHaveBeenCalledWith("org_test", "user_test", "anthropic", expectedCaller, expectedTracking);
     // callClaude should receive the Anthropic key
@@ -428,9 +428,9 @@ describe("POST /search/params", () => {
     expect(res.body.totalResults).toBe(5);
   });
 
-  // ─── workflowName propagation ──────────────────────────────────────────
+  // ─── workflowSlug propagation ──────────────────────────────────────────
 
-  it("passes workflowName to createRun when provided", async () => {
+  it("passes workflowSlug to createRun when provided", async () => {
     mockCallClaude.mockResolvedValue({
       content: JSON.stringify({ personTitles: ["CEO"] }),
       inputTokens: 100,
@@ -443,16 +443,16 @@ describe("POST /search/params", () => {
       .post("/search/params")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
-      .set({ ...BASE_HEADERS, "X-Workflow-Name": "fetch-lead" })
+      .set({ ...BASE_HEADERS, "X-Workflow-Slug": "fetch-lead" })
       .send(BASE_BODY)
       .expect(200);
 
     expect(mockCreateRun).toHaveBeenCalledWith(
-      expect.objectContaining({ workflowName: "fetch-lead" })
+      expect.objectContaining({ workflowSlug: "fetch-lead" })
     );
   });
 
-  it("omits workflowName from createRun when not provided", async () => {
+  it("omits workflowSlug from createRun when not provided", async () => {
     mockCallClaude.mockResolvedValue({
       content: JSON.stringify({ personTitles: ["CEO"] }),
       inputTokens: 100,
@@ -470,7 +470,7 @@ describe("POST /search/params", () => {
       .expect(200);
 
     expect(mockCreateRun).toHaveBeenCalledWith(
-      expect.objectContaining({ workflowName: undefined })
+      expect.objectContaining({ workflowSlug: undefined })
     );
   });
 
