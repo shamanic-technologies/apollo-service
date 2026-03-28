@@ -10,6 +10,13 @@ import { authorizeCredit } from "../lib/billing-client.js";
 import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment, toApolloSearchParams } from "../lib/transform.js";
 import { SearchRequestSchema, SearchNextRequestSchema, EnrichRequestSchema, StatsRequestSchema } from "../schemas.js";
 import { deepEqual } from "../lib/deep-equal.js";
+import {
+  resolveWorkflowDynastySlugs,
+  resolveFeatureDynastySlugs,
+  fetchAllWorkflowDynasties,
+  fetchAllFeatureDynasties,
+  buildSlugToDynastyMap,
+} from "../lib/dynasty-client.js";
 
 const router = Router();
 
@@ -560,8 +567,9 @@ router.get("/enrichments/:runId", serviceAuth, async (req: AuthenticatedRequest,
 });
 
 /**
- * POST /stats - Get aggregated stats with optional filters
- * Body: { runIds?: string[], brandId?: string, campaignId?: string }
+ * POST /stats - Get aggregated stats with optional filters and groupBy
+ * Body: { runIds?, brandId?, campaignId?, workflowSlug?, featureSlug?,
+ *         workflowDynastySlug?, featureDynastySlug?, groupBy? }
  * orgId is always applied from auth. All body filters are optional.
  */
 router.post("/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
@@ -570,21 +578,132 @@ router.post("/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
     if (!parsed.success) {
       return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
     }
-    const { runIds, brandId, campaignId } = parsed.data;
+    const {
+      runIds, brandId, campaignId,
+      workflowSlug, featureSlug,
+      workflowDynastySlug, featureDynastySlug,
+      groupBy,
+    } = parsed.data;
 
-    // Build dynamic where conditions for enrichments
-    const enrichConditions = [eq(apolloPeopleEnrichments.orgId, req.orgId!)];
-    if (runIds?.length) enrichConditions.push(inArray(apolloPeopleEnrichments.runId, runIds));
-    if (brandId) enrichConditions.push(eq(apolloPeopleEnrichments.brandId, brandId));
-    if (campaignId) enrichConditions.push(eq(apolloPeopleEnrichments.campaignId, campaignId));
+    // Resolve dynasty slugs to versioned slug lists
+    let resolvedWorkflowSlugs: string[] | undefined;
+    let resolvedFeatureSlugs: string[] | undefined;
 
-    // Build dynamic where conditions for searches
-    const searchConditions = [eq(apolloPeopleSearches.orgId, req.orgId!)];
-    if (runIds?.length) searchConditions.push(inArray(apolloPeopleSearches.runId, runIds));
-    if (brandId) searchConditions.push(eq(apolloPeopleSearches.brandId, brandId));
-    if (campaignId) searchConditions.push(eq(apolloPeopleSearches.campaignId, campaignId));
+    if (workflowDynastySlug) {
+      resolvedWorkflowSlugs = await resolveWorkflowDynastySlugs(workflowDynastySlug);
+      if (resolvedWorkflowSlugs.length === 0) {
+        return res.json(groupBy ? { grouped: [] } : {
+          stats: { enrichedLeadsCount: 0, searchCount: 0, fetchedPeopleCount: 0, totalMatchingPeople: 0 },
+        });
+      }
+    }
+    if (featureDynastySlug) {
+      resolvedFeatureSlugs = await resolveFeatureDynastySlugs(featureDynastySlug);
+      if (resolvedFeatureSlugs.length === 0) {
+        return res.json(groupBy ? { grouped: [] } : {
+          stats: { enrichedLeadsCount: 0, searchCount: 0, fetchedPeopleCount: 0, totalMatchingPeople: 0 },
+        });
+      }
+    }
 
-    // Use SQL COUNT/SUM instead of fetching all rows into memory
+    // Helper to build conditions for a table
+    const buildConditions = (table: typeof apolloPeopleEnrichments | typeof apolloPeopleSearches) => {
+      const conditions = [eq(table.orgId, req.orgId!)];
+      if (runIds?.length) conditions.push(inArray(table.runId, runIds));
+      if (brandId) conditions.push(eq(table.brandId, brandId));
+      if (campaignId) conditions.push(eq(table.campaignId, campaignId));
+      // Dynasty slug takes priority over exact slug
+      if (resolvedWorkflowSlugs && resolvedWorkflowSlugs.length > 0) {
+        conditions.push(inArray(table.workflowSlug, resolvedWorkflowSlugs));
+      } else if (workflowSlug) {
+        conditions.push(eq(table.workflowSlug, workflowSlug));
+      }
+      if (resolvedFeatureSlugs && resolvedFeatureSlugs.length > 0) {
+        conditions.push(inArray(table.featureSlug, resolvedFeatureSlugs));
+      } else if (featureSlug) {
+        conditions.push(eq(table.featureSlug, featureSlug));
+      }
+      return conditions;
+    };
+
+    // ── GroupBy path ──
+    if (groupBy) {
+      const isWorkflowGroup = groupBy === "workflowSlug" || groupBy === "workflowDynastySlug";
+      const isDynastyGroup = groupBy === "workflowDynastySlug" || groupBy === "featureDynastySlug";
+      const slugCol = isWorkflowGroup ? "workflowSlug" : "featureSlug";
+
+      // Query enrichments grouped by slug
+      const enrichRows = await db
+        .select({
+          slug: isWorkflowGroup ? apolloPeopleEnrichments.workflowSlug : apolloPeopleEnrichments.featureSlug,
+          enrichedLeadsCount: count(),
+        })
+        .from(apolloPeopleEnrichments)
+        .where(and(...buildConditions(apolloPeopleEnrichments)))
+        .groupBy(isWorkflowGroup ? apolloPeopleEnrichments.workflowSlug : apolloPeopleEnrichments.featureSlug);
+
+      // Query searches grouped by slug
+      const searchRows = await db
+        .select({
+          slug: isWorkflowGroup ? apolloPeopleSearches.workflowSlug : apolloPeopleSearches.featureSlug,
+          searchCount: count(),
+          fetchedPeopleCount: sum(apolloPeopleSearches.peopleCount),
+          totalMatchingPeople: sum(apolloPeopleSearches.totalEntries),
+        })
+        .from(apolloPeopleSearches)
+        .where(and(...buildConditions(apolloPeopleSearches)))
+        .groupBy(isWorkflowGroup ? apolloPeopleSearches.workflowSlug : apolloPeopleSearches.featureSlug);
+
+      // Build dynasty reverse map if needed
+      let dynastyMap: Map<string, string> | undefined;
+      if (isDynastyGroup) {
+        const dynasties = isWorkflowGroup
+          ? await fetchAllWorkflowDynasties()
+          : await fetchAllFeatureDynasties();
+        dynastyMap = buildSlugToDynastyMap(dynasties);
+      }
+
+      const resolveKey = (slug: string | null): string => {
+        if (!slug) return "__none__";
+        if (dynastyMap) return dynastyMap.get(slug) ?? slug;
+        return slug;
+      };
+
+      // Merge enrichment + search rows into grouped results
+      const groupedMap = new Map<string, {
+        enrichedLeadsCount: number;
+        searchCount: number;
+        fetchedPeopleCount: number;
+        totalMatchingPeople: number;
+      }>();
+
+      const ensureGroup = (key: string) => {
+        if (!groupedMap.has(key)) {
+          groupedMap.set(key, { enrichedLeadsCount: 0, searchCount: 0, fetchedPeopleCount: 0, totalMatchingPeople: 0 });
+        }
+        return groupedMap.get(key)!;
+      };
+
+      for (const row of enrichRows) {
+        const key = resolveKey(row.slug);
+        ensureGroup(key).enrichedLeadsCount += row.enrichedLeadsCount;
+      }
+      for (const row of searchRows) {
+        const key = resolveKey(row.slug);
+        const g = ensureGroup(key);
+        g.searchCount += row.searchCount;
+        g.fetchedPeopleCount += Number(row.fetchedPeopleCount) || 0;
+        g.totalMatchingPeople += Number(row.totalMatchingPeople) || 0;
+      }
+
+      const grouped = Array.from(groupedMap.entries()).map(([key, vals]) => ({ key, ...vals }));
+      return res.json({ grouped });
+    }
+
+    // ── Flat (non-grouped) path ──
+    const enrichConditions = buildConditions(apolloPeopleEnrichments);
+    const searchConditions = buildConditions(apolloPeopleSearches);
+
     const [enrichmentStats] = await db
       .select({ enrichedLeadsCount: count() })
       .from(apolloPeopleEnrichments)

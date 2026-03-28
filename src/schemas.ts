@@ -730,11 +730,25 @@ registry.registerPath({
 
 // ─── POST /stats ─────────────────────────────────────────────────────────────
 
+const StatsGroupByEnum = z
+  .enum([
+    "workflowSlug",
+    "featureSlug",
+    "workflowDynastySlug",
+    "featureDynastySlug",
+  ])
+  .openapi("StatsGroupBy");
+
 export const StatsRequestSchema = z
   .object({
     runIds: z.array(z.string()).optional(),
     brandId: z.string().optional(),
     campaignId: z.string().optional(),
+    workflowSlug: z.string().optional().openapi({ description: "Filter by exact workflow slug" }),
+    featureSlug: z.string().optional().openapi({ description: "Filter by exact feature slug" }),
+    workflowDynastySlug: z.string().optional().openapi({ description: "Filter by workflow dynasty slug (resolved to all versioned slugs)" }),
+    featureDynastySlug: z.string().optional().openapi({ description: "Filter by feature dynasty slug (resolved to all versioned slugs)" }),
+    groupBy: StatsGroupByEnum.optional().openapi({ description: "Group results by slug or dynasty slug" }),
   })
   .openapi("StatsRequest");
 
@@ -747,8 +761,21 @@ const StatsSchema = z
   })
   .openapi("Stats");
 
+const GroupedStatsEntrySchema = z
+  .object({
+    key: z.string().openapi({ description: "The slug or dynasty slug value for this group" }),
+    enrichedLeadsCount: z.number().int(),
+    searchCount: z.number().int(),
+    fetchedPeopleCount: z.number().int(),
+    totalMatchingPeople: z.number().int(),
+  })
+  .openapi("GroupedStatsEntry");
+
 const StatsResponseSchema = z
-  .object({ stats: StatsSchema })
+  .object({
+    stats: StatsSchema.optional(),
+    grouped: z.array(GroupedStatsEntrySchema).optional(),
+  })
   .openapi("StatsResponse");
 
 registry.registerPath({
