@@ -29,7 +29,7 @@ vi.mock("../../src/middleware/auth.js", () => ({
     if (req.headers["x-brand-id"]) req.brandId = req.headers["x-brand-id"];
     if (req.headers["x-campaign-id"]) req.campaignId = req.headers["x-campaign-id"];
     if (req.headers["x-feature-slug"]) req.featureSlug = req.headers["x-feature-slug"];
-    if (req.headers["x-workflow-name"]) req.workflowName = req.headers["x-workflow-name"];
+    if (req.headers["x-workflow-slug"]) req.workflowSlug = req.headers["x-workflow-slug"];
     next();
   },
 }));
@@ -515,21 +515,21 @@ describe("POST /search/next", () => {
     );
   });
 
-  // ─── workflowName propagation ──────────────────────────────────────────
+  // ─── workflowSlug propagation ──────────────────────────────────────────
 
-  it("passes workflowName to createRun when provided", async () => {
+  it("passes workflowSlug to createRun when provided", async () => {
     await request(app)
       .post("/search/next")
       .set("X-API-Key", "test-key")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
       .set(BASE_HEADERS)
-      .set("X-Workflow-Name", "fetch-lead")
+      .set("X-Workflow-Slug", "fetch-lead")
       .send({ searchParams: SEARCH_PARAMS })
       .expect(200);
 
     expect(mockCreateRun).toHaveBeenCalledWith(
-      expect.objectContaining({ workflowName: "fetch-lead" })
+      expect.objectContaining({ workflowSlug: "fetch-lead" })
     );
   });
 });

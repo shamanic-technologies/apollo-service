@@ -17,7 +17,7 @@ export interface CampaignIdentity {
   brandId?: string;
   campaignId?: string;
   featureSlug?: string;
-  workflowName?: string;
+  workflowSlug?: string;
 }
 
 export async function getFeatureInputs(
@@ -37,7 +37,7 @@ export async function getFeatureInputs(
   if (identity.brandId) headers["x-brand-id"] = identity.brandId;
   if (identity.campaignId) headers["x-campaign-id"] = identity.campaignId;
   if (identity.featureSlug) headers["x-feature-slug"] = identity.featureSlug;
-  if (identity.workflowName) headers["x-workflow-name"] = identity.workflowName;
+  if (identity.workflowSlug) headers["x-workflow-slug"] = identity.workflowSlug;
 
   const response = await fetch(`${CAMPAIGN_SERVICE_URL}/campaigns/${campaignId}`, { headers });
 

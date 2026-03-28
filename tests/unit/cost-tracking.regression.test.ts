@@ -36,7 +36,7 @@ vi.mock("../../src/middleware/auth.js", () => ({
     if (req.headers["x-brand-id"]) req.brandId = req.headers["x-brand-id"];
     if (req.headers["x-campaign-id"]) req.campaignId = req.headers["x-campaign-id"];
     if (req.headers["x-feature-slug"]) req.featureSlug = req.headers["x-feature-slug"];
-    if (req.headers["x-workflow-name"]) req.workflowName = req.headers["x-workflow-name"];
+    if (req.headers["x-workflow-slug"]) req.workflowSlug = req.headers["x-workflow-slug"];
     next();
   },
 }));
@@ -578,9 +578,9 @@ describe("Apollo service cost tracking", () => {
     expect(mockEnrichPerson).not.toHaveBeenCalled();
   });
 
-  // ─── workflowName propagation ─────────────────────────────────────────────
+  // ─── workflowSlug propagation ─────────────────────────────────────────────
 
-  it("should pass workflowName to createRun on POST /search", async () => {
+  it("should pass workflowSlug to createRun on POST /search", async () => {
     await request(app)
       .post("/search")
       .set("X-API-Key", "test-service-secret")
@@ -589,18 +589,18 @@ describe("Apollo service cost tracking", () => {
       .set("X-Run-Id", "campaign-run-abc")
       .set("X-Brand-Id", "brand-1")
       .set("X-Campaign-Id", "campaign-1")
-      .set("X-Workflow-Name", "fetch-lead")
+      .set("X-Workflow-Slug", "fetch-lead")
       .send({
         personTitles: ["CEO"],
       })
       .expect(200);
 
     expect(mockCreateRun).toHaveBeenCalledWith(
-      expect.objectContaining({ workflowName: "fetch-lead" })
+      expect.objectContaining({ workflowSlug: "fetch-lead" })
     );
   });
 
-  it("should pass workflowName to createRun on POST /enrich", async () => {
+  it("should pass workflowSlug to createRun on POST /enrich", async () => {
     await request(app)
       .post("/enrich")
       .set("X-API-Key", "test-service-secret")
@@ -609,14 +609,14 @@ describe("Apollo service cost tracking", () => {
       .set("X-Run-Id", "campaign-run-abc")
       .set("X-Brand-Id", "brand-1")
       .set("X-Campaign-Id", "campaign-1")
-      .set("X-Workflow-Name", "fetch-lead")
+      .set("X-Workflow-Slug", "fetch-lead")
       .send({
         apolloPersonId: "person-0",
       })
       .expect(200);
 
     expect(mockCreateRun).toHaveBeenCalledWith(
-      expect.objectContaining({ workflowName: "fetch-lead" })
+      expect.objectContaining({ workflowSlug: "fetch-lead" })
     );
   });
 });

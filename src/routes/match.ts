@@ -47,12 +47,12 @@ async function findCachedMatch(
  */
 router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const { runId, brandId, campaignId, featureSlug, workflowName } = req;
+    const { runId, brandId, campaignId, featureSlug, workflowSlug } = req;
     if (!runId || !brandId || !campaignId) {
       return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
-    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, featureSlug, workflowName };
-    const tracking = { brandId, campaignId, featureSlug, workflowName };
+    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, featureSlug, workflowSlug };
+    const tracking = { brandId, campaignId, featureSlug, workflowSlug };
 
     const parsed = MatchRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -72,7 +72,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
         serviceName: "apollo-service",
         taskName: "person-match",
         parentRunId: runId,
-        workflowName,
+        workflowSlug,
       });
       await updateRun(cachedRun.id, "completed", identity);
 
@@ -96,7 +96,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
         brandId,
         campaignId,
         featureSlug,
-        workflowName,
+        workflowSlug,
       });
       if (!auth.sufficient) {
         return res.status(402).json({
@@ -119,7 +119,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
       serviceName: "apollo-service",
       taskName: "person-match",
       parentRunId: runId,
-      workflowName,
+      workflowSlug,
     });
 
     let enrichmentId: string | null = null;
@@ -131,7 +131,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
         brandId,
         campaignId,
         featureSlug,
-        workflowName,
+        workflowSlug,
         ...toEnrichmentDbValues(person),
         enrichmentRunId: matchRun.id,
       }).returning();
@@ -160,12 +160,12 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
  */
 router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const { runId, brandId, campaignId, featureSlug, workflowName } = req;
+    const { runId, brandId, campaignId, featureSlug, workflowSlug } = req;
     if (!runId || !brandId || !campaignId) {
       return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
-    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, featureSlug, workflowName };
-    const tracking = { brandId, campaignId, featureSlug, workflowName };
+    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, featureSlug, workflowSlug };
+    const tracking = { brandId, campaignId, featureSlug, workflowSlug };
 
     const parsed = MatchBulkRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -182,7 +182,7 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
       serviceName: "apollo-service",
       taskName: "person-match-bulk",
       parentRunId: runId,
-      workflowName,
+      workflowSlug,
     });
 
     // Check cache for each item
@@ -215,7 +215,7 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
           brandId,
           campaignId,
           featureSlug,
-          workflowName,
+          workflowSlug,
         });
         if (!auth.sufficient) {
           await updateRun(batchRun.id, "failed", identity);
@@ -268,7 +268,7 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
             brandId,
             campaignId,
             featureSlug,
-            workflowName,
+            workflowSlug,
             ...toEnrichmentDbValues(person),
             enrichmentRunId: batchRun.id,
           }).returning();

@@ -69,7 +69,7 @@ export interface CreateRunParams {
   serviceName: string;
   taskName: string;
   parentRunId?: string;
-  workflowName?: string;
+  workflowSlug?: string;
 }
 
 export interface CostItem {
@@ -103,7 +103,7 @@ export interface IdentityHeaders {
   brandId?: string;
   campaignId?: string;
   featureSlug?: string;
-  workflowName?: string;
+  workflowSlug?: string;
 }
 
 // ─── HTTP helpers ────────────────────────────────────────────────────────────
@@ -125,7 +125,7 @@ async function runsRequest<T>(
   if (identity?.brandId) headers["x-brand-id"] = identity.brandId;
   if (identity?.campaignId) headers["x-campaign-id"] = identity.campaignId;
   if (identity?.featureSlug) headers["x-feature-slug"] = identity.featureSlug;
-  if (identity?.workflowName) headers["x-workflow-name"] = identity.workflowName;
+  if (identity?.workflowSlug) headers["x-workflow-slug"] = identity.workflowSlug;
 
   const response = await fetch(`${RUNS_SERVICE_URL}${path}`, {
     method,
@@ -162,7 +162,7 @@ export async function createRun(params: CreateRunParams): Promise<Run> {
       featureSlug: params.featureSlug,
       serviceName: params.serviceName,
       taskName: params.taskName,
-      workflowName: params.workflowName,
+      workflowSlug: params.workflowSlug,
     },
   });
 }

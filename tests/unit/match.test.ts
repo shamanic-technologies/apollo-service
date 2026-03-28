@@ -28,7 +28,7 @@ vi.mock("../../src/middleware/auth.js", () => ({
     if (req.headers["x-brand-id"]) req.brandId = req.headers["x-brand-id"];
     if (req.headers["x-campaign-id"]) req.campaignId = req.headers["x-campaign-id"];
     if (req.headers["x-feature-slug"]) req.featureSlug = req.headers["x-feature-slug"];
-    if (req.headers["x-workflow-name"]) req.workflowName = req.headers["x-workflow-name"];
+    if (req.headers["x-workflow-slug"]) req.workflowSlug = req.headers["x-workflow-slug"];
     next();
   },
 }));
@@ -274,11 +274,11 @@ describe("POST /match", () => {
     expect(mockAddCosts).not.toHaveBeenCalled();
   });
 
-  // ─── workflowName propagation ─────────────────────────────────────────────
+  // ─── workflowSlug propagation ─────────────────────────────────────────────
 
-  it("should pass workflowName to createRun", async () => {
+  it("should pass workflowSlug to createRun", async () => {
     await setBaseHeaders(request(app).post("/match"))
-      .set("X-Workflow-Name", "fetch-lead")
+      .set("X-Workflow-Slug", "fetch-lead")
       .send({
         firstName: "John",
         lastName: "Doe",
@@ -287,7 +287,7 @@ describe("POST /match", () => {
       .expect(200);
 
     expect(mockCreateRun).toHaveBeenCalledWith(
-      expect.objectContaining({ workflowName: "fetch-lead", taskName: "person-match" })
+      expect.objectContaining({ workflowSlug: "fetch-lead", taskName: "person-match" })
     );
   });
 
@@ -494,16 +494,16 @@ describe("POST /match/bulk", () => {
     errorSpy.mockRestore();
   });
 
-  it("should pass workflowName to createRun", async () => {
+  it("should pass workflowSlug to createRun", async () => {
     await setBaseHeaders(request(app).post("/match/bulk"))
-      .set("X-Workflow-Name", "fetch-lead")
+      .set("X-Workflow-Slug", "fetch-lead")
       .send({
         items: [{ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" }],
       })
       .expect(200);
 
     expect(mockCreateRun).toHaveBeenCalledWith(
-      expect.objectContaining({ workflowName: "fetch-lead", taskName: "person-match-bulk" })
+      expect.objectContaining({ workflowSlug: "fetch-lead", taskName: "person-match-bulk" })
     );
   });
 });

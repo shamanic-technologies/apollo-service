@@ -39,7 +39,7 @@ vi.mock("../../src/middleware/auth.js", () => ({
     if (req.headers["x-brand-id"]) req.brandId = req.headers["x-brand-id"];
     if (req.headers["x-campaign-id"]) req.campaignId = req.headers["x-campaign-id"];
     if (req.headers["x-feature-slug"]) req.featureSlug = req.headers["x-feature-slug"];
-    if (req.headers["x-workflow-name"]) req.workflowName = req.headers["x-workflow-name"];
+    if (req.headers["x-workflow-slug"]) req.workflowSlug = req.headers["x-workflow-slug"];
     next();
   },
 }));
@@ -101,7 +101,7 @@ const HEADERS = {
   "X-Run-Id": "run-abc",
   "X-Brand-Id": "brand-1",
   "X-Campaign-Id": "campaign-1",
-  "X-Workflow-Name": "fetch-lead",
+  "X-Workflow-Slug": "fetch-lead",
 };
 
 function createTestApp() {
@@ -195,7 +195,7 @@ describe("Billing credit authorization", () => {
         runId: "run-abc",
         brandId: "brand-1",
         campaignId: "campaign-1",
-        workflowName: "fetch-lead",
+        workflowSlug: "fetch-lead",
       })
     );
   });

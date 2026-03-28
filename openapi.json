@@ -1854,12 +1854,12 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for run tracking",
+              "description": "Workflow slug for run tracking",
               "example": "fetch-lead"
             },
             "required": false,
-            "description": "Workflow name for run tracking",
-            "name": "x-workflow-name",
+            "description": "Workflow slug for run tracking",
+            "name": "x-workflow-slug",
             "in": "header"
           }
         ],
@@ -1975,12 +1975,12 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for run tracking",
+              "description": "Workflow slug for run tracking",
               "example": "fetch-lead"
             },
             "required": false,
-            "description": "Workflow name for run tracking",
-            "name": "x-workflow-name",
+            "description": "Workflow slug for run tracking",
+            "name": "x-workflow-slug",
             "in": "header"
           }
         ],
@@ -2095,12 +2095,12 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for run tracking",
+              "description": "Workflow slug for run tracking",
               "example": "fetch-lead"
             },
             "required": false,
-            "description": "Workflow name for run tracking",
-            "name": "x-workflow-name",
+            "description": "Workflow slug for run tracking",
+            "name": "x-workflow-slug",
             "in": "header"
           }
         ],
@@ -2216,12 +2216,12 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for run tracking",
+              "description": "Workflow slug for run tracking",
               "example": "fetch-lead"
             },
             "required": false,
-            "description": "Workflow name for run tracking",
-            "name": "x-workflow-name",
+            "description": "Workflow slug for run tracking",
+            "name": "x-workflow-slug",
             "in": "header"
           }
         ],
@@ -2337,12 +2337,12 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for run tracking",
+              "description": "Workflow slug for run tracking",
               "example": "fetch-lead"
             },
             "required": false,
-            "description": "Workflow name for run tracking",
-            "name": "x-workflow-name",
+            "description": "Workflow slug for run tracking",
+            "name": "x-workflow-slug",
             "in": "header"
           }
         ],
@@ -2710,12 +2710,12 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name for run tracking",
+              "description": "Workflow slug for run tracking",
               "example": "fetch-lead"
             },
             "required": false,
-            "description": "Workflow name for run tracking",
-            "name": "x-workflow-name",
+            "description": "Workflow slug for run tracking",
+            "name": "x-workflow-slug",
             "in": "header"
           }
         ],
