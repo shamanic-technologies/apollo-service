@@ -1474,11 +1474,14 @@
         "properties": {
           "stats": {
             "$ref": "#/components/schemas/Stats"
+          },
+          "grouped": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GroupedStatsEntry"
+            }
           }
-        },
-        "required": [
-          "stats"
-        ]
+        }
       },
       "Stats": {
         "type": "object",
@@ -1503,6 +1506,34 @@
           "totalMatchingPeople"
         ]
       },
+      "GroupedStatsEntry": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The slug or dynasty slug value for this group"
+          },
+          "enrichedLeadsCount": {
+            "type": "integer"
+          },
+          "searchCount": {
+            "type": "integer"
+          },
+          "fetchedPeopleCount": {
+            "type": "integer"
+          },
+          "totalMatchingPeople": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key",
+          "enrichedLeadsCount",
+          "searchCount",
+          "fetchedPeopleCount",
+          "totalMatchingPeople"
+        ]
+      },
       "StatsRequest": {
         "type": "object",
         "properties": {
@@ -1517,8 +1548,37 @@
           },
           "campaignId": {
             "type": "string"
+          },
+          "workflowSlug": {
+            "type": "string",
+            "description": "Filter by exact workflow slug"
+          },
+          "featureSlug": {
+            "type": "string",
+            "description": "Filter by exact feature slug"
+          },
+          "workflowDynastySlug": {
+            "type": "string",
+            "description": "Filter by workflow dynasty slug (resolved to all versioned slugs)"
+          },
+          "featureDynastySlug": {
+            "type": "string",
+            "description": "Filter by feature dynasty slug (resolved to all versioned slugs)"
+          },
+          "groupBy": {
+            "$ref": "#/components/schemas/StatsGroupBy"
           }
         }
+      },
+      "StatsGroupBy": {
+        "type": "string",
+        "enum": [
+          "workflowSlug",
+          "featureSlug",
+          "workflowDynastySlug",
+          "featureDynastySlug"
+        ],
+        "description": "Group results by slug or dynasty slug"
       },
       "IndustriesResponse": {
         "type": "object",
