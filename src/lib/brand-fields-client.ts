@@ -29,7 +29,6 @@ export interface BrandFieldsIdentity {
 }
 
 export async function extractBrandFields(
-  brandId: string,
   fields: FieldRequest[],
   identity: BrandFieldsIdentity
 ): Promise<FieldResult[]> {
@@ -45,14 +44,14 @@ export async function extractBrandFields(
   if (identity.featureSlug) headers["x-feature-slug"] = identity.featureSlug;
   if (identity.workflowSlug) headers["x-workflow-slug"] = identity.workflowSlug;
 
-  const response = await fetch(`${BRAND_SERVICE_URL}/brands/${brandId}/extract-fields`, {
+  const response = await fetch(`${BRAND_SERVICE_URL}/brands/extract-fields`, {
     method: "POST",
     headers,
     body: JSON.stringify({ fields }),
   });
 
   if (!response.ok) {
-    console.warn(`[Apollo Service] Failed to extract brand fields for ${brandId}: ${response.status}`);
+    console.warn(`[Apollo Service] Failed to extract brand fields: ${response.status}`);
     return [];
   }
 

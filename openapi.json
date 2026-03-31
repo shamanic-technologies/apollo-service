@@ -1052,8 +1052,16 @@
           "runId": {
             "type": "string"
           },
-          "brandId": {
-            "type": "string"
+          "brandIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Brand IDs associated with this search",
+            "example": [
+              "brand-1",
+              "brand-2"
+            ]
           },
           "campaignId": {
             "type": "string"
@@ -1084,7 +1092,7 @@
           "id",
           "orgId",
           "runId",
-          "brandId",
+          "brandIds",
           "campaignId",
           "requestParams",
           "peopleCount",
@@ -1126,8 +1134,16 @@
             "nullable": true,
             "format": "uuid"
           },
-          "brandId": {
-            "type": "string"
+          "brandIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Brand IDs associated with this enrichment",
+            "example": [
+              "brand-1",
+              "brand-2"
+            ]
           },
           "campaignId": {
             "type": "string"
@@ -1462,7 +1478,7 @@
           "id",
           "orgId",
           "runId",
-          "brandId",
+          "brandIds",
           "campaignId",
           "apolloPersonId",
           "responseRaw",
@@ -1881,11 +1897,11 @@
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID",
-              "example": "brand-1"
+              "description": "Brand ID(s) — single UUID or comma-separated list",
+              "example": "brand-1,brand-2"
             },
             "required": true,
-            "description": "Brand ID",
+            "description": "Brand ID(s) — single UUID or comma-separated list",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -2002,11 +2018,11 @@
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID",
-              "example": "brand-1"
+              "description": "Brand ID(s) — single UUID or comma-separated list",
+              "example": "brand-1,brand-2"
             },
             "required": true,
-            "description": "Brand ID",
+            "description": "Brand ID(s) — single UUID or comma-separated list",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -2122,11 +2138,11 @@
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID",
-              "example": "brand-1"
+              "description": "Brand ID(s) — single UUID or comma-separated list",
+              "example": "brand-1,brand-2"
             },
             "required": true,
-            "description": "Brand ID",
+            "description": "Brand ID(s) — single UUID or comma-separated list",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -2243,11 +2259,11 @@
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID",
-              "example": "brand-1"
+              "description": "Brand ID(s) — single UUID or comma-separated list",
+              "example": "brand-1,brand-2"
             },
             "required": true,
-            "description": "Brand ID",
+            "description": "Brand ID(s) — single UUID or comma-separated list",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -2364,11 +2380,11 @@
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID",
-              "example": "brand-1"
+              "description": "Brand ID(s) — single UUID or comma-separated list",
+              "example": "brand-1,brand-2"
             },
             "required": true,
-            "description": "Brand ID",
+            "description": "Brand ID(s) — single UUID or comma-separated list",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -2737,11 +2753,11 @@
           {
             "schema": {
               "type": "string",
-              "description": "Brand ID",
-              "example": "brand-1"
+              "description": "Brand ID(s) — single UUID or comma-separated list",
+              "example": "brand-1,brand-2"
             },
             "required": true,
-            "description": "Brand ID",
+            "description": "Brand ID(s) — single UUID or comma-separated list",
             "name": "x-brand-id",
             "in": "header"
           },

@@ -24,6 +24,11 @@ function hashContext(context: string): string {
   return createHash("sha256").update(context).digest("hex");
 }
 
+/** Sorted CSV of brand IDs — deterministic key for cache unique constraint. */
+function toBrandIdsKey(brandIds: string[]): string {
+  return [...brandIds].sort().join(",");
+}
+
 /**
  * POST /search/params — Generate Apollo search parameters from context using LLM.
  * Validates against Apollo and retries with broadened filters if 0 results.
@@ -31,8 +36,8 @@ function hashContext(context: string): string {
  */
 router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const { runId, brandId, campaignId, featureSlug, workflowSlug } = req;
-    if (!runId || !brandId || !campaignId) {
+    const { runId, brandId, brandIds, campaignId, featureSlug, workflowSlug } = req;
+    if (!runId || !brandIds?.length || !campaignId) {
       return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
     const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, featureSlug, workflowSlug };
@@ -45,8 +50,9 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
 
     const { context } = parsed.data;
     const contextHash = hashContext(context);
+    const brandIdsKey = toBrandIdsKey(brandIds);
 
-    // Check cache — same (orgId, brandId, context) within 24h
+    // Check cache — same (orgId, brandIds, context) within 24h
     const cacheThreshold = new Date(Date.now() - CACHE_TTL_MS);
     const [cached] = await db
       .select()
@@ -54,7 +60,7 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
       .where(
         and(
           eq(apolloSearchParamsCache.orgId, req.orgId!),
-          eq(apolloSearchParamsCache.brandId, brandId),
+          eq(apolloSearchParamsCache.brandIdsKey, brandIdsKey),
           eq(apolloSearchParamsCache.contextHash, contextHash),
           gt(apolloSearchParamsCache.createdAt, cacheThreshold)
         )
@@ -64,7 +70,7 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
     if (cached) {
       console.log("[Apollo Service][POST /search/params] Cache hit", {
         orgId: req.orgId,
-        brandId,
+        brandIds,
         contextHash,
         cachedAt: cached.createdAt,
       });
@@ -132,7 +138,7 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
 
     // Fetch brand fields + campaign context in parallel (Convention 1 & 2)
     const [brandFieldResults, featureInputs] = await Promise.all([
-      extractBrandFields(brandId, [
+      extractBrandFields([
         { key: "industry", description: "The brand's primary industry vertical" },
         { key: "target_geography", description: "Priority geographic markets for outreach" },
         { key: "ideal_lead_type", description: "Type of leads to target (decision-makers, executives, managers...)" },
@@ -233,7 +239,8 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
       .insert(apolloSearchParamsCache)
       .values({
         orgId: req.orgId!,
-        brandId,
+        brandIds,
+        brandIdsKey,
         contextHash,
         searchParams: finalParams,
         totalResults: finalTotalResults,
@@ -241,8 +248,9 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
         attemptHistory: attemptHistory as unknown as Record<string, unknown>,
       })
       .onConflictDoUpdate({
-        target: [apolloSearchParamsCache.orgId, apolloSearchParamsCache.brandId, apolloSearchParamsCache.contextHash],
+        target: [apolloSearchParamsCache.orgId, apolloSearchParamsCache.brandIdsKey, apolloSearchParamsCache.contextHash],
         set: {
+          brandIds,
           searchParams: finalParams,
           totalResults: finalTotalResults,
           attempts: attemptHistory.length,

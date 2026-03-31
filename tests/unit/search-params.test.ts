@@ -23,7 +23,7 @@ vi.mock("../../src/middleware/auth.js", () => ({
     req.orgId = req.headers["x-org-id"] || "org-internal-123";
     req.userId = req.headers["x-user-id"] || "user-internal-456";
     if (req.headers["x-run-id"]) req.runId = req.headers["x-run-id"];
-    if (req.headers["x-brand-id"]) req.brandId = req.headers["x-brand-id"];
+    if (req.headers["x-brand-id"]) { req.brandId = req.headers["x-brand-id"] as string; req.brandIds = String(req.headers["x-brand-id"]).split(",").map((s: string) => s.trim()).filter(Boolean); }
     if (req.headers["x-campaign-id"]) req.campaignId = req.headers["x-campaign-id"];
     if (req.headers["x-feature-slug"]) req.featureSlug = req.headers["x-feature-slug"];
     if (req.headers["x-workflow-slug"]) req.workflowSlug = req.headers["x-workflow-slug"];
@@ -68,7 +68,8 @@ vi.mock("../../src/db/index.js", () => ({
 vi.mock("../../src/db/schema.js", () => ({
   apolloSearchParamsCache: {
     orgId: { name: "org_id" },
-    brandId: { name: "brand_id" },
+    brandIds: { name: "brand_ids" },
+    brandIdsKey: { name: "brand_ids_key" },
     contextHash: { name: "context_hash" },
     createdAt: { name: "created_at" },
   },
@@ -551,7 +552,6 @@ describe("POST /search/params", () => {
       .expect(200);
 
     expect(mockExtractBrandFields).toHaveBeenCalledWith(
-      "brand-1",
       expect.arrayContaining([
         expect.objectContaining({ key: "industry" }),
         expect.objectContaining({ key: "target_geography" }),
@@ -603,7 +603,8 @@ describe("POST /search/params", () => {
   it("returns cached result without calling LLM when cache hit within 24h", async () => {
     mockCacheResult = {
       orgId: "org_test",
-      brandId: "brand-1",
+      brandIds: ["brand-1"],
+      brandIdsKey: "brand-1",
       contextHash: "abc",
       searchParams: { personTitles: ["CEO"] },
       totalResults: 42,
@@ -660,7 +661,8 @@ describe("POST /search/params", () => {
     expect(mockInsertValues).toHaveBeenCalledWith(
       expect.objectContaining({
         orgId: "org_test",
-        brandId: "brand-1",
+        brandIds: ["brand-1"],
+        brandIdsKey: "brand-1",
         searchParams: { personTitles: ["CTO"] },
         totalResults: 100,
       })
