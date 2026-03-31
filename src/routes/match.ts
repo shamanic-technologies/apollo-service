@@ -47,8 +47,8 @@ async function findCachedMatch(
  */
 router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const { runId, brandId, campaignId, featureSlug, workflowSlug } = req;
-    if (!runId || !brandId || !campaignId) {
+    const { runId, brandId, brandIds, campaignId, featureSlug, workflowSlug } = req;
+    if (!runId || !brandIds?.length || !campaignId) {
       return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
     const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, featureSlug, workflowSlug };
@@ -128,7 +128,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
       const [enrichment] = await db.insert(apolloPeopleEnrichments).values({
         orgId: req.orgId!,
         runId,
-        brandId,
+        brandIds,
         campaignId,
         featureSlug,
         workflowSlug,
@@ -160,8 +160,8 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
  */
 router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const { runId, brandId, campaignId, featureSlug, workflowSlug } = req;
-    if (!runId || !brandId || !campaignId) {
+    const { runId, brandId, brandIds, campaignId, featureSlug, workflowSlug } = req;
+    if (!runId || !brandIds?.length || !campaignId) {
       return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
     const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, featureSlug, workflowSlug };
@@ -265,7 +265,7 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
           const [enrichment] = await db.insert(apolloPeopleEnrichments).values({
             orgId: req.orgId!,
             runId,
-            brandId,
+            brandIds,
             campaignId,
             featureSlug,
             workflowSlug,

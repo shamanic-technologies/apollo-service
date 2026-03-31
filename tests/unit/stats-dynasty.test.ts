@@ -16,7 +16,7 @@ vi.mock("../../src/middleware/auth.js", () => ({
   serviceAuth: (req: any, _res: any, next: any) => {
     req.orgId = req.headers["x-org-id"] || "org-internal-123";
     if (req.headers["x-run-id"]) req.runId = req.headers["x-run-id"];
-    if (req.headers["x-brand-id"]) req.brandId = req.headers["x-brand-id"];
+    if (req.headers["x-brand-id"]) { req.brandId = req.headers["x-brand-id"] as string; req.brandIds = String(req.headers["x-brand-id"]).split(",").map((s: string) => s.trim()).filter(Boolean); }
     if (req.headers["x-campaign-id"]) req.campaignId = req.headers["x-campaign-id"];
     if (req.headers["x-feature-slug"]) req.featureSlug = req.headers["x-feature-slug"];
     if (req.headers["x-workflow-slug"]) req.workflowSlug = req.headers["x-workflow-slug"];
@@ -60,7 +60,7 @@ vi.mock("../../src/db/schema.js", () => ({
   apolloPeopleSearches: {
     orgId: "orgId",
     runId: "runId",
-    brandId: "brandId",
+    brandIds: "brandIds",
     campaignId: "campaignId",
     featureSlug: "featureSlug",
     workflowSlug: "workflowSlug",
@@ -70,7 +70,7 @@ vi.mock("../../src/db/schema.js", () => ({
   apolloPeopleEnrichments: {
     orgId: "orgId",
     runId: "runId",
-    brandId: "brandId",
+    brandIds: "brandIds",
     campaignId: "campaignId",
     featureSlug: "featureSlug",
     workflowSlug: "workflowSlug",

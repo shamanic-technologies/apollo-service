@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and, gt, isNotNull, desc, inArray, count, sum } from "drizzle-orm";
+import { eq, and, gt, isNotNull, desc, inArray, count, sum, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloPeopleSearches, apolloPeopleEnrichments, apolloSearchCursors } from "../db/schema.js";
 import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
@@ -25,8 +25,8 @@ const router = Router();
  */
 router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const { runId, brandId, campaignId, featureSlug, workflowSlug } = req;
-    if (!runId || !brandId || !campaignId) {
+    const { runId, brandId, brandIds, campaignId, featureSlug, workflowSlug } = req;
+    if (!runId || !brandIds?.length || !campaignId) {
       return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
     const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, featureSlug, workflowSlug };
@@ -104,7 +104,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
       .values({
         orgId: req.orgId!,
         runId,
-        brandId,
+        brandIds,
         campaignId,
         featureSlug,
         workflowSlug,
@@ -121,7 +121,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
         orgId: req.orgId!,
         runId,
         searchId: search.id,
-        brandId,
+        brandIds,
         campaignId,
         featureSlug,
         workflowSlug,
@@ -198,8 +198,8 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
  */
 router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const { runId, brandId, campaignId, featureSlug, workflowSlug } = req;
-    if (!runId || !brandId || !campaignId) {
+    const { runId, brandId, brandIds, campaignId, featureSlug, workflowSlug } = req;
+    if (!runId || !brandIds?.length || !campaignId) {
       return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
     const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, featureSlug, workflowSlug };
@@ -281,7 +281,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       const [enrichment] = await db.insert(apolloPeopleEnrichments).values({
         orgId: req.orgId!,
         runId,
-        brandId,
+        brandIds,
         campaignId,
         featureSlug,
         workflowSlug,
@@ -328,8 +328,8 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
  */
 router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const { runId, brandId, campaignId, featureSlug, workflowSlug } = req;
-    if (!runId || !brandId || !campaignId) {
+    const { runId, brandId, brandIds, campaignId, featureSlug, workflowSlug } = req;
+    if (!runId || !brandIds?.length || !campaignId) {
       return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
     const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, featureSlug, workflowSlug };
@@ -390,7 +390,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
         const [newCursor] = await db.insert(apolloSearchCursors).values({
           orgId: req.orgId!,
           campaignId,
-          brandId,
+          brandIds,
           featureSlug,
           workflowSlug,
           searchParams: searchParams as Record<string, unknown>,
@@ -485,7 +485,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     await db.insert(apolloPeopleSearches).values({
       orgId: req.orgId!,
       runId,
-      brandId,
+      brandIds,
       campaignId,
       featureSlug,
       workflowSlug,
@@ -610,7 +610,7 @@ router.post("/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
     const buildConditions = (table: typeof apolloPeopleEnrichments | typeof apolloPeopleSearches) => {
       const conditions = [eq(table.orgId, req.orgId!)];
       if (runIds?.length) conditions.push(inArray(table.runId, runIds));
-      if (brandId) conditions.push(eq(table.brandId, brandId));
+      if (brandId) conditions.push(sql`${brandId} = ANY(${table.brandIds})`);
       if (campaignId) conditions.push(eq(table.campaignId, campaignId));
       // Dynasty slug takes priority over exact slug
       if (resolvedWorkflowSlugs && resolvedWorkflowSlugs.length > 0) {

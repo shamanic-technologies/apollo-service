@@ -9,7 +9,7 @@ export const apolloPeopleSearches = pgTable(
     runId: text("run_id").notNull(), // Reference to runs-service run ID
 
     // Hierarchy IDs
-    brandId: text("brand_id").notNull(),
+    brandIds: text("brand_ids").array().notNull(),
     campaignId: text("campaign_id").notNull(),
     featureSlug: text("feature_slug"),
     workflowSlug: text("workflow_slug"),
@@ -29,6 +29,7 @@ export const apolloPeopleSearches = pgTable(
   (table) => [
     index("idx_searches_org").on(table.orgId),
     index("idx_searches_run").on(table.runId),
+    index("idx_searches_brand_ids").using("gin", table.brandIds),
     index("idx_searches_campaign").on(table.campaignId),
     index("idx_searches_feature_slug").on(table.featureSlug),
   ]
@@ -45,7 +46,7 @@ export const apolloPeopleEnrichments = pgTable(
       .references(() => apolloPeopleSearches.id, { onDelete: "cascade" }),
 
     // Hierarchy IDs
-    brandId: text("brand_id").notNull(),
+    brandIds: text("brand_ids").array().notNull(),
     campaignId: text("campaign_id").notNull(),
     featureSlug: text("feature_slug"),
     workflowSlug: text("workflow_slug"),
@@ -125,6 +126,7 @@ export const apolloPeopleEnrichments = pgTable(
   (table) => [
     index("idx_enrichments_org").on(table.orgId),
     index("idx_enrichments_run").on(table.runId),
+    index("idx_enrichments_brand_ids").using("gin", table.brandIds),
     index("idx_enrichments_email").on(table.email),
     index("idx_enrichments_person_id").on(table.apolloPersonId),
     index("idx_enrichments_campaign").on(table.campaignId),
@@ -139,7 +141,7 @@ export const apolloSearchCursors = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     orgId: uuid("org_id").notNull(),
     campaignId: text("campaign_id").notNull(),
-    brandId: text("brand_id").notNull(),
+    brandIds: text("brand_ids").array().notNull(),
     featureSlug: text("feature_slug"),
     workflowSlug: text("workflow_slug"),
     searchParams: jsonb("search_params").notNull(),
@@ -161,7 +163,8 @@ export const apolloSearchParamsCache = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     orgId: uuid("org_id").notNull(),
-    brandId: text("brand_id").notNull(),
+    brandIds: text("brand_ids").array().notNull(),
+    brandIdsKey: text("brand_ids_key").notNull(), // sorted CSV for unique index
     contextHash: text("context_hash").notNull(),
     searchParams: jsonb("search_params").notNull(),
     totalResults: integer("total_results").notNull().default(0),
@@ -170,7 +173,7 @@ export const apolloSearchParamsCache = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex("idx_params_cache_lookup").on(table.orgId, table.brandId, table.contextHash),
+    uniqueIndex("idx_params_cache_lookup").on(table.orgId, table.brandIdsKey, table.contextHash),
   ]
 );
 
