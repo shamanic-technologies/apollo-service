@@ -8,7 +8,7 @@ import { searchPeople } from "../lib/apollo-client.js";
 import { decryptKey } from "../lib/keys-client.js";
 import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/runs-client.js";
 import { authorizeCredit } from "../lib/billing-client.js";
-import { callClaude } from "../lib/anthropic-client.js";
+import { chatComplete } from "../lib/chat-client.js";
 import { getSystemPrompt, buildUserMessage, SearchAttempt, PromptEnrichment } from "../lib/search-params-prompt.js";
 import { toApolloSearchParams } from "../lib/transform.js";
 import { SearchParamsRequestSchema, SearchFiltersSchema } from "../schemas.js";
@@ -100,18 +100,12 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
     // Cache miss — generate via LLM
     const caller = { callerMethod: "POST", callerPath: "/search/params" };
     const { key: apolloApiKey, keySource: apolloKeySource } = await decryptKey(req.orgId!, req.userId!, "apollo", caller, tracking);
-    const { key: anthropicApiKey, keySource: anthropicKeySource } = await decryptKey(req.orgId!, req.userId!, "anthropic", caller, tracking);
 
     // Authorize credit before executing paid operations (platform keys only)
     // Estimate: 1 LLM call (~1000 input + ~500 output tokens) + 1 Apollo search (best case).
     // Actual costs tracked per-iteration via addCosts.
+    // LLM costs are tracked by chat-service — only authorize Apollo search credits here.
     const authItems: { costName: string; quantity: number }[] = [];
-    if (anthropicKeySource === "platform") {
-      authItems.push(
-        { costName: "anthropic-sonnet-4.6-tokens-input", quantity: 1000 },
-        { costName: "anthropic-sonnet-4.6-tokens-output", quantity: 500 },
-      );
-    }
     if (apolloKeySource === "platform") {
       authItems.push({ costName: "apollo-search-credit", quantity: 1 });
     }
@@ -174,17 +168,21 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
     try {
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         const userMessage = buildUserMessage(context, attemptHistory, enrichment);
-        const llmResponse = await callClaude(anthropicApiKey, systemPrompt, userMessage);
-
-        await addCosts(paramRun.id, [
-          { costName: "anthropic-sonnet-4.6-tokens-input", costSource: anthropicKeySource, quantity: llmResponse.inputTokens },
-          { costName: "anthropic-sonnet-4.6-tokens-output", costSource: anthropicKeySource, quantity: llmResponse.outputTokens },
-        ], identity);
+        const llmResponse = await chatComplete(
+          {
+            message: userMessage,
+            systemPrompt,
+            provider: "google",
+            model: "flash",
+            responseFormat: "json",
+            maxTokens: 2048,
+          },
+          identity
+        );
 
         let rawParams: Record<string, unknown>;
         try {
-          const cleaned = llmResponse.content.trim().replace(/^```json?\s*/, "").replace(/\s*```$/, "");
-          rawParams = JSON.parse(cleaned);
+          rawParams = llmResponse.json ?? JSON.parse(llmResponse.content.trim().replace(/^```json?\s*/, "").replace(/\s*```$/, ""));
         } catch {
           console.warn(`[Apollo Service][POST /search/params] Attempt ${attempt}: invalid JSON from LLM`, {
             content: llmResponse.content.substring(0, 200),

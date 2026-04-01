@@ -108,11 +108,11 @@ vi.mock("../../src/lib/apollo-client.js", () => ({
   searchPeople: (...args: unknown[]) => mockSearchPeople(...args),
 }));
 
-// Mock Anthropic client
-const mockCallClaude = vi.fn();
+// Mock chat-client
+const mockChatComplete = vi.fn();
 
-vi.mock("../../src/lib/anthropic-client.js", () => ({
-  callClaude: (...args: unknown[]) => mockCallClaude(...args),
+vi.mock("../../src/lib/chat-client.js", () => ({
+  chatComplete: (...args: unknown[]) => mockChatComplete(...args),
 }));
 
 const BASE_BODY = {
@@ -138,10 +138,7 @@ describe("POST /search/params", () => {
     vi.clearAllMocks();
     mockCacheResult = null;
 
-    mockDecryptKey.mockImplementation((_orgId: string, _userId: string, provider: string) => {
-      if (provider === "anthropic") return Promise.resolve({ key: "fake-anthropic-key", keySource: "platform" });
-      return Promise.resolve({ key: "fake-apollo-key", keySource: "platform" });
-    });
+    mockDecryptKey.mockResolvedValue({ key: "fake-apollo-key", keySource: "platform" });
 
     mockGetFeatureInputs.mockResolvedValue(null);
     mockExtractBrandFields.mockResolvedValue([]);
@@ -160,10 +157,10 @@ describe("POST /search/params", () => {
   // ─── First try succeeds ──────────────────────────────────────────────────
 
   it("returns params on first try when Apollo returns results", async () => {
-    mockCallClaude.mockResolvedValue({
+    mockChatComplete.mockResolvedValue({
       content: JSON.stringify({ personTitles: ["CTO", "VP Engineering"] }),
-      inputTokens: 500,
-      outputTokens: 50,
+      tokensInput: 500,
+      tokensOutput: 50,
     });
 
     mockSearchPeople.mockResolvedValue({
@@ -183,23 +180,23 @@ describe("POST /search/params", () => {
     expect(res.body.totalResults).toBe(42);
     expect(res.body.attempts).toBe(1);
     expect(res.body.attemptHistory).toHaveLength(1);
-    expect(mockCallClaude).toHaveBeenCalledTimes(1);
+    expect(mockChatComplete).toHaveBeenCalledTimes(1);
     expect(mockSearchPeople).toHaveBeenCalledTimes(1);
   });
 
   // ─── Retry succeeds on second attempt ────────────────────────────────────
 
   it("retries and succeeds when first attempt returns 0 results", async () => {
-    mockCallClaude
+    mockChatComplete
       .mockResolvedValueOnce({
         content: JSON.stringify({ personTitles: ["CEO"], qKeywords: "niche obscure thing" }),
-        inputTokens: 500,
-        outputTokens: 50,
+        tokensInput: 500,
+        tokensOutput: 50,
       })
       .mockResolvedValueOnce({
         content: JSON.stringify({ personTitles: ["CEO", "Founder", "CTO"] }),
-        inputTokens: 600,
-        outputTokens: 60,
+        tokensInput: 600,
+        tokensOutput: 60,
       });
 
     mockSearchPeople
@@ -217,17 +214,17 @@ describe("POST /search/params", () => {
     expect(res.body.attempts).toBe(2);
     expect(res.body.totalResults).toBe(15);
     expect(res.body.searchParams).toEqual({ personTitles: ["CEO", "Founder", "CTO"] });
-    expect(mockCallClaude).toHaveBeenCalledTimes(2);
+    expect(mockChatComplete).toHaveBeenCalledTimes(2);
     expect(mockSearchPeople).toHaveBeenCalledTimes(2);
   });
 
   // ─── All 10 attempts fail ────────────────────────────────────────────────
 
   it("returns last params with totalResults=0 after 10 failed attempts", async () => {
-    mockCallClaude.mockResolvedValue({
+    mockChatComplete.mockResolvedValue({
       content: JSON.stringify({ personTitles: ["CEO"] }),
-      inputTokens: 500,
-      outputTokens: 50,
+      tokensInput: 500,
+      tokensOutput: 50,
     });
 
     mockSearchPeople.mockResolvedValue({ people: [], total_entries: 0 });
@@ -242,23 +239,23 @@ describe("POST /search/params", () => {
 
     expect(res.body.attempts).toBe(10);
     expect(res.body.totalResults).toBe(0);
-    expect(mockCallClaude).toHaveBeenCalledTimes(10);
+    expect(mockChatComplete).toHaveBeenCalledTimes(10);
     expect(mockSearchPeople).toHaveBeenCalledTimes(10);
   });
 
   // ─── Invalid JSON from LLM ──────────────────────────────────────────────
 
   it("handles invalid JSON from LLM gracefully and retries", async () => {
-    mockCallClaude
+    mockChatComplete
       .mockResolvedValueOnce({
         content: "Here are the params: {invalid json",
-        inputTokens: 500,
-        outputTokens: 50,
+        tokensInput: 500,
+        tokensOutput: 50,
       })
       .mockResolvedValueOnce({
         content: JSON.stringify({ personTitles: ["CEO"] }),
-        inputTokens: 500,
-        outputTokens: 50,
+        tokensInput: 500,
+        tokensOutput: 50,
       });
 
     mockSearchPeople.mockResolvedValue({ people: [{ id: "p1" }], total_entries: 10 });
@@ -279,11 +276,13 @@ describe("POST /search/params", () => {
 
   // ─── Cost tracking ──────────────────────────────────────────────────────
 
-  it("tracks LLM token costs and Apollo search credits with costSource", async () => {
-    mockCallClaude.mockResolvedValue({
+  it("tracks Apollo search credits (LLM costs handled by chat-service)", async () => {
+    mockChatComplete.mockResolvedValue({
       content: JSON.stringify({ personTitles: ["CTO"] }),
-      inputTokens: 1234,
-      outputTokens: 56,
+      json: { personTitles: ["CTO"] },
+      tokensInput: 1234,
+      tokensOutput: 56,
+      model: "gemini-2.5-flash",
     });
 
     mockSearchPeople.mockResolvedValue({ people: [{ id: "p1" }], total_entries: 5 });
@@ -298,13 +297,7 @@ describe("POST /search/params", () => {
 
     const expectedIdentity = expect.objectContaining({ orgId: "org_test" });
 
-    // LLM token costs
-    expect(mockAddCosts).toHaveBeenCalledWith("run-1", [
-      { costName: "anthropic-sonnet-4.6-tokens-input", costSource: "platform", quantity: 1234 },
-      { costName: "anthropic-sonnet-4.6-tokens-output", costSource: "platform", quantity: 56 },
-    ], expectedIdentity);
-
-    // Apollo search credit
+    // Apollo search credit only — LLM costs are tracked by chat-service
     expect(mockAddCosts).toHaveBeenCalledWith("run-1", [
       { costName: "apollo-search-credit", costSource: "platform", quantity: 1 },
     ], expectedIdentity);
@@ -315,16 +308,15 @@ describe("POST /search/params", () => {
 
   // ─── Key resolution via decryptKey ─────────────────────────────────────
 
-  it("calls decryptKey for both Apollo and Anthropic providers", async () => {
-    mockDecryptKey.mockImplementation((_orgId: string, _userId: string, provider: string) => {
-      if (provider === "anthropic") return Promise.resolve({ key: "user-anthropic-key", keySource: "org" });
-      return Promise.resolve({ key: "user-apollo-key", keySource: "org" });
-    });
+  it("calls decryptKey for Apollo only (LLM keys handled by chat-service)", async () => {
+    mockDecryptKey.mockResolvedValue({ key: "user-apollo-key", keySource: "org" });
 
-    mockCallClaude.mockResolvedValue({
+    mockChatComplete.mockResolvedValue({
       content: JSON.stringify({ personTitles: ["CEO"] }),
-      inputTokens: 100,
-      outputTokens: 20,
+      json: { personTitles: ["CEO"] },
+      tokensInput: 100,
+      tokensOutput: 20,
+      model: "gemini-2.5-flash",
     });
 
     mockSearchPeople.mockResolvedValue({ people: [{ id: "p1" }], total_entries: 5 });
@@ -337,16 +329,15 @@ describe("POST /search/params", () => {
       .send(BASE_BODY)
       .expect(200);
 
-    // Should call decryptKey for both providers
+    // Should call decryptKey for Apollo only — no Anthropic key needed
     const expectedCaller = { callerMethod: "POST", callerPath: "/search/params" };
     const expectedTracking = { brandId: "brand-1", campaignId: "campaign-1", workflowSlug: undefined };
+    expect(mockDecryptKey).toHaveBeenCalledTimes(1);
     expect(mockDecryptKey).toHaveBeenCalledWith("org_test", "user_test", "apollo", expectedCaller, expectedTracking);
-    expect(mockDecryptKey).toHaveBeenCalledWith("org_test", "user_test", "anthropic", expectedCaller, expectedTracking);
-    // callClaude should receive the Anthropic key
-    expect(mockCallClaude).toHaveBeenCalledWith(
-      "user-anthropic-key",
-      expect.any(String),
-      expect.any(String)
+    // chatComplete receives request object + identity, not raw API key
+    expect(mockChatComplete).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "google", model: "flash" }),
+      expect.objectContaining({ orgId: "org_test" })
     );
     // searchPeople should receive the Apollo key
     expect(mockSearchPeople).toHaveBeenCalledWith(
@@ -355,16 +346,15 @@ describe("POST /search/params", () => {
     );
   });
 
-  it("uses correct costSource per provider when they differ", async () => {
-    mockDecryptKey.mockImplementation((_orgId: string, _userId: string, provider: string) => {
-      if (provider === "anthropic") return Promise.resolve({ key: "anthropic-key", keySource: "org" });
-      return Promise.resolve({ key: "apollo-key", keySource: "platform" });
-    });
+  it("uses Apollo key costSource for search credit tracking", async () => {
+    mockDecryptKey.mockResolvedValue({ key: "apollo-key", keySource: "org" });
 
-    mockCallClaude.mockResolvedValue({
+    mockChatComplete.mockResolvedValue({
       content: JSON.stringify({ personTitles: ["CEO"] }),
-      inputTokens: 100,
-      outputTokens: 20,
+      json: { personTitles: ["CEO"] },
+      tokensInput: 100,
+      tokensOutput: 20,
+      model: "gemini-2.5-flash",
     });
 
     mockSearchPeople.mockResolvedValue({ people: [{ id: "p1" }], total_entries: 5 });
@@ -379,15 +369,9 @@ describe("POST /search/params", () => {
 
     const expectedIdentity = expect.objectContaining({ orgId: "org_test" });
 
-    // Anthropic costs should use "org" costSource
+    // Apollo costs should use "org" costSource from decryptKey
     expect(mockAddCosts).toHaveBeenCalledWith("run-1", [
-      { costName: "anthropic-sonnet-4.6-tokens-input", costSource: "org", quantity: 100 },
-      { costName: "anthropic-sonnet-4.6-tokens-output", costSource: "org", quantity: 20 },
-    ], expectedIdentity);
-
-    // Apollo costs should use "platform" costSource
-    expect(mockAddCosts).toHaveBeenCalledWith("run-1", [
-      { costName: "apollo-search-credit", costSource: "platform", quantity: 1 },
+      { costName: "apollo-search-credit", costSource: "org", quantity: 1 },
     ], expectedIdentity);
   });
 
@@ -403,16 +387,16 @@ describe("POST /search/params", () => {
       .expect(400);
 
     expect(res.body.error).toBe("Invalid request");
-    expect(mockCallClaude).not.toHaveBeenCalled();
+    expect(mockChatComplete).not.toHaveBeenCalled();
   });
 
   // ─── LLM returns markdown-wrapped JSON ───────────────────────────────────
 
   it("handles LLM response wrapped in markdown code blocks", async () => {
-    mockCallClaude.mockResolvedValue({
+    mockChatComplete.mockResolvedValue({
       content: '```json\n{"personTitles": ["CEO"]}\n```',
-      inputTokens: 100,
-      outputTokens: 20,
+      tokensInput: 100,
+      tokensOutput: 20,
     });
 
     mockSearchPeople.mockResolvedValue({ people: [{ id: "p1" }], total_entries: 5 });
@@ -432,10 +416,10 @@ describe("POST /search/params", () => {
   // ─── workflowSlug propagation ──────────────────────────────────────────
 
   it("passes workflowSlug to createRun when provided", async () => {
-    mockCallClaude.mockResolvedValue({
+    mockChatComplete.mockResolvedValue({
       content: JSON.stringify({ personTitles: ["CEO"] }),
-      inputTokens: 100,
-      outputTokens: 20,
+      tokensInput: 100,
+      tokensOutput: 20,
     });
 
     mockSearchPeople.mockResolvedValue({ people: [{ id: "p1" }], total_entries: 5 });
@@ -454,10 +438,10 @@ describe("POST /search/params", () => {
   });
 
   it("omits workflowSlug from createRun when not provided", async () => {
-    mockCallClaude.mockResolvedValue({
+    mockChatComplete.mockResolvedValue({
       content: JSON.stringify({ personTitles: ["CEO"] }),
-      inputTokens: 100,
-      outputTokens: 20,
+      tokensInput: 100,
+      tokensOutput: 20,
     });
 
     mockSearchPeople.mockResolvedValue({ people: [{ id: "p1" }], total_entries: 5 });
@@ -478,7 +462,7 @@ describe("POST /search/params", () => {
   // ─── Run is marked failed on error ───────────────────────────────────────
 
   it("marks run as failed when an error occurs", async () => {
-    mockCallClaude.mockRejectedValue(new Error("API key invalid"));
+    mockChatComplete.mockRejectedValue(new Error("API key invalid"));
 
     const res = await request(app)
       .post("/search/params")
@@ -500,10 +484,10 @@ describe("POST /search/params", () => {
       target_region: "Europe",
     });
 
-    mockCallClaude.mockResolvedValue({
+    mockChatComplete.mockResolvedValue({
       content: JSON.stringify({ personTitles: ["CTO"] }),
-      inputTokens: 500,
-      outputTokens: 50,
+      tokensInput: 500,
+      tokensOutput: 50,
     });
 
     mockSearchPeople.mockResolvedValue({ people: [{ id: "p1" }], total_entries: 10 });
@@ -519,7 +503,7 @@ describe("POST /search/params", () => {
     expect(mockGetFeatureInputs).toHaveBeenCalledWith("campaign-1", expect.objectContaining({ orgId: "org_test" }));
 
     // The LLM user message should contain the campaign context
-    const userMessage = mockCallClaude.mock.calls[0][2];
+    const userMessage = mockChatComplete.mock.calls[0][0].message;
     expect(userMessage).toContain("Campaign context");
     expect(userMessage).toContain("sustainability");
     expect(userMessage).toContain("Europe");
@@ -535,10 +519,10 @@ describe("POST /search/params", () => {
       { key: "ideal_lead_type", value: null, cached: false },
     ]);
 
-    mockCallClaude.mockResolvedValue({
+    mockChatComplete.mockResolvedValue({
       content: JSON.stringify({ personTitles: ["VP Sustainability"] }),
-      inputTokens: 500,
-      outputTokens: 50,
+      tokensInput: 500,
+      tokensOutput: 50,
     });
 
     mockSearchPeople.mockResolvedValue({ people: [{ id: "p1" }], total_entries: 5 });
@@ -562,7 +546,7 @@ describe("POST /search/params", () => {
     );
 
     // The LLM user message should contain brand intelligence (non-null fields only)
-    const userMessage = mockCallClaude.mock.calls[0][2];
+    const userMessage = mockChatComplete.mock.calls[0][0].message;
     expect(userMessage).toContain("Brand intelligence");
     expect(userMessage).toContain("Renewable Energy");
     expect(userMessage).toContain("North America");
@@ -575,10 +559,10 @@ describe("POST /search/params", () => {
     mockExtractBrandFields.mockResolvedValue([]);
     mockGetFeatureInputs.mockResolvedValue(null);
 
-    mockCallClaude.mockResolvedValue({
+    mockChatComplete.mockResolvedValue({
       content: JSON.stringify({ personTitles: ["CEO"] }),
-      inputTokens: 500,
-      outputTokens: 50,
+      tokensInput: 500,
+      tokensOutput: 50,
     });
 
     mockSearchPeople.mockResolvedValue({ people: [{ id: "p1" }], total_entries: 10 });
@@ -593,7 +577,7 @@ describe("POST /search/params", () => {
 
     expect(res.body.searchParams).toEqual({ personTitles: ["CEO"] });
     // No enrichment sections in the prompt
-    const userMessage = mockCallClaude.mock.calls[0][2];
+    const userMessage = mockChatComplete.mock.calls[0][0].message;
     expect(userMessage).not.toContain("Brand intelligence");
     expect(userMessage).not.toContain("Campaign context");
   });
@@ -625,7 +609,7 @@ describe("POST /search/params", () => {
     expect(res.body.totalResults).toBe(42);
     expect(res.body.cached).toBe(true);
     // No LLM or Apollo calls
-    expect(mockCallClaude).not.toHaveBeenCalled();
+    expect(mockChatComplete).not.toHaveBeenCalled();
     expect(mockSearchPeople).not.toHaveBeenCalled();
     expect(mockDecryptKey).not.toHaveBeenCalled();
     // Still creates a run for traceability
@@ -637,10 +621,10 @@ describe("POST /search/params", () => {
     // No cache hit
     mockCacheResult = null;
 
-    mockCallClaude.mockResolvedValue({
+    mockChatComplete.mockResolvedValue({
       content: JSON.stringify({ personTitles: ["CTO"] }),
-      inputTokens: 500,
-      outputTokens: 50,
+      tokensInput: 500,
+      tokensOutput: 50,
     });
 
     mockSearchPeople.mockResolvedValue({ people: [{ id: "p1" }], total_entries: 100 });
@@ -656,7 +640,7 @@ describe("POST /search/params", () => {
     expect(res.body.cached).toBe(false);
     expect(res.body.searchParams).toEqual({ personTitles: ["CTO"] });
     // Should have called LLM
-    expect(mockCallClaude).toHaveBeenCalledTimes(1);
+    expect(mockChatComplete).toHaveBeenCalledTimes(1);
     // Should store in cache via insert
     expect(mockInsertValues).toHaveBeenCalledWith(
       expect.objectContaining({
