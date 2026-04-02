@@ -96,6 +96,8 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
         totalEntries,
         rawResponseKeys: Object.keys(result),
       });
+    } else {
+      console.log(`[Apollo Service][POST /search] Found ${result.people.length} people (${totalEntries} total) runId=${runId} campaignId=${campaignId}`);
     }
 
     // Store search record
@@ -451,6 +453,12 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     const result = await searchPeople(apolloApiKey, apolloParams);
     const totalEntries = result.total_entries ?? result.pagination?.total_entries ?? 0;
     const people = result.people ?? [];
+
+    if (people.length === 0) {
+      console.warn(`[Apollo Service][POST /search/next] ⚠ Apollo returned 0 people page=${currentPage} campaignId=${campaignId} runId=${runId}`);
+    } else {
+      console.log(`[Apollo Service][POST /search/next] Found ${people.length} people page=${currentPage} (${totalEntries} total) campaignId=${campaignId} runId=${runId}`);
+    }
 
     // Advance cursor
     const nextPage = currentPage + 1;
