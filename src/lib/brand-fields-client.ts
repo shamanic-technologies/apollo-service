@@ -44,7 +44,7 @@ export async function extractBrandFields(
   if (identity.featureSlug) headers["x-feature-slug"] = identity.featureSlug;
   if (identity.workflowSlug) headers["x-workflow-slug"] = identity.workflowSlug;
 
-  const response = await fetch(`${BRAND_SERVICE_URL}/brands/extract-fields`, {
+  const response = await fetch(`${BRAND_SERVICE_URL}/orgs/brands/extract-fields`, {
     method: "POST",
     headers,
     body: JSON.stringify({ fields }),
