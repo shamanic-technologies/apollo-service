@@ -15,7 +15,12 @@ function getConnectionString(): string {
 
 export function getSql(): Sql {
   if (!sqlClient) {
-    sqlClient = postgres(getConnectionString());
+    sqlClient = postgres(getConnectionString(), {
+      idle_timeout: 20,
+      max_lifetime: 300,
+      connect_timeout: 10,
+      max: 10,
+    });
   }
   return sqlClient;
 }
