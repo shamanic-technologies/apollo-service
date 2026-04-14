@@ -883,6 +883,7 @@ const SearchParamsAttemptSchema = z
   .object({
     searchParams: SearchFiltersSchema,
     totalResults: z.number(),
+    error: z.string().optional().openapi({ description: "Validation or parsing error for this attempt, if any." }),
   })
   .openapi("SearchParamsAttempt");
 

@@ -1706,6 +1706,10 @@
           },
           "totalResults": {
             "type": "number"
+          },
+          "error": {
+            "type": "string",
+            "description": "Validation or parsing error for this attempt, if any."
           }
         },
         "required": [
