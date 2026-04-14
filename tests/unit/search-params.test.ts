@@ -476,6 +476,29 @@ describe("POST /search/params", () => {
     expect(mockUpdateRun).toHaveBeenCalledWith("run-1", "failed", expect.objectContaining({ orgId: "org_test" }));
   });
 
+  // ─── runId forwarded to chat-service ─────────────────────────────────────
+
+  it("forwards x-run-id to chatComplete identity headers", async () => {
+    mockChatComplete.mockResolvedValue({
+      content: JSON.stringify({ personTitles: ["CTO"] }),
+      tokensInput: 500,
+      tokensOutput: 50,
+    });
+
+    mockSearchPeople.mockResolvedValue({ people: [{ id: "p1" }], total_entries: 10 });
+
+    await request(app)
+      .post("/search/params")
+      .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
+      .send(BASE_BODY)
+      .expect(200);
+
+    const identityArg = mockChatComplete.mock.calls[0][1];
+    expect(identityArg.runId).toBe("run-parent-1");
+  });
+
   // ─── Convention 2: Campaign context in LLM calls ─────────────────────────
 
   it("fetches campaign featureInputs and injects them into the LLM prompt", async () => {
