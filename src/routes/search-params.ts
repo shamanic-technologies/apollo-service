@@ -40,7 +40,7 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
     if (!runId || !brandIds?.length || !campaignId) {
       return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
-    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, featureSlug, workflowSlug };
+    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, runId, brandId, campaignId, featureSlug, workflowSlug };
     const tracking = { brandId, campaignId, featureSlug, workflowSlug };
 
     const parsed = SearchParamsRequestSchema.safeParse(req.body);
