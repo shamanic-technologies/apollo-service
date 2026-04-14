@@ -180,23 +180,33 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
           identity
         );
 
-        let rawParams: Record<string, unknown>;
+        let rawParams: unknown;
         try {
           rawParams = llmResponse.json ?? JSON.parse(llmResponse.content.trim().replace(/^```json?\s*/, "").replace(/\s*```$/, ""));
         } catch {
           console.warn(`[Apollo Service][POST /search/params] Attempt ${attempt}: invalid JSON from LLM`, {
             content: llmResponse.content.substring(0, 200),
           });
-          attemptHistory.push({ searchParams: {}, totalResults: 0 });
+          attemptHistory.push({ searchParams: {}, totalResults: 0, error: "Invalid JSON" });
           continue;
+        }
+
+        // LLM sometimes wraps the object in an array — unwrap it
+        if (Array.isArray(rawParams)) {
+          rawParams = rawParams[0];
         }
 
         const validated = SearchFiltersSchema.safeParse(rawParams);
         if (!validated.success) {
+          const flatErrors = validated.error.flatten();
           console.warn(`[Apollo Service][POST /search/params] Attempt ${attempt}: schema validation failed`, {
-            errors: validated.error.flatten(),
+            errors: flatErrors,
           });
-          attemptHistory.push({ searchParams: rawParams, totalResults: 0 });
+          attemptHistory.push({
+            searchParams: (rawParams ?? {}) as Record<string, unknown>,
+            totalResults: 0,
+            error: `Schema validation failed: ${flatErrors.formErrors.concat(Object.entries(flatErrors.fieldErrors).map(([k, v]) => `${k}: ${v}`)).join("; ")}`,
+          });
           continue;
         }
 

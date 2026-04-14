@@ -105,6 +105,7 @@ ${buildEnumLists()}
 export interface SearchAttempt {
   searchParams: Record<string, unknown>;
   totalResults: number;
+  error?: string;
 }
 
 export interface PromptEnrichment {
@@ -141,7 +142,7 @@ export function buildUserMessage(
     const historyBlock = previousAttempts
       .map(
         (a, i) =>
-          `Attempt ${i + 1}: ${JSON.stringify(a.searchParams)} → ${a.totalResults} results`
+          `Attempt ${i + 1}: ${JSON.stringify(a.searchParams)} → ${a.error ? `ERROR: ${a.error}` : `${a.totalResults} results`}`
       )
       .join("\n");
 
