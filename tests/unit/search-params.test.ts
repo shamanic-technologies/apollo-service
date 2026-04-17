@@ -605,6 +605,85 @@ describe("POST /search/params", () => {
     expect(userMessage).not.toContain("Campaign context");
   });
 
+  // ─── LLM returns array instead of object ────────────────────────────────
+
+  it("unwraps array-wrapped LLM response and succeeds", async () => {
+    // Regression: Google Flash sometimes returns [{...}] instead of {...}
+    mockChatComplete.mockResolvedValue({
+      content: JSON.stringify([{ personTitles: ["CEO", "Founder"] }]),
+      tokensInput: 500,
+      tokensOutput: 50,
+    });
+
+    mockSearchPeople.mockResolvedValue({ people: [{ id: "p1" }], total_entries: 25 });
+
+    const res = await request(app)
+      .post("/search/params")
+      .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
+      .send(BASE_BODY)
+      .expect(200);
+
+    expect(res.body.searchParams).toEqual({ personTitles: ["CEO", "Founder"] });
+    expect(res.body.totalResults).toBe(25);
+    expect(res.body.attempts).toBe(1);
+  });
+
+  it("unwraps array from json field of LLM response", async () => {
+    mockChatComplete.mockResolvedValue({
+      content: "",
+      json: [{ personTitles: ["CTO"] }],
+      tokensInput: 500,
+      tokensOutput: 50,
+    });
+
+    mockSearchPeople.mockResolvedValue({ people: [{ id: "p1" }], total_entries: 10 });
+
+    const res = await request(app)
+      .post("/search/params")
+      .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
+      .send(BASE_BODY)
+      .expect(200);
+
+    expect(res.body.searchParams).toEqual({ personTitles: ["CTO"] });
+    expect(res.body.totalResults).toBe(10);
+  });
+
+  // ─── Validation errors fed back to LLM ──────────────────────────────────
+
+  it("includes validation error in retry prompt", async () => {
+    mockChatComplete
+      .mockResolvedValueOnce({
+        content: JSON.stringify({ personTitles: 123 }), // invalid type
+        tokensInput: 500,
+        tokensOutput: 50,
+      })
+      .mockResolvedValueOnce({
+        content: JSON.stringify({ personTitles: ["CEO"] }),
+        tokensInput: 500,
+        tokensOutput: 50,
+      });
+
+    mockSearchPeople.mockResolvedValue({ people: [{ id: "p1" }], total_entries: 10 });
+
+    const res = await request(app)
+      .post("/search/params")
+      .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
+      .send(BASE_BODY)
+      .expect(200);
+
+    expect(res.body.attempts).toBe(2);
+    // Second call's user message should contain the error from the first attempt
+    const secondUserMessage = mockChatComplete.mock.calls[1][0].message;
+    expect(secondUserMessage).toContain("ERROR:");
+    expect(secondUserMessage).toContain("Schema validation failed");
+  });
+
   // ─── 24h cache ──────────────────────────────────────────────────────────
 
   it("returns cached result without calling LLM when cache hit within 24h", async () => {
