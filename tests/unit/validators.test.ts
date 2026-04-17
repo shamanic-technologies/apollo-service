@@ -122,8 +122,8 @@ describe("validateBatch", () => {
       const results = validateBatch("search", [
         {
           contactEmailStatus: [
-            "verified", "guessed", "unavailable",
-            "bounced", "pending_manual_fulfillment",
+            "verified", "unverified", "likely to engage",
+            "unavailable",
           ],
         },
       ]);
