@@ -38,10 +38,9 @@ const VALID_SENIORITIES = [
 
 const VALID_EMAIL_STATUSES = [
   "verified",
-  "guessed",
+  "unverified",
+  "likely to engage",
   "unavailable",
-  "bounced",
-  "pending_manual_fulfillment",
 ] as const;
 
 const ErrorResponseSchema = z
@@ -246,7 +245,7 @@ export const SearchRequestSchema = z
       example: ["director", "vp", "c_suite"],
     }),
     contactEmailStatus: z.array(z.enum(VALID_EMAIL_STATUSES)).optional().openapi({
-      description: "Filter by email verification status. Valid values: verified, guessed, unavailable, bounced, pending_manual_fulfillment. Combined with other filters using AND.",
+      description: "Filter by email verification status. Valid values: verified, unverified, likely to engage, unavailable. Combined with other filters using AND.",
       example: ["verified"],
     }),
     qOrganizationDomains: z.array(z.string().min(1)).optional().openapi({
@@ -357,7 +356,7 @@ export const SearchFiltersSchema = z
       example: ["director", "vp", "c_suite"],
     }),
     contactEmailStatus: z.array(z.enum(VALID_EMAIL_STATUSES)).optional().openapi({
-      description: "Filter by email verification status. Valid values: verified, guessed, unavailable, bounced, pending_manual_fulfillment.",
+      description: "Filter by email verification status. Valid values: verified, unverified, likely to engage, unavailable.",
       example: ["verified"],
     }),
     qOrganizationDomains: z.array(z.string().min(1)).optional().openapi({

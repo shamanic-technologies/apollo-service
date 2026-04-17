@@ -569,13 +569,12 @@
               "type": "string",
               "enum": [
                 "verified",
-                "guessed",
-                "unavailable",
-                "bounced",
-                "pending_manual_fulfillment"
+                "unverified",
+                "likely to engage",
+                "unavailable"
               ]
             },
-            "description": "Filter by email verification status. Valid values: verified, guessed, unavailable, bounced, pending_manual_fulfillment. Combined with other filters using AND.",
+            "description": "Filter by email verification status. Valid values: verified, unverified, likely to engage, unavailable. Combined with other filters using AND.",
             "example": [
               "verified"
             ]
@@ -798,13 +797,12 @@
               "type": "string",
               "enum": [
                 "verified",
-                "guessed",
-                "unavailable",
-                "bounced",
-                "pending_manual_fulfillment"
+                "unverified",
+                "likely to engage",
+                "unavailable"
               ]
             },
-            "description": "Filter by email verification status. Valid values: verified, guessed, unavailable, bounced, pending_manual_fulfillment.",
+            "description": "Filter by email verification status. Valid values: verified, unverified, likely to engage, unavailable.",
             "example": [
               "verified"
             ]

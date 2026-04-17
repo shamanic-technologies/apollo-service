@@ -14,10 +14,9 @@ const VALID_SENIORITIES = [
 
 const VALID_EMAIL_STATUSES = [
   "verified",
-  "guessed",
+  "unverified",
+  "likely to engage",
   "unavailable",
-  "bounced",
-  "pending_manual_fulfillment",
 ] as const;
 
 function buildEnumLists(): string {
