@@ -1729,6 +1729,57 @@
           "context"
         ]
       },
+      "TransferBrandResponse": {
+        "type": "object",
+        "properties": {
+          "updatedTables": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransferBrandTableResult"
+            }
+          }
+        },
+        "required": [
+          "updatedTables"
+        ]
+      },
+      "TransferBrandTableResult": {
+        "type": "object",
+        "properties": {
+          "tableName": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tableName",
+          "count"
+        ]
+      },
+      "TransferBrandRequest": {
+        "type": "object",
+        "properties": {
+          "brandId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sourceOrgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "targetOrgId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "brandId",
+          "sourceOrgId",
+          "targetOrgId"
+        ]
+      },
       "ValidateResponse": {
         "type": "object",
         "properties": {
@@ -2814,6 +2865,54 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SearchParamsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/transfer-brand": {
+      "post": {
+        "summary": "Transfer solo-brand rows from one org to another",
+        "description": "Re-assigns all rows referencing exactly this brandId (solo-brand only) from sourceOrgId to targetOrgId. Rows with multiple brand IDs are skipped. Idempotent — running twice is a no-op.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransferBrandRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Transfer results per table",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferBrandResponse"
                 }
               }
             }
