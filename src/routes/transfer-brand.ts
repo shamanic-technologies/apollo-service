@@ -40,7 +40,7 @@ router.post("/internal/transfer-brand", async (req, res) => {
           AND brand_ids[1] = ${brandId}
       `);
 
-      const count = Number(result.rowCount ?? 0);
+      const count = result.count;
       updatedTables.push({ tableName, count });
     }
 
