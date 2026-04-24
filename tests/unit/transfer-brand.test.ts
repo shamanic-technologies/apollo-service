@@ -23,6 +23,13 @@ function createApp() {
   return app;
 }
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/** Mimics postgres-js RowList with a `.count` property */
+function rowList(count: number) {
+  return Object.assign([], { count });
+}
+
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 describe("POST /internal/transfer-brand", () => {
@@ -34,7 +41,7 @@ describe("POST /internal/transfer-brand", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockExecute.mockResolvedValue({ rowCount: 0 });
+    mockExecute.mockResolvedValue(rowList(0));
   });
 
   it("returns 400 when brandId is missing", async () => {
@@ -73,10 +80,10 @@ describe("POST /internal/transfer-brand", () => {
 
   it("executes UPDATE for all 4 tables and returns counts", async () => {
     mockExecute
-      .mockResolvedValueOnce({ rowCount: 3 })
-      .mockResolvedValueOnce({ rowCount: 10 })
-      .mockResolvedValueOnce({ rowCount: 1 })
-      .mockResolvedValueOnce({ rowCount: 0 });
+      .mockResolvedValueOnce(rowList(3))
+      .mockResolvedValueOnce(rowList(10))
+      .mockResolvedValueOnce(rowList(1))
+      .mockResolvedValueOnce(rowList(0));
 
     const res = await request(createApp())
       .post("/internal/transfer-brand")
@@ -93,7 +100,7 @@ describe("POST /internal/transfer-brand", () => {
   });
 
   it("is idempotent — returns 0 counts when already transferred", async () => {
-    mockExecute.mockResolvedValue({ rowCount: 0 });
+    mockExecute.mockResolvedValue(rowList(0));
 
     const res = await request(createApp())
       .post("/internal/transfer-brand")
