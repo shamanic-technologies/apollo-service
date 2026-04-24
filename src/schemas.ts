@@ -935,6 +935,57 @@ registry.registerPath({
   },
 });
 
+// ─── POST /internal/transfer-brand ───────────────────────────────────────
+
+export const TransferBrandRequestSchema = z
+  .object({
+    brandId: z.string().uuid(),
+    sourceOrgId: z.string().uuid(),
+    targetOrgId: z.string().uuid(),
+  })
+  .openapi("TransferBrandRequest");
+
+const TransferBrandTableResultSchema = z
+  .object({
+    tableName: z.string(),
+    count: z.number().int(),
+  })
+  .openapi("TransferBrandTableResult");
+
+const TransferBrandResponseSchema = z
+  .object({
+    updatedTables: z.array(TransferBrandTableResultSchema),
+  })
+  .openapi("TransferBrandResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/transfer-brand",
+  summary: "Transfer solo-brand rows from one org to another",
+  description:
+    "Re-assigns all rows referencing exactly this brandId (solo-brand only) from sourceOrgId to targetOrgId. Rows with multiple brand IDs are skipped. Idempotent — running twice is a no-op.",
+  request: {
+    body: {
+      content: { "application/json": { schema: TransferBrandRequestSchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      description: "Transfer results per table",
+      content: { "application/json": { schema: TransferBrandResponseSchema } },
+    },
+    400: {
+      description: "Validation error",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    500: {
+      description: "Internal server error",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
 // ─── POST /validate ──────────────────────────────────────────────────────────
 
 export const ValidateRequestSchema = z
