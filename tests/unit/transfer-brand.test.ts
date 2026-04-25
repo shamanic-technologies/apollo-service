@@ -34,7 +34,7 @@ function rowList(count: number) {
 
 describe("POST /internal/transfer-brand", () => {
   const validBody = {
-    brandId: "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+    sourceBrandId: "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
     sourceOrgId: "b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e",
     targetOrgId: "c3d4e5f6-a7b8-4c9d-8e1f-2a3b4c5d6e7f",
   };
@@ -44,7 +44,7 @@ describe("POST /internal/transfer-brand", () => {
     mockExecute.mockResolvedValue(rowList(0));
   });
 
-  it("returns 400 when brandId is missing", async () => {
+  it("returns 400 when sourceBrandId is missing", async () => {
     const res = await request(createApp())
       .post("/internal/transfer-brand")
       .send({ sourceOrgId: validBody.sourceOrgId, targetOrgId: validBody.targetOrgId });
@@ -53,10 +53,10 @@ describe("POST /internal/transfer-brand", () => {
     expect(res.body.error).toBeDefined();
   });
 
-  it("returns 400 when brandId is not a valid UUID", async () => {
+  it("returns 400 when sourceBrandId is not a valid UUID", async () => {
     const res = await request(createApp())
       .post("/internal/transfer-brand")
-      .send({ ...validBody, brandId: "not-a-uuid" });
+      .send({ ...validBody, sourceBrandId: "not-a-uuid" });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBeDefined();
@@ -65,7 +65,7 @@ describe("POST /internal/transfer-brand", () => {
   it("returns 400 when sourceOrgId is missing", async () => {
     const res = await request(createApp())
       .post("/internal/transfer-brand")
-      .send({ brandId: validBody.brandId, targetOrgId: validBody.targetOrgId });
+      .send({ sourceBrandId: validBody.sourceBrandId, targetOrgId: validBody.targetOrgId });
 
     expect(res.status).toBe(400);
   });
@@ -73,12 +73,21 @@ describe("POST /internal/transfer-brand", () => {
   it("returns 400 when targetOrgId is missing", async () => {
     const res = await request(createApp())
       .post("/internal/transfer-brand")
-      .send({ brandId: validBody.brandId, sourceOrgId: validBody.sourceOrgId });
+      .send({ sourceBrandId: validBody.sourceBrandId, sourceOrgId: validBody.sourceOrgId });
 
     expect(res.status).toBe(400);
   });
 
-  it("executes UPDATE for all 4 tables and returns counts", async () => {
+  it("returns 400 when targetBrandId is not a valid UUID", async () => {
+    const res = await request(createApp())
+      .post("/internal/transfer-brand")
+      .send({ ...validBody, targetBrandId: "not-a-uuid" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBeDefined();
+  });
+
+  it("executes UPDATE for all 4 tables and returns counts (no targetBrandId)", async () => {
     mockExecute
       .mockResolvedValueOnce(rowList(3))
       .mockResolvedValueOnce(rowList(10))
@@ -96,6 +105,28 @@ describe("POST /internal/transfer-brand", () => {
       { tableName: "apollo_people_enrichments", count: 10 },
       { tableName: "apollo_search_cursors", count: 1 },
       { tableName: "apollo_search_params_cache", count: 0 },
+    ]);
+  });
+
+  it("rewrites brand_ids when targetBrandId is present", async () => {
+    mockExecute
+      .mockResolvedValueOnce(rowList(5))
+      .mockResolvedValueOnce(rowList(2))
+      .mockResolvedValueOnce(rowList(0))
+      .mockResolvedValueOnce(rowList(1));
+
+    const targetBrandId = "d4e5f6a7-b8c9-4d0e-af1f-2a3b4c5d6e7f";
+    const res = await request(createApp())
+      .post("/internal/transfer-brand")
+      .send({ ...validBody, targetBrandId });
+
+    expect(res.status).toBe(200);
+    expect(mockExecute).toHaveBeenCalledTimes(4);
+    expect(res.body.updatedTables).toEqual([
+      { tableName: "apollo_people_searches", count: 5 },
+      { tableName: "apollo_people_enrichments", count: 2 },
+      { tableName: "apollo_search_cursors", count: 0 },
+      { tableName: "apollo_search_params_cache", count: 1 },
     ]);
   });
 
