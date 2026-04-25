@@ -1761,7 +1761,7 @@
       "TransferBrandRequest": {
         "type": "object",
         "properties": {
-          "brandId": {
+          "sourceBrandId": {
             "type": "string",
             "format": "uuid"
           },
@@ -1772,10 +1772,14 @@
           "targetOrgId": {
             "type": "string",
             "format": "uuid"
+          },
+          "targetBrandId": {
+            "type": "string",
+            "format": "uuid"
           }
         },
         "required": [
-          "brandId",
+          "sourceBrandId",
           "sourceOrgId",
           "targetOrgId"
         ]

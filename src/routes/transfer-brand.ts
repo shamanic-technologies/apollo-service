@@ -9,7 +9,8 @@ const router = Router();
  * POST /internal/transfer-brand
  *
  * Re-assigns solo-brand rows from sourceOrgId to targetOrgId.
- * Solo-brand = brand_ids array has exactly one element matching brandId.
+ * Solo-brand = brand_ids array has exactly one element matching sourceBrandId.
+ * When targetBrandId is present, also rewrites the brand reference.
  * Skips co-branding rows (multiple brand IDs).
  * Idempotent: rows already under targetOrgId are not touched.
  */
@@ -20,7 +21,7 @@ router.post("/internal/transfer-brand", async (req, res) => {
       return res.status(400).json({ error: parsed.error.message });
     }
 
-    const { brandId, sourceOrgId, targetOrgId } = parsed.data;
+    const { sourceBrandId, sourceOrgId, targetOrgId, targetBrandId } = parsed.data;
 
     const tables = [
       "apollo_people_searches",
@@ -32,20 +33,28 @@ router.post("/internal/transfer-brand", async (req, res) => {
     const updatedTables: { tableName: string; count: number }[] = [];
 
     for (const tableName of tables) {
-      const result = await db.execute(sql`
-        UPDATE ${sql.identifier(tableName)}
-        SET org_id = ${targetOrgId}
-        WHERE org_id = ${sourceOrgId}
-          AND array_length(brand_ids, 1) = 1
-          AND brand_ids[1] = ${brandId}
-      `);
+      const result = targetBrandId
+        ? await db.execute(sql`
+            UPDATE ${sql.identifier(tableName)}
+            SET org_id = ${targetOrgId}, brand_ids = ARRAY[${targetBrandId}]
+            WHERE org_id = ${sourceOrgId}
+              AND array_length(brand_ids, 1) = 1
+              AND brand_ids[1] = ${sourceBrandId}
+          `)
+        : await db.execute(sql`
+            UPDATE ${sql.identifier(tableName)}
+            SET org_id = ${targetOrgId}
+            WHERE org_id = ${sourceOrgId}
+              AND array_length(brand_ids, 1) = 1
+              AND brand_ids[1] = ${sourceBrandId}
+          `);
 
       const count = result.count;
       updatedTables.push({ tableName, count });
     }
 
     console.log(
-      `[apollo-service] transfer-brand: brandId=${brandId} from=${sourceOrgId} to=${targetOrgId} results=${JSON.stringify(updatedTables)}`
+      `[apollo-service] transfer-brand: sourceBrandId=${sourceBrandId} targetBrandId=${targetBrandId ?? "none"} from=${sourceOrgId} to=${targetOrgId} results=${JSON.stringify(updatedTables)}`
     );
 
     return res.json({ updatedTables });
