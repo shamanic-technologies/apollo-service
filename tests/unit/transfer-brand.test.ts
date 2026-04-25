@@ -108,12 +108,17 @@ describe("POST /internal/transfer-brand", () => {
     ]);
   });
 
-  it("rewrites brand_ids when targetBrandId is present", async () => {
+  it("rewrites brand_ids when targetBrandId is present (two-step per table)", async () => {
+    // 2 queries per table × 4 tables = 8 calls
     mockExecute
-      .mockResolvedValueOnce(rowList(5))
-      .mockResolvedValueOnce(rowList(2))
-      .mockResolvedValueOnce(rowList(0))
-      .mockResolvedValueOnce(rowList(1));
+      .mockResolvedValueOnce(rowList(3))  // searches step1: move org
+      .mockResolvedValueOnce(rowList(2))  // searches step2: rewrite brand
+      .mockResolvedValueOnce(rowList(1))  // enrichments step1
+      .mockResolvedValueOnce(rowList(1))  // enrichments step2
+      .mockResolvedValueOnce(rowList(0))  // cursors step1
+      .mockResolvedValueOnce(rowList(0))  // cursors step2
+      .mockResolvedValueOnce(rowList(0))  // cache step1
+      .mockResolvedValueOnce(rowList(1)); // cache step2
 
     const targetBrandId = "d4e5f6a7-b8c9-4d0e-af1f-2a3b4c5d6e7f";
     const res = await request(createApp())
@@ -121,7 +126,7 @@ describe("POST /internal/transfer-brand", () => {
       .send({ ...validBody, targetBrandId });
 
     expect(res.status).toBe(200);
-    expect(mockExecute).toHaveBeenCalledTimes(4);
+    expect(mockExecute).toHaveBeenCalledTimes(8);
     expect(res.body.updatedTables).toEqual([
       { tableName: "apollo_people_searches", count: 5 },
       { tableName: "apollo_people_enrichments", count: 2 },

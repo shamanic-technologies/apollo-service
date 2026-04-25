@@ -33,24 +33,36 @@ router.post("/internal/transfer-brand", async (req, res) => {
     const updatedTables: { tableName: string; count: number }[] = [];
 
     for (const tableName of tables) {
-      const result = targetBrandId
-        ? await db.execute(sql`
-            UPDATE ${sql.identifier(tableName)}
-            SET org_id = ${targetOrgId}, brand_ids = ARRAY[${targetBrandId}]
-            WHERE org_id = ${sourceOrgId}
-              AND array_length(brand_ids, 1) = 1
-              AND brand_ids[1] = ${sourceBrandId}
-          `)
-        : await db.execute(sql`
-            UPDATE ${sql.identifier(tableName)}
-            SET org_id = ${targetOrgId}
-            WHERE org_id = ${sourceOrgId}
-              AND array_length(brand_ids, 1) = 1
-              AND brand_ids[1] = ${sourceBrandId}
-          `);
+      if (targetBrandId) {
+        // Step 1: move rows to target org (still with old brand_id)
+        const step1 = await db.execute(sql`
+          UPDATE ${sql.identifier(tableName)}
+          SET org_id = ${targetOrgId}
+          WHERE org_id = ${sourceOrgId}
+            AND array_length(brand_ids, 1) = 1
+            AND brand_ids[1] = ${sourceBrandId}
+        `);
 
-      const count = result.count;
-      updatedTables.push({ tableName, count });
+        // Step 2: rewrite brand_id — no org filter, catches rows already moved
+        const step2 = await db.execute(sql`
+          UPDATE ${sql.identifier(tableName)}
+          SET brand_ids = ARRAY[${targetBrandId}]
+          WHERE array_length(brand_ids, 1) = 1
+            AND brand_ids[1] = ${sourceBrandId}
+        `);
+
+        updatedTables.push({ tableName, count: step1.count + step2.count });
+      } else {
+        const result = await db.execute(sql`
+          UPDATE ${sql.identifier(tableName)}
+          SET org_id = ${targetOrgId}
+          WHERE org_id = ${sourceOrgId}
+            AND array_length(brand_ids, 1) = 1
+            AND brand_ids[1] = ${sourceBrandId}
+        `);
+
+        updatedTables.push({ tableName, count: result.count });
+      }
     }
 
     console.log(
