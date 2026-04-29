@@ -198,6 +198,7 @@ export async function enrichPerson(
     body: JSON.stringify({
       id: personId,
       reveal_personal_emails: false,
+      run_waterfall_email: true,
     }),
   });
 
@@ -230,6 +231,7 @@ export async function matchPersonByName(
       last_name: lastName,
       domain,
       reveal_personal_emails: false,
+      run_waterfall_email: true,
     }),
   });
 
@@ -258,6 +260,7 @@ export async function bulkMatchPeopleByName(
     body: JSON.stringify({
       details: items,
       reveal_personal_emails: false,
+      run_waterfall_email: true,
     }),
   });
 
@@ -285,6 +288,7 @@ export async function bulkEnrichPeople(
     body: JSON.stringify({
       details: personIds.map((id) => ({ id })),
       reveal_personal_emails: false,
+      run_waterfall_email: true,
     }),
   });
 
