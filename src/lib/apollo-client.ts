@@ -6,7 +6,7 @@ const APOLLO_API_BASE = "https://api.apollo.io/api/v1";
  */
 export function buildWaterfallWebhookUrl(): string | undefined {
   const publicUrl = process.env.APOLLO_SERVICE_PUBLIC_URL;
-  const secret = process.env.WATERFALL_WEBHOOK_SECRET;
+  const secret = process.env.APOLLO_WATERFALL_WEBHOOK_SECRET;
   if (!publicUrl || !secret) return undefined;
   return `${publicUrl}/webhook/waterfall?secret=${encodeURIComponent(secret)}`;
 }

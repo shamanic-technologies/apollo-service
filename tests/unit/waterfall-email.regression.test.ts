@@ -104,7 +104,7 @@ describe("webhook_url parameter", () => {
 
   it("buildWaterfallWebhookUrl returns URL with env vars set", async () => {
     vi.stubEnv("APOLLO_SERVICE_PUBLIC_URL", "https://apollo.example.com");
-    vi.stubEnv("WATERFALL_WEBHOOK_SECRET", "my-secret");
+    vi.stubEnv("APOLLO_WATERFALL_WEBHOOK_SECRET", "my-secret");
 
     // Need fresh import to pick up env vars
     const mod = await import("../../src/lib/apollo-client.js");

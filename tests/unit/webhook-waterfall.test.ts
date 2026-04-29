@@ -106,7 +106,7 @@ describe("POST /webhook/waterfall", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    vi.stubEnv("WATERFALL_WEBHOOK_SECRET", WEBHOOK_SECRET);
+    vi.stubEnv("APOLLO_WATERFALL_WEBHOOK_SECRET", WEBHOOK_SECRET);
 
     // Default: select returns the pending enrichment
     mockDbSelect.mockReturnValue({

@@ -6,7 +6,7 @@ import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/run
 
 const router = Router();
 
-const WATERFALL_WEBHOOK_SECRET = process.env.WATERFALL_WEBHOOK_SECRET || "";
+const APOLLO_WATERFALL_WEBHOOK_SECRET = process.env.APOLLO_WATERFALL_WEBHOOK_SECRET || "";
 
 interface WaterfallVendor {
   id: string;
@@ -41,7 +41,7 @@ interface WaterfallWebhookPayload {
 router.post("/webhook/waterfall", async (req: Request, res: Response) => {
   try {
     const secret = req.query.secret as string;
-    if (!WATERFALL_WEBHOOK_SECRET || secret !== WATERFALL_WEBHOOK_SECRET) {
+    if (!APOLLO_WATERFALL_WEBHOOK_SECRET || secret !== APOLLO_WATERFALL_WEBHOOK_SECRET) {
       return res.status(401).json({ error: "Invalid webhook secret" });
     }
 
