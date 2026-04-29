@@ -84,6 +84,7 @@ vi.mock("../../src/lib/apollo-client.js", () => ({
   enrichPerson: vi.fn(),
   matchPersonByName: vi.fn(),
   bulkMatchPeopleByName: vi.fn(),
+  buildWaterfallWebhookUrl: () => undefined,
 }));
 
 let lastInsertValues: Record<string, unknown> | null = null;

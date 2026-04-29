@@ -103,6 +103,7 @@ const mockBulkMatchPeopleByName = vi.fn().mockResolvedValue({ matches: [MOCK_PER
 vi.mock("../../src/lib/apollo-client.js", () => ({
   matchPersonByName: (...args: unknown[]) => mockMatchPersonByName(...args),
   bulkMatchPeopleByName: (...args: unknown[]) => mockBulkMatchPeopleByName(...args),
+  buildWaterfallWebhookUrl: () => undefined,
 }));
 
 function createTestApp() {
@@ -185,7 +186,7 @@ describe("POST /match", () => {
       .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" })
       .expect(200);
 
-    expect(mockMatchPersonByName).toHaveBeenCalledWith("fake-apollo-key", "John", "Doe", "acme.com");
+    expect(mockMatchPersonByName).toHaveBeenCalledWith("fake-apollo-key", "John", "Doe", "acme.com", undefined);
     expect(res.body.person).toBeDefined();
     expect(res.body.person.firstName).toBe("John");
     expect(res.body.person.email).toBe("john@acme.com");

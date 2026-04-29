@@ -100,6 +100,7 @@ const mockSearchPeople = vi.fn();
 vi.mock("../../src/lib/apollo-client.js", () => ({
   searchPeople: (...args: unknown[]) => mockSearchPeople(...args),
   enrichPerson: vi.fn().mockResolvedValue({ person: null }),
+  buildWaterfallWebhookUrl: () => undefined,
 }));
 
 function makePeople(ids: string[]) {
