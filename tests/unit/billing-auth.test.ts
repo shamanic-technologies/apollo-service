@@ -93,6 +93,7 @@ const mockEnrichPerson = vi.fn();
 vi.mock("../../src/lib/apollo-client.js", () => ({
   searchPeople: (...args: unknown[]) => mockSearchPeople(...args),
   enrichPerson: (...args: unknown[]) => mockEnrichPerson(...args),
+  buildWaterfallWebhookUrl: () => undefined,
 }));
 
 const HEADERS = {

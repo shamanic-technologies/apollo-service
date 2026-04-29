@@ -52,6 +52,7 @@ vi.mock("../../src/lib/apollo-client.js", () => ({
   enrichPerson: vi.fn(),
   matchPersonByName: vi.fn(),
   bulkMatchPeopleByName: vi.fn(),
+  buildWaterfallWebhookUrl: () => undefined,
 }));
 
 // DB mock: capture insert values

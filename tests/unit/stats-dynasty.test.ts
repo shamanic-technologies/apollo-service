@@ -92,6 +92,7 @@ vi.mock("../../src/lib/billing-client.js", () => ({
 vi.mock("../../src/lib/apollo-client.js", () => ({
   searchPeople: vi.fn().mockResolvedValue({ people: [], total_entries: 0 }),
   enrichPerson: vi.fn().mockResolvedValue({ person: null }),
+  buildWaterfallWebhookUrl: () => undefined,
 }));
 
 // Mock dynasty client

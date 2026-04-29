@@ -3,7 +3,7 @@ import { eq, and, gt, isNotNull, desc, inArray, count, sum, sql } from "drizzle-
 import { db } from "../db/index.js";
 import { apolloPeopleSearches, apolloPeopleEnrichments, apolloSearchCursors } from "../db/schema.js";
 import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
-import { searchPeople, enrichPerson, ApolloPerson } from "../lib/apollo-client.js";
+import { searchPeople, enrichPerson, ApolloPerson, buildWaterfallWebhookUrl } from "../lib/apollo-client.js";
 import { decryptKey } from "../lib/keys-client.js";
 import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/runs-client.js";
 import { authorizeCredit } from "../lib/billing-client.js";
@@ -274,24 +274,15 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       }
     }
 
-    const result = await enrichPerson(apolloApiKey, apolloPersonId);
+    const webhookUrl = buildWaterfallWebhookUrl();
+    const result = await enrichPerson(apolloApiKey, apolloPersonId, webhookUrl);
     const person = result.person;
+    const waterfallAccepted = result.waterfall?.status === "accepted";
+    const waterfallRequestId = result.request_id ? String(result.request_id) : null;
 
     // Store enrichment record and track costs
     let enrichmentId: string | null = null;
     if (person) {
-      const [enrichment] = await db.insert(apolloPeopleEnrichments).values({
-        orgId: req.orgId!,
-        runId,
-        brandIds,
-        campaignId,
-        featureSlug,
-        workflowSlug,
-        ...toEnrichmentDbValues(person),
-      }).returning();
-
-      enrichmentId = enrichment.id;
-
       // Track cost in runs-service
       const enrichRun = await createRun({
         orgId: req.orgId!,
@@ -304,9 +295,21 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
         workflowSlug,
       });
 
-      await db.update(apolloPeopleEnrichments)
-        .set({ enrichmentRunId: enrichRun.id })
-        .where(eq(apolloPeopleEnrichments.id, enrichment.id));
+      const [enrichment] = await db.insert(apolloPeopleEnrichments).values({
+        orgId: req.orgId!,
+        runId,
+        brandIds,
+        campaignId,
+        featureSlug,
+        workflowSlug,
+        ...toEnrichmentDbValues(person),
+        enrichmentRunId: enrichRun.id,
+        keySource,
+        waterfallRequestId,
+        waterfallStatus: !person.email && waterfallAccepted ? "pending" : null,
+      }).returning();
+
+      enrichmentId = enrichment.id;
 
       if (person.email) {
         await addCosts(enrichRun.id, [{ costName: "apollo-enrichment-credit", costSource: keySource, quantity: 1 }], identity);

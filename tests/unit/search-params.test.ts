@@ -106,6 +106,7 @@ const mockSearchPeople = vi.fn();
 
 vi.mock("../../src/lib/apollo-client.js", () => ({
   searchPeople: (...args: unknown[]) => mockSearchPeople(...args),
+  buildWaterfallWebhookUrl: () => undefined,
 }));
 
 // Mock chat-client

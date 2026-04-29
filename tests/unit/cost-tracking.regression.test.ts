@@ -141,6 +141,7 @@ const mockEnrichPerson = vi.fn().mockResolvedValue({
 vi.mock("../../src/lib/apollo-client.js", () => ({
   searchPeople: (...args: unknown[]) => mockSearchPeople(...args),
   enrichPerson: (...args: unknown[]) => mockEnrichPerson(...args),
+  buildWaterfallWebhookUrl: () => undefined,
 }));
 
 function createTestApp() {
