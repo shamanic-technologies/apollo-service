@@ -105,7 +105,20 @@
             "nullable": true
           },
           "emailStatus": {
-            "$ref": "#/components/schemas/EmailStatus"
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "verified",
+              "unavailable",
+              "extrapolated",
+              "unverified",
+              "unknown",
+              "catch_all",
+              "update_required",
+              "user_managed",
+              null
+            ],
+            "description": "Email verification status returned by Apollo. Null when no email was found.\n\n| Value | Description |\n| --- | --- |\n| `verified` | Email confirmed deliverable via SMTP check |\n| `unavailable` | Apollo could not find an email for this person |\n| `extrapolated` | Email pattern-matched from known company format (Apollo UI: \"Guessed\") |\n| `unverified` | Email found but not yet verified |\n| `unknown` | Verification attempted but result is inconclusive |\n| `catch_all` | Domain accepts all addresses — deliverability uncertain |\n| `update_required` | Previously verified email that needs re-verification |\n| `user_managed` | Email manually entered or overridden by an Apollo user |\n| `null` | No email data available |"
           },
           "title": {
             "type": "string",
@@ -409,21 +422,6 @@
           "emailStatus",
           "title",
           "linkedinUrl"
-        ]
-      },
-      "EmailStatus": {
-        "type": "string",
-        "nullable": true,
-        "enum": [
-          "verified",
-          "unavailable",
-          "extrapolated",
-          "unverified",
-          "unknown",
-          "catch_all",
-          "update_required",
-          "user_managed",
-          null
         ]
       },
       "Pagination": {
@@ -1176,7 +1174,20 @@
             "nullable": true
           },
           "emailStatus": {
-            "$ref": "#/components/schemas/EmailStatus"
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "verified",
+              "unavailable",
+              "extrapolated",
+              "unverified",
+              "unknown",
+              "catch_all",
+              "update_required",
+              "user_managed",
+              null
+            ],
+            "description": "Email verification status returned by Apollo. Null when no email was found.\n\n| Value | Description |\n| --- | --- |\n| `verified` | Email confirmed deliverable via SMTP check |\n| `unavailable` | Apollo could not find an email for this person |\n| `extrapolated` | Email pattern-matched from known company format (Apollo UI: \"Guessed\") |\n| `unverified` | Email found but not yet verified |\n| `unknown` | Verification attempted but result is inconclusive |\n| `catch_all` | Domain accepts all addresses — deliverability uncertain |\n| `update_required` | Previously verified email that needs re-verification |\n| `user_managed` | Email manually entered or overridden by an Apollo user |\n| `null` | No email data available |"
           },
           "title": {
             "type": "string",

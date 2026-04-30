@@ -21,7 +21,23 @@ export const EMAIL_STATUSES = [
   "user_managed",
 ] as const;
 export type EmailStatus = (typeof EMAIL_STATUSES)[number];
-const EmailStatusSchema = z.enum(EMAIL_STATUSES).nullable().openapi("EmailStatus");
+const EmailStatusSchema = z.enum(EMAIL_STATUSES).nullable().openapi({
+  description: [
+    "Email verification status returned by Apollo. Null when no email was found.",
+    "",
+    "| Value | Description |",
+    "| --- | --- |",
+    "| `verified` | Email confirmed deliverable via SMTP check |",
+    "| `unavailable` | Apollo could not find an email for this person |",
+    "| `extrapolated` | Email pattern-matched from known company format (Apollo UI: \"Guessed\") |",
+    "| `unverified` | Email found but not yet verified |",
+    "| `unknown` | Verification attempted but result is inconclusive |",
+    "| `catch_all` | Domain accepts all addresses — deliverability uncertain |",
+    "| `update_required` | Previously verified email that needs re-verification |",
+    "| `user_managed` | Email manually entered or overridden by an Apollo user |",
+    "| `null` | No email data available |",
+  ].join("\n"),
+});
 
 // ─── Shared schemas ──────────────────────────────────────────────────────────
 
