@@ -53,6 +53,7 @@ async function findCachedMatch(
   // Case B: pending + > 24h old → webhook never arrived, give up
   const twentyFourHoursAgo = new Date();
   twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
+  const twentyFourHoursAgoISO = twentyFourHoursAgo.toISOString();
 
   const [negative] = await db
     .select()
@@ -62,9 +63,9 @@ async function findCachedMatch(
         nameFilter,
         sql`${apolloPeopleEnrichments.email} IS NULL`,
         sql`(
-          (COALESCE(${apolloPeopleEnrichments.waterfallStatus}, '') != 'pending' AND ${apolloPeopleEnrichments.createdAt} > ${twentyFourHoursAgo})
+          (COALESCE(${apolloPeopleEnrichments.waterfallStatus}, '') != 'pending' AND ${apolloPeopleEnrichments.createdAt} > ${twentyFourHoursAgoISO})
           OR
-          (${apolloPeopleEnrichments.waterfallStatus} = 'pending' AND ${apolloPeopleEnrichments.createdAt} <= ${twentyFourHoursAgo})
+          (${apolloPeopleEnrichments.waterfallStatus} = 'pending' AND ${apolloPeopleEnrichments.createdAt} <= ${twentyFourHoursAgoISO})
         )`
       )
     )
