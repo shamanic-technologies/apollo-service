@@ -8,6 +8,21 @@ extendZodWithOpenApi(z);
 
 export const registry = new OpenAPIRegistry();
 
+// ─── Email status enum (response values from Apollo) ────────────────────────
+
+export const EMAIL_STATUSES = [
+  "verified",
+  "unavailable",
+  "extrapolated",
+  "unverified",
+  "unknown",
+  "catch_all",
+  "update_required",
+  "user_managed",
+] as const;
+export type EmailStatus = (typeof EMAIL_STATUSES)[number];
+const EmailStatusSchema = z.enum(EMAIL_STATUSES).nullable().openapi("EmailStatus");
+
 // ─── Shared schemas ──────────────────────────────────────────────────────────
 
 const VALID_EMPLOYEE_RANGES = [
@@ -77,7 +92,7 @@ const PersonSchema = z
     firstName: z.string().nullable(),
     lastName: z.string().nullable(),
     email: z.string().nullable(),
-    emailStatus: z.string().nullable(),
+    emailStatus: EmailStatusSchema,
     title: z.string().nullable(),
     linkedinUrl: z.string().nullable(),
     // Person profile
@@ -641,7 +656,7 @@ const EnrichmentRecordSchema = z
     firstName: z.string().nullable().optional(),
     lastName: z.string().nullable().optional(),
     email: z.string().nullable().optional(),
-    emailStatus: z.string().nullable().optional(),
+    emailStatus: EmailStatusSchema.optional(),
     title: z.string().nullable().optional(),
     linkedinUrl: z.string().nullable().optional(),
     photoUrl: z.string().nullable().optional(),

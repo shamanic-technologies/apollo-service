@@ -105,8 +105,7 @@
             "nullable": true
           },
           "emailStatus": {
-            "type": "string",
-            "nullable": true
+            "$ref": "#/components/schemas/EmailStatus"
           },
           "title": {
             "type": "string",
@@ -410,6 +409,21 @@
           "emailStatus",
           "title",
           "linkedinUrl"
+        ]
+      },
+      "EmailStatus": {
+        "type": "string",
+        "nullable": true,
+        "enum": [
+          "verified",
+          "unavailable",
+          "extrapolated",
+          "unverified",
+          "unknown",
+          "catch_all",
+          "update_required",
+          "user_managed",
+          null
         ]
       },
       "Pagination": {
@@ -1162,8 +1176,7 @@
             "nullable": true
           },
           "emailStatus": {
-            "type": "string",
-            "nullable": true
+            "$ref": "#/components/schemas/EmailStatus"
           },
           "title": {
             "type": "string",

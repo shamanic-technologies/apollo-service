@@ -8,7 +8,7 @@ import { decryptKey } from "../lib/keys-client.js";
 import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/runs-client.js";
 import { authorizeCredit } from "../lib/billing-client.js";
 import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment, toApolloSearchParams } from "../lib/transform.js";
-import { SearchRequestSchema, SearchNextRequestSchema, EnrichRequestSchema, StatsRequestSchema } from "../schemas.js";
+import { SearchRequestSchema, SearchNextRequestSchema, EnrichRequestSchema, StatsRequestSchema, type EmailStatus } from "../schemas.js";
 import { deepEqual } from "../lib/deep-equal.js";
 import {
   resolveWorkflowDynastySlugs,
@@ -117,7 +117,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
       .filter((p: ApolloPerson) => !p.email && p.id)
       .map((p: ApolloPerson) => p.id);
 
-    const emailCache = new Map<string, { email: string; emailStatus: string | null }>();
+    const emailCache = new Map<string, { email: string; emailStatus: EmailStatus | null }>();
     if (personIdsWithoutEmail.length > 0) {
       const twelveMonthsAgo = new Date();
       twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
@@ -139,7 +139,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
       for (const row of cachedEnrichments) {
         if (row.apolloPersonId && row.email) {
-          emailCache.set(row.apolloPersonId, { email: row.email, emailStatus: row.emailStatus });
+          emailCache.set(row.apolloPersonId, { email: row.email, emailStatus: row.emailStatus as EmailStatus | null });
         }
       }
     }
