@@ -3,7 +3,7 @@ import { and, gt, isNotNull, desc, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloPeopleEnrichments } from "../db/schema.js";
 import { serviceAuth, type AuthenticatedRequest } from "../middleware/auth.js";
-import { matchPersonByName, bulkMatchPeopleByName } from "../lib/apollo-client.js";
+import { matchPersonByName, bulkMatchPeopleByName, buildWaterfallWebhookUrl } from "../lib/apollo-client.js";
 import { decryptKey } from "../lib/keys-client.js";
 import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/runs-client.js";
 import { authorizeCredit } from "../lib/billing-client.js";
@@ -88,8 +88,8 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
     if (keySource === "platform") {
       const auth = await authorizeCredit({
-        items: [{ costName: "apollo-person-match-credit", quantity: 1 }],
-        description: "apollo-person-match-credit",
+        items: [{ costName: "apollo-credit", quantity: 1 }],
+        description: "apollo-credit",
         orgId: req.orgId!,
         userId: req.userId!,
         runId,
@@ -107,8 +107,11 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
       }
     }
 
-    const result = await matchPersonByName(apolloApiKey, firstName, lastName, organizationDomain);
+    const webhookUrl = buildWaterfallWebhookUrl();
+    const result = await matchPersonByName(apolloApiKey, firstName, lastName, organizationDomain, webhookUrl);
     const person = result.person;
+    const waterfallAccepted = result.waterfall?.status === "accepted";
+    const waterfallRequestId = result.request_id ? String(result.request_id) : null;
 
     const matchRun = await createRun({
       orgId: req.orgId!,
@@ -134,12 +137,15 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
         workflowSlug,
         ...toEnrichmentDbValues(person),
         enrichmentRunId: matchRun.id,
+        keySource,
+        waterfallRequestId,
+        waterfallStatus: !person.email && waterfallAccepted ? "pending" : null,
       }).returning();
 
       enrichmentId = enrichment.id;
 
       if (person.email) {
-        await addCosts(matchRun.id, [{ costName: "apollo-person-match-credit", costSource: keySource, quantity: 1 }], identity);
+        await addCosts(matchRun.id, [{ costName: "apollo-credit", costSource: keySource, quantity: 1 }], identity);
       }
     }
 
@@ -201,14 +207,16 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
     // Call Apollo bulk API for all misses in one request
     let apolloResults: (import("../lib/apollo-client.js").ApolloPerson | null)[] = [];
     let keySource: "org" | "platform" = "platform";
+    let bulkWaterfallAccepted = false;
+    let bulkWaterfallRequestId: string | null = null;
     if (missIndices.length > 0) {
       const { key: apolloApiKey, keySource: ks } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/match/bulk" }, tracking);
       keySource = ks;
 
       if (keySource === "platform") {
         const auth = await authorizeCredit({
-          items: [{ costName: "apollo-person-match-credit", quantity: missIndices.length }],
-          description: `apollo-person-match-credit x${missIndices.length}`,
+          items: [{ costName: "apollo-credit", quantity: missIndices.length }],
+          description: `apollo-credit x${missIndices.length}`,
           orgId: req.orgId!,
           userId: req.userId!,
           runId,
@@ -233,8 +241,11 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
         domain: items[i].organizationDomain,
       }));
 
-      const bulkResult = await bulkMatchPeopleByName(apolloApiKey, missItems);
+      const webhookUrl = buildWaterfallWebhookUrl();
+      const bulkResult = await bulkMatchPeopleByName(apolloApiKey, missItems, webhookUrl);
       apolloResults = bulkResult.matches;
+      bulkWaterfallAccepted = bulkResult.waterfall?.status === "accepted";
+      bulkWaterfallRequestId = bulkResult.request_id ? String(bulkResult.request_id) : null;
     }
 
     // Assemble results, store DB records, track costs
@@ -271,6 +282,9 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
             workflowSlug,
             ...toEnrichmentDbValues(person),
             enrichmentRunId: batchRun.id,
+            keySource,
+            waterfallRequestId: bulkWaterfallRequestId,
+            waterfallStatus: !person.email && bulkWaterfallAccepted ? "pending" : null,
           }).returning();
 
           enrichmentId = enrichment.id;
@@ -289,7 +303,7 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
     }
 
     if (totalCreditsToCharge > 0) {
-      await addCosts(batchRun.id, [{ costName: "apollo-person-match-credit", costSource: keySource, quantity: totalCreditsToCharge }], identity);
+      await addCosts(batchRun.id, [{ costName: "apollo-credit", costSource: keySource, quantity: totalCreditsToCharge }], identity);
     }
 
     await updateRun(batchRun.id, "completed", identity);

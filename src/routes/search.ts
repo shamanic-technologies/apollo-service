@@ -3,7 +3,7 @@ import { eq, and, gt, isNotNull, desc, inArray, count, sum, sql } from "drizzle-
 import { db } from "../db/index.js";
 import { apolloPeopleSearches, apolloPeopleEnrichments, apolloSearchCursors } from "../db/schema.js";
 import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
-import { searchPeople, enrichPerson, ApolloPerson } from "../lib/apollo-client.js";
+import { searchPeople, enrichPerson, ApolloPerson, buildWaterfallWebhookUrl } from "../lib/apollo-client.js";
 import { decryptKey } from "../lib/keys-client.js";
 import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/runs-client.js";
 import { authorizeCredit } from "../lib/billing-client.js";
@@ -41,29 +41,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
     // Get Apollo API key from key-service
     const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/search" }, tracking);
 
-    // Authorize credit before executing paid operation (platform keys only)
-    if (keySource === "platform") {
-      const auth = await authorizeCredit({
-        items: [{ costName: "apollo-search-credit", quantity: 1 }],
-        description: "apollo-search-credit",
-        orgId: req.orgId!,
-        userId: req.userId!,
-        runId,
-        brandId,
-        campaignId,
-        featureSlug,
-        workflowSlug,
-      });
-      if (!auth.sufficient) {
-        return res.status(402).json({
-          error: "Insufficient credits",
-          balance_cents: auth.balance_cents,
-          required_cents: auth.required_cents,
-        });
-      }
-    }
-
-    // Call Apollo API
+    // Call Apollo API (search is free — no credits consumed)
     const apolloParams = {
       ...toApolloSearchParams(searchParams),
       page: searchParams.page || 1,
@@ -131,8 +109,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
       });
     }
 
-    // Track search cost and mark run as completed
-    await addCosts(searchRun.id, [{ costName: "apollo-search-credit", costSource: keySource, quantity: 1 }], identity);
+    // Search is free — no Apollo credits consumed. Just mark run as completed.
     await updateRun(searchRun.id, "completed", identity);
 
     // Fill in cached emails for people without email
@@ -255,8 +232,8 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
     // Authorize credit before executing paid operation (platform keys only)
     if (keySource === "platform") {
       const auth = await authorizeCredit({
-        items: [{ costName: "apollo-enrichment-credit", quantity: 1 }],
-        description: "apollo-enrichment-credit",
+        items: [{ costName: "apollo-credit", quantity: 1 }],
+        description: "apollo-credit",
         orgId: req.orgId!,
         userId: req.userId!,
         runId,
@@ -274,24 +251,15 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       }
     }
 
-    const result = await enrichPerson(apolloApiKey, apolloPersonId);
+    const webhookUrl = buildWaterfallWebhookUrl();
+    const result = await enrichPerson(apolloApiKey, apolloPersonId, webhookUrl);
     const person = result.person;
+    const waterfallAccepted = result.waterfall?.status === "accepted";
+    const waterfallRequestId = result.request_id ? String(result.request_id) : null;
 
     // Store enrichment record and track costs
     let enrichmentId: string | null = null;
     if (person) {
-      const [enrichment] = await db.insert(apolloPeopleEnrichments).values({
-        orgId: req.orgId!,
-        runId,
-        brandIds,
-        campaignId,
-        featureSlug,
-        workflowSlug,
-        ...toEnrichmentDbValues(person),
-      }).returning();
-
-      enrichmentId = enrichment.id;
-
       // Track cost in runs-service
       const enrichRun = await createRun({
         orgId: req.orgId!,
@@ -304,12 +272,24 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
         workflowSlug,
       });
 
-      await db.update(apolloPeopleEnrichments)
-        .set({ enrichmentRunId: enrichRun.id })
-        .where(eq(apolloPeopleEnrichments.id, enrichment.id));
+      const [enrichment] = await db.insert(apolloPeopleEnrichments).values({
+        orgId: req.orgId!,
+        runId,
+        brandIds,
+        campaignId,
+        featureSlug,
+        workflowSlug,
+        ...toEnrichmentDbValues(person),
+        enrichmentRunId: enrichRun.id,
+        keySource,
+        waterfallRequestId,
+        waterfallStatus: !person.email && waterfallAccepted ? "pending" : null,
+      }).returning();
+
+      enrichmentId = enrichment.id;
 
       if (person.email) {
-        await addCosts(enrichRun.id, [{ costName: "apollo-enrichment-credit", costSource: keySource, quantity: 1 }], identity);
+        await addCosts(enrichRun.id, [{ costName: "apollo-credit", costSource: keySource, quantity: 1 }], identity);
       }
       await updateRun(enrichRun.id, "completed", identity);
     }
@@ -346,27 +326,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     // Get Apollo API key
     const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/search/next" }, tracking);
 
-    // Authorize credit before executing paid operation (platform keys only)
-    if (keySource === "platform") {
-      const auth = await authorizeCredit({
-        items: [{ costName: "apollo-search-credit", quantity: 1 }],
-        description: "apollo-search-credit",
-        orgId: req.orgId!,
-        userId: req.userId!,
-        runId,
-        brandId,
-        campaignId,
-        featureSlug,
-        workflowSlug,
-      });
-      if (!auth.sufficient) {
-        return res.status(402).json({
-          error: "Insufficient credits",
-          balance_cents: auth.balance_cents,
-          required_cents: auth.required_cents,
-        });
-      }
-    }
+    // Search is free — no Apollo credits consumed.
 
     // Look up existing cursor for this campaign
     const [existingCursor] = await db
@@ -503,7 +463,6 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
       responseRaw: result,
     });
 
-    await addCosts(searchRun.id, [{ costName: "apollo-search-credit", costSource: keySource, quantity: 1 }], identity);
     await updateRun(searchRun.id, "completed", identity);
 
     // Transform and respond

@@ -78,3 +78,39 @@ describe("run_waterfall_email flag", () => {
     expect(body.details).toHaveLength(2);
   });
 });
+
+describe("webhook_url parameter", () => {
+  it("sends webhook_url when provided", async () => {
+    const { enrichPerson } = await importClient();
+    await enrichPerson("key", "person-123", "https://example.com/webhook");
+
+    const body = parsedBody(0);
+    expect(body.webhook_url).toBe("https://example.com/webhook");
+  });
+
+  it("omits webhook_url when not provided", async () => {
+    const { enrichPerson } = await importClient();
+    await enrichPerson("key", "person-123");
+
+    const body = parsedBody(0);
+    expect(body.webhook_url).toBeUndefined();
+  });
+
+  it("buildWaterfallWebhookUrl returns undefined without env vars", async () => {
+    const { buildWaterfallWebhookUrl } = await importClient();
+    const url = buildWaterfallWebhookUrl();
+    expect(url).toBeUndefined();
+  });
+
+  it("buildWaterfallWebhookUrl returns URL with env vars set", async () => {
+    vi.stubEnv("APOLLO_SERVICE_PUBLIC_URL", "https://apollo.example.com");
+    vi.stubEnv("APOLLO_WATERFALL_WEBHOOK_SECRET", "my-secret");
+
+    // Need fresh import to pick up env vars
+    const mod = await import("../../src/lib/apollo-client.js");
+    const url = mod.buildWaterfallWebhookUrl();
+    expect(url).toBe("https://apollo.example.com/webhook/waterfall?secret=my-secret");
+
+    vi.unstubAllGlobals();
+  });
+});

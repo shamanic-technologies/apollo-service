@@ -84,6 +84,7 @@ vi.mock("../../src/lib/apollo-client.js", () => ({
   enrichPerson: vi.fn(),
   matchPersonByName: vi.fn(),
   bulkMatchPeopleByName: vi.fn(),
+  buildWaterfallWebhookUrl: () => undefined,
 }));
 
 let lastInsertValues: Record<string, unknown> | null = null;
@@ -179,10 +180,10 @@ describe("multi-brand DB inserts", () => {
       .send({ personTitles: ["CEO"] })
       .expect(200);
 
-    // identity passed to addCosts/updateRun should contain raw CSV brandId
-    expect(mockAddCosts).toHaveBeenCalledWith(
+    // identity passed to updateRun should contain raw CSV brandId
+    expect(mockUpdateRun).toHaveBeenCalledWith(
       expect.any(String),
-      expect.any(Array),
+      "completed",
       expect.objectContaining({
         brandId: "brand-aaa,brand-bbb,brand-ccc",
       })

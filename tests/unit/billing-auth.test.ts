@@ -93,6 +93,7 @@ const mockEnrichPerson = vi.fn();
 vi.mock("../../src/lib/apollo-client.js", () => ({
   searchPeople: (...args: unknown[]) => mockSearchPeople(...args),
   enrichPerson: (...args: unknown[]) => mockEnrichPerson(...args),
+  buildWaterfallWebhookUrl: () => undefined,
 }));
 
 const HEADERS = {
@@ -139,65 +140,16 @@ describe("Billing credit authorization", () => {
 
   // ─── POST /search ───────────────────────────────────────────────────────
 
-  it("should return 402 when billing authorization fails for POST /search (platform)", async () => {
-    mockAuthorizeCredit.mockResolvedValueOnce({ sufficient: false, balance_cents: 0, required_cents: 100 });
-
-    const res = await request(app)
-      .post("/search")
-      .set(HEADERS)
-      .send({ personTitles: ["CEO"] })
-      .expect(402);
-
-    expect(res.body.error).toBe("Insufficient credits");
-    expect(res.body.balance_cents).toBe(0);
-    expect(res.body.required_cents).toBe(100);
-    expect(mockSearchPeople).not.toHaveBeenCalled();
-    expect(mockCreateRun).not.toHaveBeenCalled();
-  });
-
-  it("should proceed normally when billing authorization succeeds for POST /search", async () => {
+  it("should NOT call authorizeCredit on POST /search (search is free)", async () => {
     await request(app)
       .post("/search")
       .set(HEADERS)
       .send({ personTitles: ["CEO"] })
       .expect(200);
 
-    expect(mockAuthorizeCredit).toHaveBeenCalledTimes(1);
-    expect(mockSearchPeople).toHaveBeenCalledTimes(1);
-  });
-
-  it("should skip billing authorization for BYOK on POST /search", async () => {
-    mockDecryptKey.mockResolvedValueOnce({ key: "byok-key", keySource: "org" });
-
-    await request(app)
-      .post("/search")
-      .set(HEADERS)
-      .send({ personTitles: ["CEO"] })
-      .expect(200);
-
+    // Search is free — no billing authorization
     expect(mockAuthorizeCredit).not.toHaveBeenCalled();
     expect(mockSearchPeople).toHaveBeenCalledTimes(1);
-  });
-
-  it("should send items with costName and quantity to billing-service on POST /search", async () => {
-    await request(app)
-      .post("/search")
-      .set(HEADERS)
-      .send({ personTitles: ["CEO"] })
-      .expect(200);
-
-    expect(mockAuthorizeCredit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        items: [{ costName: "apollo-search-credit", quantity: 1 }],
-        description: "apollo-search-credit",
-        orgId: "org-123",
-        userId: "user-456",
-        runId: "run-abc",
-        brandId: "brand-1",
-        campaignId: "campaign-1",
-        workflowSlug: "fetch-lead",
-      })
-    );
   });
 
   // ─── POST /enrich ──────────────────────────────────────────────────────
@@ -225,7 +177,7 @@ describe("Billing credit authorization", () => {
 
     expect(mockAuthorizeCredit).toHaveBeenCalledWith(
       expect.objectContaining({
-        items: [{ costName: "apollo-enrichment-credit", quantity: 1 }],
+        items: [{ costName: "apollo-credit", quantity: 1 }],
       })
     );
   });
@@ -285,24 +237,7 @@ describe("Billing credit authorization", () => {
 
   // ─── POST /search/next ─────────────────────────────────────────────────
 
-  it("should return 402 when billing authorization fails for POST /search/next (platform)", async () => {
-    mockAuthorizeCredit.mockResolvedValueOnce({ sufficient: false, balance_cents: 50, required_cents: 100 });
-
-    const res = await request(app)
-      .post("/search/next")
-      .set(HEADERS)
-      .send({ searchParams: { personTitles: ["CEO"] } })
-      .expect(402);
-
-    expect(res.body.error).toBe("Insufficient credits");
-    expect(res.body.balance_cents).toBe(50);
-    expect(res.body.required_cents).toBe(100);
-    expect(mockSearchPeople).not.toHaveBeenCalled();
-  });
-
-  it("should skip billing authorization for BYOK on POST /search/next", async () => {
-    mockDecryptKey.mockResolvedValueOnce({ key: "byok-key", keySource: "org" });
-
+  it("should NOT call authorizeCredit on POST /search/next (search is free)", async () => {
     mockInsertReturning.mockResolvedValueOnce([{ id: "cursor-1" }]);
 
     await request(app)
@@ -313,24 +248,5 @@ describe("Billing credit authorization", () => {
 
     expect(mockAuthorizeCredit).not.toHaveBeenCalled();
     expect(mockSearchPeople).toHaveBeenCalledTimes(1);
-  });
-
-  // ─── Billing service failure ───────────────────────────────────────────
-
-  it("should return 500 when billing-service is unreachable", async () => {
-    mockAuthorizeCredit.mockRejectedValueOnce(new Error("billing-service POST /v1/credits/authorize failed: 503 - Service Unavailable"));
-
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-    const res = await request(app)
-      .post("/search")
-      .set(HEADERS)
-      .send({ personTitles: ["CEO"] })
-      .expect(500);
-
-    expect(res.body.error).toContain("billing-service");
-    expect(mockSearchPeople).not.toHaveBeenCalled();
-
-    errorSpy.mockRestore();
   });
 });

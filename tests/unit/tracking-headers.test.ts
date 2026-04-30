@@ -52,6 +52,7 @@ vi.mock("../../src/lib/apollo-client.js", () => ({
   enrichPerson: vi.fn(),
   matchPersonByName: vi.fn(),
   bulkMatchPeopleByName: vi.fn(),
+  buildWaterfallWebhookUrl: () => undefined,
 }));
 
 // DB mock: capture insert values
@@ -158,19 +159,7 @@ describe("tracking headers forwarding", () => {
       .send({ personTitles: ["CEO"] })
       .expect(200);
 
-    // addCosts receives identity with tracking fields
-    expect(mockAddCosts).toHaveBeenCalledWith(
-      "child-run-1",
-      expect.any(Array),
-      expect.objectContaining({
-        brandId: "brand-abc",
-        campaignId: "campaign-xyz",
-        featureSlug: "lead-gen",
-        workflowSlug: "lead-search-workflow",
-      })
-    );
-
-    // updateRun receives identity with tracking fields
+    // Search is free — no addCosts call. Check updateRun gets identity with tracking fields.
     expect(mockUpdateRun).toHaveBeenCalledWith(
       "child-run-1",
       "completed",

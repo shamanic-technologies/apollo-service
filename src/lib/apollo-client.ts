@@ -1,5 +1,16 @@
 const APOLLO_API_BASE = "https://api.apollo.io/api/v1";
 
+/**
+ * Build the webhook URL for Apollo waterfall enrichment callbacks.
+ * Returns undefined if the required env vars are not set.
+ */
+export function buildWaterfallWebhookUrl(): string | undefined {
+  const publicUrl = process.env.APOLLO_SERVICE_PUBLIC_URL;
+  const secret = process.env.APOLLO_WATERFALL_WEBHOOK_SECRET;
+  if (!publicUrl || !secret) return undefined;
+  return `${publicUrl}/webhook/waterfall?secret=${encodeURIComponent(secret)}`;
+}
+
 export interface ApolloSearchParams {
   person_titles?: string[];
   q_organization_keyword_tags?: string[];
@@ -135,12 +146,21 @@ export interface ApolloSearchResponse {
   };
 }
 
+export interface ApolloWaterfallStatus {
+  status: string;
+  message?: string;
+}
+
 export interface ApolloEnrichResponse {
   person: ApolloPerson;
+  waterfall?: ApolloWaterfallStatus;
+  request_id?: string | number;
 }
 
 export interface ApolloMatchResponse {
   person: ApolloPerson | null;
+  waterfall?: ApolloWaterfallStatus;
+  request_id?: string | number;
 }
 
 export interface BulkMatchInput {
@@ -187,7 +207,8 @@ export async function searchPeople(
  */
 export async function enrichPerson(
   apiKey: string,
-  personId: string
+  personId: string,
+  webhookUrl?: string
 ): Promise<ApolloEnrichResponse> {
   const response = await fetch(`${APOLLO_API_BASE}/people/match`, {
     method: "POST",
@@ -199,6 +220,7 @@ export async function enrichPerson(
       id: personId,
       reveal_personal_emails: false,
       run_waterfall_email: true,
+      ...(webhookUrl && { webhook_url: webhookUrl }),
     }),
   });
 
@@ -218,7 +240,8 @@ export async function matchPersonByName(
   apiKey: string,
   firstName: string,
   lastName: string,
-  domain: string
+  domain: string,
+  webhookUrl?: string
 ): Promise<ApolloMatchResponse> {
   const response = await fetch(`${APOLLO_API_BASE}/people/match`, {
     method: "POST",
@@ -232,6 +255,7 @@ export async function matchPersonByName(
       domain,
       reveal_personal_emails: false,
       run_waterfall_email: true,
+      ...(webhookUrl && { webhook_url: webhookUrl }),
     }),
   });
 
@@ -249,8 +273,9 @@ export async function matchPersonByName(
  */
 export async function bulkMatchPeopleByName(
   apiKey: string,
-  items: BulkMatchInput[]
-): Promise<{ matches: (ApolloPerson | null)[] }> {
+  items: BulkMatchInput[],
+  webhookUrl?: string
+): Promise<{ matches: (ApolloPerson | null)[]; waterfall?: ApolloWaterfallStatus; request_id?: string | number }> {
   const response = await fetch(`${APOLLO_API_BASE}/people/bulk_match`, {
     method: "POST",
     headers: {
@@ -261,6 +286,7 @@ export async function bulkMatchPeopleByName(
       details: items,
       reveal_personal_emails: false,
       run_waterfall_email: true,
+      ...(webhookUrl && { webhook_url: webhookUrl }),
     }),
   });
 
@@ -277,8 +303,9 @@ export async function bulkMatchPeopleByName(
  */
 export async function bulkEnrichPeople(
   apiKey: string,
-  personIds: string[]
-): Promise<{ matches: ApolloPerson[] }> {
+  personIds: string[],
+  webhookUrl?: string
+): Promise<{ matches: ApolloPerson[]; waterfall?: ApolloWaterfallStatus; request_id?: string | number }> {
   const response = await fetch(`${APOLLO_API_BASE}/people/bulk_match`, {
     method: "POST",
     headers: {
@@ -289,6 +316,7 @@ export async function bulkEnrichPeople(
       details: personIds.map((id) => ({ id })),
       reveal_personal_emails: false,
       run_waterfall_email: true,
+      ...(webhookUrl && { webhook_url: webhookUrl }),
     }),
   });
 

@@ -121,6 +121,12 @@ export const apolloPeopleEnrichments = pgTable(
     // Link to runs-service enrichment run for cost tracking
     enrichmentRunId: text("enrichment_run_id"),
 
+    // Waterfall enrichment tracking
+    waterfallRequestId: text("waterfall_request_id"),
+    waterfallStatus: text("waterfall_status"), // "pending" | "completed" | "failed" | null
+    waterfallSource: text("waterfall_source"), // vendor name that found the email
+    keySource: text("key_source"), // "platform" | "org" — needed for deferred cost tracking
+
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
@@ -131,6 +137,7 @@ export const apolloPeopleEnrichments = pgTable(
     index("idx_enrichments_person_id").on(table.apolloPersonId),
     index("idx_enrichments_campaign").on(table.campaignId),
     index("idx_enrichments_feature_slug").on(table.featureSlug),
+    index("idx_enrichments_waterfall_req").on(table.waterfallRequestId),
   ]
 );
 

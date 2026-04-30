@@ -497,7 +497,7 @@ registry.registerPath({
   path: "/match",
   summary: "Match a person by name and organization domain via Apollo",
   description:
-    "Match a single person by firstName + lastName + organizationDomain. Uses 12-month cache. Costs tracked as apollo-person-match-credit (only charged when email is found).",
+    "Match a single person by firstName + lastName + organizationDomain. Uses 12-month cache. Costs tracked as apollo-credit (only charged when email is found).",
   request: {
     headers: runContextHeaders,
     body: {
@@ -561,7 +561,7 @@ registry.registerPath({
   path: "/match/bulk",
   summary: "Bulk match people by name and organization domain via Apollo",
   description:
-    "Match up to 10 people by firstName + lastName + organizationDomain. Each item is cached independently. A single run covers the whole batch; costs tracked per item (apollo-person-match-credit, only when email found).",
+    "Match up to 10 people by firstName + lastName + organizationDomain. Each item is cached independently. A single run covers the whole batch; costs tracked per item (apollo-credit, only when email found).",
   request: {
     headers: runContextHeaders,
     body: {

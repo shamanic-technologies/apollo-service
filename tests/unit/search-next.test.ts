@@ -100,6 +100,7 @@ const mockSearchPeople = vi.fn();
 vi.mock("../../src/lib/apollo-client.js", () => ({
   searchPeople: (...args: unknown[]) => mockSearchPeople(...args),
   enrichPerson: vi.fn().mockResolvedValue({ person: null }),
+  buildWaterfallWebhookUrl: () => undefined,
 }));
 
 function makePeople(ids: string[]) {
@@ -423,9 +424,8 @@ describe("POST /search/next", () => {
     expect(mockCreateRun).toHaveBeenCalledWith(
       expect.objectContaining({ taskName: "people-search-next" })
     );
-    expect(mockAddCosts).toHaveBeenCalledWith("run-1", [
-      { costName: "apollo-search-credit", costSource: "platform", quantity: 1 },
-    ], expect.objectContaining({ orgId: "org_test" }));
+    // Search is free — no addCosts call
+    expect(mockAddCosts).not.toHaveBeenCalled();
     expect(mockUpdateRun).toHaveBeenCalledWith("run-1", "completed", expect.objectContaining({ orgId: "org_test" }));
   });
 
