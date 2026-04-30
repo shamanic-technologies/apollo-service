@@ -14,24 +14,31 @@ const router = Router();
 
 /**
  * Look up a cached enrichment by firstName + lastName + organizationDomain.
- * Case-insensitive. Returns the most recent record within 12 months that has email.
+ * Case-insensitive.
+ * - Positive cache (has email): 12-month TTL
+ * - Negative cache (no email, waterfall not pending): 24h TTL
  */
 async function findCachedMatch(
   firstName: string,
   lastName: string,
   organizationDomain: string
-) {
+): Promise<{ record: typeof apolloPeopleEnrichments.$inferSelect; negative: boolean } | null> {
   const twelveMonthsAgo = new Date();
   twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
 
-  const [cached] = await db
+  const nameFilter = and(
+    sql`LOWER(${apolloPeopleEnrichments.firstName}) = LOWER(${firstName})`,
+    sql`LOWER(${apolloPeopleEnrichments.lastName}) = LOWER(${lastName})`,
+    sql`LOWER(${apolloPeopleEnrichments.organizationDomain}) = LOWER(${organizationDomain})`,
+  );
+
+  // Positive cache: has email, 12-month TTL
+  const [positive] = await db
     .select()
     .from(apolloPeopleEnrichments)
     .where(
       and(
-        sql`LOWER(${apolloPeopleEnrichments.firstName}) = LOWER(${firstName})`,
-        sql`LOWER(${apolloPeopleEnrichments.lastName}) = LOWER(${lastName})`,
-        sql`LOWER(${apolloPeopleEnrichments.organizationDomain}) = LOWER(${organizationDomain})`,
+        nameFilter,
         isNotNull(apolloPeopleEnrichments.email),
         gt(apolloPeopleEnrichments.createdAt, twelveMonthsAgo)
       )
@@ -39,7 +46,39 @@ async function findCachedMatch(
     .orderBy(desc(apolloPeopleEnrichments.createdAt))
     .limit(1);
 
-  return cached ?? null;
+  if (positive) return { record: positive, negative: false };
+
+  // Negative cache: no email available
+  // Case A: not pending + < 24h old → we tried, no email
+  // Case B: pending + > 24h old → webhook never arrived, give up
+  const twentyFourHoursAgo = new Date();
+  twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
+
+  const [negative] = await db
+    .select()
+    .from(apolloPeopleEnrichments)
+    .where(
+      and(
+        nameFilter,
+        sql`${apolloPeopleEnrichments.email} IS NULL`,
+        sql`(
+          (COALESCE(${apolloPeopleEnrichments.waterfallStatus}, '') != 'pending' AND ${apolloPeopleEnrichments.createdAt} > ${twentyFourHoursAgo})
+          OR
+          (${apolloPeopleEnrichments.waterfallStatus} = 'pending' AND ${apolloPeopleEnrichments.createdAt} <= ${twentyFourHoursAgo})
+        )`
+      )
+    )
+    .orderBy(desc(apolloPeopleEnrichments.createdAt))
+    .limit(1);
+
+  if (negative) {
+    if (negative.waterfallStatus === "pending") {
+      console.error(`[Apollo Service] Waterfall TTL expired: enrichment ${negative.id} still pending after 24h (waterfallRequestId=${negative.waterfallRequestId})`);
+    }
+    return { record: negative, negative: true };
+  }
+
+  return null;
 }
 
 /**
@@ -61,9 +100,9 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
     const { firstName, lastName, organizationDomain } = parsed.data;
 
     // Check cache first
-    const cached = await findCachedMatch(firstName, lastName, organizationDomain);
+    const cacheHit = await findCachedMatch(firstName, lastName, organizationDomain);
 
-    if (cached) {
+    if (cacheHit) {
       const cachedRun = await createRun({
         orgId: req.orgId!,
         userId: req.userId,
@@ -78,7 +117,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
       return res.json({
         enrichmentId: null,
-        person: transformCachedEnrichment(cached.apolloPersonId ?? "", cached),
+        person: cacheHit.negative ? null : transformCachedEnrichment(cacheHit.record.apolloPersonId ?? "", cacheHit.record),
         cached: true,
       });
     }
@@ -147,6 +186,21 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
       if (person.email) {
         await addCosts(matchRun.id, [{ costName: "apollo-credit", costSource: keySource, quantity: 1 }], identity);
       }
+    } else {
+      // Store negative cache record so we don't re-query Apollo for 24h
+      await db.insert(apolloPeopleEnrichments).values({
+        orgId: req.orgId!,
+        runId,
+        brandIds,
+        campaignId,
+        featureSlug,
+        workflowSlug,
+        firstName,
+        lastName,
+        organizationDomain,
+        enrichmentRunId: matchRun.id,
+        keySource,
+      });
     }
 
     await updateRun(matchRun.id, "completed", identity);
@@ -192,14 +246,14 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
     });
 
     // Check cache for each item
-    const cacheResults = await Promise.all(
+    const cacheHits = await Promise.all(
       items.map((item) => findCachedMatch(item.firstName, item.lastName, item.organizationDomain))
     );
 
     // Identify cache misses
     const missIndices: number[] = [];
     for (let i = 0; i < items.length; i++) {
-      if (!cacheResults[i]) {
+      if (!cacheHits[i]) {
         missIndices.push(i);
       }
     }
@@ -258,12 +312,12 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
 
     let apolloResultIdx = 0;
     for (let i = 0; i < items.length; i++) {
-      const cachedItem = cacheResults[i];
+      const cacheHit = cacheHits[i];
 
-      if (cachedItem) {
+      if (cacheHit) {
         results.push({
           enrichmentId: null,
-          person: transformCachedEnrichment(cachedItem.apolloPersonId ?? "", cachedItem),
+          person: cacheHit.negative ? null : transformCachedEnrichment(cacheHit.record.apolloPersonId ?? "", cacheHit.record),
           cached: true,
         });
       } else {
@@ -292,6 +346,21 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
           if (person.email) {
             totalCreditsToCharge++;
           }
+        } else {
+          // Store negative cache record so we don't re-query Apollo for 24h
+          await db.insert(apolloPeopleEnrichments).values({
+            orgId: req.orgId!,
+            runId,
+            brandIds,
+            campaignId,
+            featureSlug,
+            workflowSlug,
+            firstName: items[i].firstName,
+            lastName: items[i].lastName,
+            organizationDomain: items[i].organizationDomain,
+            enrichmentRunId: batchRun.id,
+            keySource,
+          });
         }
 
         results.push({
