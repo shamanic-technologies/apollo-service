@@ -1,6 +1,18 @@
 const APOLLO_API_BASE = "https://api.apollo.io/api/v1";
 
 /**
+ * Parse a JSON response body while preserving large integer request_id values.
+ * Apollo returns request_id as a JSON number that exceeds Number.MAX_SAFE_INTEGER,
+ * causing precision loss with standard JSON.parse. This converts the numeric
+ * request_id to a string before parsing.
+ */
+async function parseWithSafeRequestId<T>(response: Response): Promise<T> {
+  const text = await response.text();
+  const safe = text.replace(/"request_id"\s*:\s*(-?\d+)/, '"request_id":"$1"');
+  return JSON.parse(safe) as T;
+}
+
+/**
  * Build the webhook URL for Apollo waterfall enrichment callbacks.
  * Returns undefined if the required env vars are not set.
  */
@@ -229,7 +241,7 @@ export async function enrichPerson(
     throw new Error(`Apollo enrich failed: ${response.status} - ${error}`);
   }
 
-  return response.json();
+  return parseWithSafeRequestId<ApolloEnrichResponse>(response);
 }
 
 /**
@@ -264,7 +276,7 @@ export async function matchPersonByName(
     throw new Error(`Apollo match failed: ${response.status} - ${error}`);
   }
 
-  return response.json();
+  return parseWithSafeRequestId<ApolloMatchResponse>(response);
 }
 
 /**
@@ -295,7 +307,7 @@ export async function bulkMatchPeopleByName(
     throw new Error(`Apollo bulk match failed: ${response.status} - ${error}`);
   }
 
-  return response.json();
+  return parseWithSafeRequestId<{ matches: (ApolloPerson | null)[]; waterfall?: ApolloWaterfallStatus; request_id?: string | number }>(response);
 }
 
 /**
@@ -325,5 +337,5 @@ export async function bulkEnrichPeople(
     throw new Error(`Apollo bulk enrich failed: ${response.status} - ${error}`);
   }
 
-  return response.json();
+  return parseWithSafeRequestId<{ matches: ApolloPerson[]; waterfall?: ApolloWaterfallStatus; request_id?: string | number }>(response);
 }
