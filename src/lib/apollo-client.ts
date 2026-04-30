@@ -1,3 +1,5 @@
+import type { EmailStatus } from "../schemas.js";
+
 const APOLLO_API_BASE = "https://api.apollo.io/api/v1";
 
 /**
@@ -121,7 +123,7 @@ export interface ApolloPerson {
   last_name: string;
   name: string;
   email: string;
-  email_status: string;
+  email_status: EmailStatus | null;
   title: string;
   linkedin_url: string;
   // Profile

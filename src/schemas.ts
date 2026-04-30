@@ -8,6 +8,37 @@ extendZodWithOpenApi(z);
 
 export const registry = new OpenAPIRegistry();
 
+// ─── Email status enum (response values from Apollo) ────────────────────────
+
+export const EMAIL_STATUSES = [
+  "verified",
+  "unavailable",
+  "extrapolated",
+  "unverified",
+  "unknown",
+  "catch_all",
+  "update_required",
+  "user_managed",
+] as const;
+export type EmailStatus = (typeof EMAIL_STATUSES)[number];
+const EmailStatusSchema = z.enum(EMAIL_STATUSES).nullable().openapi({
+  description: [
+    "Email verification status returned by Apollo. Null when no email was found.",
+    "",
+    "| Value | Description |",
+    "| --- | --- |",
+    "| `verified` | Email confirmed deliverable via SMTP check |",
+    "| `unavailable` | Apollo could not find an email for this person |",
+    "| `extrapolated` | Email pattern-matched from known company format (Apollo UI: \"Guessed\") |",
+    "| `unverified` | Email found but not yet verified |",
+    "| `unknown` | Verification attempted but result is inconclusive |",
+    "| `catch_all` | Domain accepts all addresses — deliverability uncertain |",
+    "| `update_required` | Previously verified email that needs re-verification |",
+    "| `user_managed` | Email manually entered or overridden by an Apollo user |",
+    "| `null` | No email data available |",
+  ].join("\n"),
+});
+
 // ─── Shared schemas ──────────────────────────────────────────────────────────
 
 const VALID_EMPLOYEE_RANGES = [
@@ -77,7 +108,7 @@ const PersonSchema = z
     firstName: z.string().nullable(),
     lastName: z.string().nullable(),
     email: z.string().nullable(),
-    emailStatus: z.string().nullable(),
+    emailStatus: EmailStatusSchema,
     title: z.string().nullable(),
     linkedinUrl: z.string().nullable(),
     // Person profile
@@ -641,7 +672,7 @@ const EnrichmentRecordSchema = z
     firstName: z.string().nullable().optional(),
     lastName: z.string().nullable().optional(),
     email: z.string().nullable().optional(),
-    emailStatus: z.string().nullable().optional(),
+    emailStatus: EmailStatusSchema.optional(),
     title: z.string().nullable().optional(),
     linkedinUrl: z.string().nullable().optional(),
     photoUrl: z.string().nullable().optional(),
