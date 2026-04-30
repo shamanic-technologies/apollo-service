@@ -12,10 +12,11 @@ const fetchSpy = vi.fn();
 
 beforeEach(() => {
   fetchSpy.mockReset();
+  const responseBody = JSON.stringify({ person: null, matches: [] });
   fetchSpy.mockResolvedValue({
     ok: true,
-    json: () => Promise.resolve({ person: null, matches: [] }),
-    text: () => Promise.resolve(""),
+    json: () => Promise.resolve(JSON.parse(responseBody)),
+    text: () => Promise.resolve(responseBody),
   });
   vi.stubGlobal("fetch", fetchSpy);
 });
