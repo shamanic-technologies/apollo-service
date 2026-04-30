@@ -6,8 +6,7 @@ import { apolloSearchParamsCache } from "../db/schema.js";
 import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
 import { searchPeople } from "../lib/apollo-client.js";
 import { decryptKey } from "../lib/keys-client.js";
-import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/runs-client.js";
-import { authorizeCredit } from "../lib/billing-client.js";
+import { createRun, updateRun, type IdentityHeaders } from "../lib/runs-client.js";
 import { chatComplete } from "../lib/chat-client.js";
 import { getSystemPrompt, buildUserMessage, SearchAttempt, PromptEnrichment } from "../lib/search-params-prompt.js";
 import { toApolloSearchParams } from "../lib/transform.js";
@@ -101,34 +100,8 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
     const caller = { callerMethod: "POST", callerPath: "/search/params" };
     const { key: apolloApiKey, keySource: apolloKeySource } = await decryptKey(req.orgId!, req.userId!, "apollo", caller, tracking);
 
-    // Authorize credit before executing paid operations (platform keys only)
-    // Estimate: 1 LLM call (~1000 input + ~500 output tokens) + 1 Apollo search (best case).
-    // Actual costs tracked per-iteration via addCosts.
-    // LLM costs are tracked by chat-service — only authorize Apollo search credits here.
-    const authItems: { costName: string; quantity: number }[] = [];
-    if (apolloKeySource === "platform") {
-      authItems.push({ costName: "apollo-search-credit", quantity: 1 });
-    }
-    if (authItems.length > 0) {
-      const auth = await authorizeCredit({
-        items: authItems,
-        description: "apollo-search-params-generation",
-        orgId: req.orgId!,
-        userId: req.userId!,
-        runId,
-        brandId,
-        campaignId,
-        featureSlug,
-        workflowSlug,
-      });
-      if (!auth.sufficient) {
-        return res.status(402).json({
-          error: "Insufficient credits",
-          balance_cents: auth.balance_cents,
-          required_cents: auth.required_cents,
-        });
-      }
-    }
+    // Apollo search is free — no credit authorization needed.
+    // LLM costs are tracked by chat-service.
 
     // Fetch brand fields + campaign context in parallel (Convention 1 & 2)
     const [brandFieldResults, featureInputs] = await Promise.all([
@@ -220,8 +193,6 @@ router.post("/search/params", serviceAuth, async (req: AuthenticatedRequest, res
 
         const result = await searchPeople(apolloApiKey, apolloParams);
         const totalResults = result.total_entries ?? result.pagination?.total_entries ?? 0;
-
-        await addCosts(paramRun.id, [{ costName: "apollo-search-credit", costSource: apolloKeySource, quantity: 1 }], identity);
 
         console.log(`[Apollo Service][POST /search/params] Attempt ${attempt}: ${totalResults} results`, {
           searchParams,

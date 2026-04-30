@@ -9,10 +9,10 @@ import request from "supertest";
  * If createRun, addCosts, or updateRun fail, the request must return 500.
  *
  * These tests verify:
- * - Correct cost names are used (apollo-enrichment-credit, apollo-search-credit)
+ * - Correct cost name is used (apollo-credit for enrichment, search is free)
  * - costSource is included on every cost item
- * - One enrichment cost is posted per person
- * - One search cost is posted per search
+ * - One enrichment cost is posted per person (only when email found)
+ * - No cost is posted for search (Apollo search is free)
  * - Runs-service failures propagate as 500 errors (hard fail, not soft)
  */
 
@@ -221,13 +221,13 @@ describe("Apollo service cost tracking", () => {
 
     // Search should NOT create enrichment costs — only search credit
     const enrichmentCalls = mockAddCosts.mock.calls.filter(([, items]) =>
-      items.some((i: { costName: string }) => i.costName === "apollo-enrichment-credit")
+      items.some((i: { costName: string }) => i.costName === "apollo-credit")
     );
 
     expect(enrichmentCalls).toHaveLength(0);
   });
 
-  it("should post apollo-search-credit cost with costSource once per search", async () => {
+  it("should NOT post any cost from POST /search (search is free)", async () => {
     await request(app)
       .post("/search")
       .set("X-API-Key", "test-service-secret")
@@ -241,37 +241,7 @@ describe("Apollo service cost tracking", () => {
       })
       .expect(200);
 
-    const searchCalls = mockAddCosts.mock.calls.filter(([, items]) =>
-      items.some((i: { costName: string }) => i.costName === "apollo-search-credit")
-    );
-
-    expect(searchCalls).toHaveLength(1);
-    const [, items] = searchCalls[0];
-    const searchItem = items.find((i: { costName: string }) => i.costName === "apollo-search-credit");
-    expect(searchItem.quantity).toBe(1);
-    expect(searchItem.costSource).toBe("platform");
-  });
-
-  it("should only post search credit from POST /search (no enrichment credits)", async () => {
-    await request(app)
-      .post("/search")
-      .set("X-API-Key", "test-service-secret")
-      .set("X-Org-Id", "org_test")
-      .set("X-User-Id", "user_test")
-      .set("X-Run-Id", "campaign-run-abc")
-      .set("X-Brand-Id", "brand-1")
-      .set("X-Campaign-Id", "campaign-1")
-      .send({
-        personTitles: ["CEO"],
-      })
-      .expect(200);
-
-    const allCostNames = mockAddCosts.mock.calls
-      .flatMap(([, items]) => items.map((i: { costName: string }) => i.costName));
-
-    // Search endpoint should only track search credits
-    const uniqueNames = [...new Set(allCostNames)];
-    expect(uniqueNames).toEqual(["apollo-search-credit"]);
+    expect(mockAddCosts).not.toHaveBeenCalled();
   });
 
   // ─── Hard failure on runs-service errors (POST /search) ──────────────────────
@@ -302,12 +272,10 @@ describe("Apollo service cost tracking", () => {
     errorSpy.mockRestore();
   });
 
-  it("should return 500 when addCosts fails for search credit", async () => {
+  it("search should succeed even when addCosts would fail (search is free, no addCosts call)", async () => {
     mockAddCosts.mockRejectedValue(new Error("Cost name not registered"));
 
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-    const res = await request(app)
+    await request(app)
       .post("/search")
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
@@ -318,11 +286,9 @@ describe("Apollo service cost tracking", () => {
       .send({
         personTitles: ["CEO"],
       })
-      .expect(500);
+      .expect(200);
 
-    expect(res.body.error).toContain("Cost name not registered");
-
-    errorSpy.mockRestore();
+    expect(mockAddCosts).not.toHaveBeenCalled();
   });
 
   it("should return 500 when updateRun fails", async () => {
@@ -404,11 +370,11 @@ describe("Apollo service cost tracking", () => {
       .expect(200);
 
     const enrichmentCalls = mockAddCosts.mock.calls.filter(([, items]) =>
-      items.some((i: { costName: string }) => i.costName === "apollo-enrichment-credit")
+      items.some((i: { costName: string }) => i.costName === "apollo-credit")
     );
     expect(enrichmentCalls).toHaveLength(1);
     expect(enrichmentCalls[0][1][0]).toEqual({
-      costName: "apollo-enrichment-credit",
+      costName: "apollo-credit",
       costSource: "platform",
       quantity: 1,
     });

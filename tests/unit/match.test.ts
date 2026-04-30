@@ -196,17 +196,17 @@ describe("POST /match", () => {
 
   // ─── Cost tracking ───────────────────────────────────────────────────────
 
-  it("should charge apollo-person-match-credit with costSource when email is found", async () => {
+  it("should charge apollo-credit with costSource when email is found", async () => {
     await setBaseHeaders(request(app).post("/match"))
       .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" })
       .expect(200);
 
     const matchCalls = mockAddCosts.mock.calls.filter(([, items]) =>
-      items.some((i: { costName: string }) => i.costName === "apollo-person-match-credit")
+      items.some((i: { costName: string }) => i.costName === "apollo-credit")
     );
     expect(matchCalls).toHaveLength(1);
     expect(matchCalls[0][1][0]).toEqual({
-      costName: "apollo-person-match-credit",
+      costName: "apollo-credit",
       costSource: "platform",
       quantity: 1,
     });
@@ -405,7 +405,7 @@ describe("POST /match/bulk", () => {
 
     expect(mockAddCosts).toHaveBeenCalledTimes(1);
     expect(mockAddCosts).toHaveBeenCalledWith("run-1", [
-      { costName: "apollo-person-match-credit", costSource: "platform", quantity: 2 },
+      { costName: "apollo-credit", costSource: "platform", quantity: 2 },
     ], expect.objectContaining({ orgId: "org_test" }));
   });
 
