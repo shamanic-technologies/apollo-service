@@ -85,6 +85,7 @@ router.post("/webhook/waterfall", async (req: Request, res: Response) => {
     );
 
     let updated = 0;
+    const creditsConsumed = payload.credits_consumed ?? 0;
 
     for (const person of payload.people) {
       const enrichment = enrichmentByPersonId.get(person.id);
@@ -118,8 +119,8 @@ router.post("/webhook/waterfall", async (req: Request, res: Response) => {
         })
         .where(eq(apolloPeopleEnrichments.id, enrichment.id));
 
-      // Track waterfall cost in runs-service
-      if (enrichment.enrichmentRunId) {
+      // Track waterfall cost in runs-service using real credits from Apollo response
+      if (enrichment.enrichmentRunId && creditsConsumed > 0) {
         const identity: IdentityHeaders = {
           orgId: enrichment.orgId,
           brandId: enrichment.brandIds.join(","),
@@ -142,7 +143,7 @@ router.post("/webhook/waterfall", async (req: Request, res: Response) => {
 
           await addCosts(
             waterfallRun.id,
-            [{ costName: "apollo-waterfall-email-credit", costSource, quantity: 1 }],
+            [{ costName: "apollo-credit", costSource, quantity: creditsConsumed }],
             identity
           );
           await updateRun(waterfallRun.id, "completed", identity);

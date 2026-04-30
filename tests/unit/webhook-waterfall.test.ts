@@ -184,7 +184,7 @@ describe("POST /webhook/waterfall", () => {
     // Should track waterfall cost
     expect(mockAddCosts).toHaveBeenCalledWith(
       "waterfall-run-1",
-      [{ costName: "apollo-waterfall-email-credit", costSource: "platform", quantity: 1 }],
+      [{ costName: "apollo-credit", costSource: "platform", quantity: 1 }],
       expect.objectContaining({ orgId: "org-123" })
     );
 
@@ -258,7 +258,7 @@ describe("POST /webhook/waterfall", () => {
 
     expect(mockAddCosts).toHaveBeenCalledWith(
       expect.any(String),
-      [{ costName: "apollo-waterfall-email-credit", costSource: "org", quantity: 1 }],
+      [{ costName: "apollo-credit", costSource: "org", quantity: 1 }],
       expect.any(Object)
     );
   });

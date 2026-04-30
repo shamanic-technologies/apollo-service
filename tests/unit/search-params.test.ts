@@ -298,10 +298,8 @@ describe("POST /search/params", () => {
 
     const expectedIdentity = expect.objectContaining({ orgId: "org_test" });
 
-    // Apollo search credit only — LLM costs are tracked by chat-service
-    expect(mockAddCosts).toHaveBeenCalledWith("run-1", [
-      { costName: "apollo-search-credit", costSource: "platform", quantity: 1 },
-    ], expectedIdentity);
+    // Search is free — no addCosts call expected. LLM costs tracked by chat-service.
+    expect(mockAddCosts).not.toHaveBeenCalled();
 
     // Run completed
     expect(mockUpdateRun).toHaveBeenCalledWith("run-1", "completed", expectedIdentity);
@@ -347,7 +345,7 @@ describe("POST /search/params", () => {
     );
   });
 
-  it("uses Apollo key costSource for search credit tracking", async () => {
+  it("does not track search costs (search is free)", async () => {
     mockDecryptKey.mockResolvedValue({ key: "apollo-key", keySource: "org" });
 
     mockChatComplete.mockResolvedValue({
@@ -368,12 +366,7 @@ describe("POST /search/params", () => {
       .send(BASE_BODY)
       .expect(200);
 
-    const expectedIdentity = expect.objectContaining({ orgId: "org_test" });
-
-    // Apollo costs should use "org" costSource from decryptKey
-    expect(mockAddCosts).toHaveBeenCalledWith("run-1", [
-      { costName: "apollo-search-credit", costSource: "org", quantity: 1 },
-    ], expectedIdentity);
+    expect(mockAddCosts).not.toHaveBeenCalled();
   });
 
   // ─── Request validation ──────────────────────────────────────────────────
