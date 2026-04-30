@@ -3,6 +3,7 @@ import { eq, and, isNull } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloPeopleEnrichments } from "../db/schema.js";
 import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/runs-client.js";
+import type { EmailStatus } from "../schemas.js";
 import { traceEvent } from "../lib/trace-event.js";
 
 const router = Router();
@@ -21,7 +22,7 @@ interface WaterfallPersonPayload {
   waterfall?: {
     emails?: Array<{ vendors: WaterfallVendor[] }>;
   };
-  emails?: Array<{ email: string; email_status?: string }>;
+  emails?: Array<{ email: string; email_status?: EmailStatus }>;
 }
 
 interface WaterfallWebhookPayload {
