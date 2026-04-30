@@ -4,6 +4,7 @@ import { db } from "../db/index.js";
 import { apolloPeopleEnrichments } from "../db/schema.js";
 import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/runs-client.js";
 import type { EmailStatus } from "../schemas.js";
+import { traceEvent } from "../lib/trace-event.js";
 
 const router = Router();
 
@@ -76,6 +77,17 @@ router.post("/webhook/waterfall", async (req: Request, res: Response) => {
     if (pendingEnrichments.length === 0) {
       console.warn("[Apollo Service][webhook/waterfall] No pending enrichments for request_id", requestId);
       return res.status(200).json({ received: true, updated: 0 });
+    }
+
+    // Fire-and-forget trace using the first enrichment's run context
+    const firstEnrichment = pendingEnrichments[0];
+    const webhookTraceHeaders: Record<string, string | undefined> = {
+      "x-org-id": firstEnrichment.orgId,
+      "x-brand-id": firstEnrichment.brandIds?.join(","),
+      "x-campaign-id": firstEnrichment.campaignId ?? undefined,
+    };
+    if (firstEnrichment.enrichmentRunId) {
+      traceEvent(firstEnrichment.enrichmentRunId, { service: "apollo-service", event: "waterfall-webhook-received", detail: `requestId=${requestId}, peopleCount=${payload.people.length}, creditsConsumed=${payload.credits_consumed}`, data: { requestId, peopleCount: payload.people.length, creditsConsumed: payload.credits_consumed } }, webhookTraceHeaders).catch(() => {});
     }
 
     // Index pending enrichments by Apollo person ID for fast lookup
@@ -157,6 +169,10 @@ router.post("/webhook/waterfall", async (req: Request, res: Response) => {
     }
 
     console.log("[Apollo Service][webhook/waterfall] Processed", { requestId, updated, total: payload.people.length });
+
+    if (firstEnrichment.enrichmentRunId) {
+      traceEvent(firstEnrichment.enrichmentRunId, { service: "apollo-service", event: "waterfall-webhook-done", detail: `requestId=${requestId}, updated=${updated}/${payload.people.length}`, data: { requestId, updated, total: payload.people.length } }, webhookTraceHeaders).catch(() => {});
+    }
 
     res.status(200).json({ received: true, updated });
   } catch (error) {

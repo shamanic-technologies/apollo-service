@@ -9,6 +9,7 @@ import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/run
 import { authorizeCredit } from "../lib/billing-client.js";
 import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment } from "../lib/transform.js";
 import { MatchRequestSchema, MatchBulkRequestSchema } from "../schemas.js";
+import { traceEvent } from "../lib/trace-event.js";
 
 const router = Router();
 
@@ -100,10 +101,13 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
     }
     const { firstName, lastName, organizationDomain } = parsed.data;
 
+    traceEvent(runId, { service: "apollo-service", event: "match-start", detail: `name=${firstName} ${lastName}, domain=${organizationDomain}` }, req.headers).catch(() => {});
+
     // Check cache first
     const cacheHit = await findCachedMatch(firstName, lastName, organizationDomain);
 
     if (cacheHit) {
+      traceEvent(runId, { service: "apollo-service", event: "match-cache-hit", detail: `negative=${cacheHit.negative}` }, req.headers).catch(() => {});
       const cachedRun = await createRun({
         orgId: req.orgId!,
         userId: req.userId,
@@ -208,9 +212,14 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
     const transformed = person ? transformApolloPerson(person) : null;
 
+    traceEvent(runId, { service: "apollo-service", event: "match-done", detail: `enrichmentId=${enrichmentId}, hasEmail=${!!person?.email}, waterfallAccepted=${waterfallAccepted}`, data: { enrichmentId, hasEmail: !!person?.email } }, req.headers).catch(() => {});
+
     res.json({ enrichmentId, person: transformed, cached: false });
   } catch (error) {
     console.error("[Apollo Service][POST /match] ERROR:", error);
+    if (req.runId) {
+      traceEvent(req.runId, { service: "apollo-service", event: "match-error", detail: error instanceof Error ? error.message : "Unknown error", level: "error" }, req.headers).catch(() => {});
+    }
     res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
   }
 });
@@ -233,6 +242,8 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
       return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
     }
     const { items } = parsed.data;
+
+    traceEvent(runId, { service: "apollo-service", event: "match-bulk-start", detail: `itemCount=${items.length}, campaignId=${campaignId}`, data: { itemCount: items.length } }, req.headers).catch(() => {});
 
     const batchRun = await createRun({
       orgId: req.orgId!,
@@ -378,9 +389,14 @@ router.post("/match/bulk", serviceAuth, async (req: AuthenticatedRequest, res) =
 
     await updateRun(batchRun.id, "completed", identity);
 
+    traceEvent(runId, { service: "apollo-service", event: "match-bulk-done", detail: `total=${items.length}, cacheHits=${items.length - missIndices.length}, misses=${missIndices.length}, creditsCharged=${totalCreditsToCharge}`, data: { total: items.length, cacheHits: items.length - missIndices.length, creditsCharged: totalCreditsToCharge } }, req.headers).catch(() => {});
+
     res.json({ results });
   } catch (error) {
     console.error("[Apollo Service][POST /match/bulk] ERROR:", error);
+    if (req.runId) {
+      traceEvent(req.runId, { service: "apollo-service", event: "match-bulk-error", detail: error instanceof Error ? error.message : "Unknown error", level: "error" }, req.headers).catch(() => {});
+    }
     res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
   }
 });
