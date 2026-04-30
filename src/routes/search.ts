@@ -10,6 +10,7 @@ import { authorizeCredit } from "../lib/billing-client.js";
 import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment, toApolloSearchParams } from "../lib/transform.js";
 import { SearchRequestSchema, SearchNextRequestSchema, EnrichRequestSchema, StatsRequestSchema } from "../schemas.js";
 import { deepEqual } from "../lib/deep-equal.js";
+import { traceEvent } from "../lib/trace-event.js";
 import {
   resolveWorkflowDynastySlugs,
   resolveFeatureDynastySlugs,
@@ -37,6 +38,8 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
       return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
     }
     const searchParams = parsed.data;
+
+    traceEvent(runId, { service: "apollo-service", event: "search-start", detail: `page=${searchParams.page ?? 1}, perPage=${searchParams.perPage ?? 25}, campaignId=${campaignId}` }, req.headers).catch(() => {});
 
     // Get Apollo API key from key-service
     const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/search" }, tracking);
@@ -154,6 +157,8 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
       return transformed;
     });
 
+    traceEvent(runId, { service: "apollo-service", event: "search-done", detail: `peopleCount=${result.people.length}, totalEntries=${totalEntries}, searchId=${search.id}`, data: { searchId: search.id, peopleCount: result.people.length, totalEntries } }, req.headers).catch(() => {});
+
     res.json({
       searchId: search.id,
       peopleCount: result.people.length,
@@ -168,6 +173,9 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
     });
   } catch (error) {
     console.error("[Apollo Service][POST /search] ERROR:", error);
+    if (req.runId) {
+      traceEvent(req.runId, { service: "apollo-service", event: "search-error", detail: error instanceof Error ? error.message : "Unknown error", level: "error" }, req.headers).catch(() => {});
+    }
     res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
   }
 });
@@ -190,6 +198,8 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
     }
     const { apolloPersonId } = parsed.data;
 
+    traceEvent(runId, { service: "apollo-service", event: "enrich-start", detail: `apolloPersonId=${apolloPersonId}` }, req.headers).catch(() => {});
+
     // Check cache: existing enrichment for this personId within 12 months
     const twelveMonthsAgo = new Date();
     twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
@@ -208,6 +218,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       .limit(1);
 
     if (cached) {
+      traceEvent(runId, { service: "apollo-service", event: "enrich-cache-hit", detail: `apolloPersonId=${apolloPersonId}` }, req.headers).catch(() => {});
       // Create a run for traceability but no costs (cache hit)
       const cachedRun = await createRun({
         orgId: req.orgId!,
@@ -296,9 +307,14 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
     const transformed = person ? transformApolloPerson(person) : null;
 
+    traceEvent(runId, { service: "apollo-service", event: "enrich-done", detail: `enrichmentId=${enrichmentId}, hasEmail=${!!person?.email}, waterfallAccepted=${waterfallAccepted}`, data: { enrichmentId, hasEmail: !!person?.email } }, req.headers).catch(() => {});
+
     res.json({ enrichmentId, person: transformed });
   } catch (error) {
     console.error("[Apollo Service][POST /enrich] ERROR:", error);
+    if (req.runId) {
+      traceEvent(req.runId, { service: "apollo-service", event: "enrich-error", detail: error instanceof Error ? error.message : "Unknown error", level: "error" }, req.headers).catch(() => {});
+    }
     res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
   }
 });
@@ -322,6 +338,8 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
       return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
     }
     const { searchParams } = parsed.data;
+
+    traceEvent(runId, { service: "apollo-service", event: "search-next-start", detail: `campaignId=${campaignId}, hasSearchParams=${!!searchParams}` }, req.headers).catch(() => {});
 
     // Get Apollo API key
     const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/search/next" }, tracking);
@@ -470,6 +488,8 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
       transformApolloPerson(person)
     );
 
+    traceEvent(runId, { service: "apollo-service", event: "search-next-done", detail: `page=${currentPage}, peopleCount=${people.length}, done=${done}, totalEntries=${totalEntries}`, data: { page: currentPage, peopleCount: people.length, done, totalEntries } }, req.headers).catch(() => {});
+
     res.json({
       people: transformedPeople,
       done,
@@ -477,6 +497,9 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     });
   } catch (error) {
     console.error("[Apollo Service][POST /search/next] ERROR:", error);
+    if (req.runId) {
+      traceEvent(req.runId, { service: "apollo-service", event: "search-next-error", detail: error instanceof Error ? error.message : "Unknown error", level: "error" }, req.headers).catch(() => {});
+    }
     res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
   }
 });
