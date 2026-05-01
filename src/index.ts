@@ -25,7 +25,12 @@ const PORT = process.env.PORT || 3004;
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({
+  verify: (req, _res, buf) => {
+    // Preserve raw body for webhook request_id precision handling
+    (req as any).rawBody = buf.toString();
+  },
+}));
 
 // OpenAPI spec endpoint
 app.get("/openapi.json", (_req, res) => {

@@ -1,5 +1,5 @@
 import { Router, Request, Response } from "express";
-import { eq, and, isNull } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloPeopleEnrichments } from "../db/schema.js";
 import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/runs-client.js";
@@ -37,6 +37,21 @@ interface WaterfallWebhookPayload {
 }
 
 /**
+ * Parse the webhook body with safe request_id handling.
+ * Apollo sends request_id as a large integer that exceeds Number.MAX_SAFE_INTEGER.
+ * Express's JSON parser (JSON.parse) loses precision on these values.
+ * We re-parse from the raw body to preserve the exact digits.
+ */
+function safeRequestId(req: Request): string {
+  const rawBody = (req as any).rawBody as string | undefined;
+  if (rawBody) {
+    const match = rawBody.match(/"request_id"\s*:\s*(-?\d+)/);
+    if (match) return match[1];
+  }
+  return String(req.body?.request_id ?? "");
+}
+
+/**
  * POST /webhook/waterfall - Apollo waterfall enrichment callback
  * Public endpoint authenticated via secret query param.
  */
@@ -48,18 +63,20 @@ router.post("/webhook/waterfall", async (req: Request, res: Response) => {
     }
 
     const payload = req.body as WaterfallWebhookPayload;
-    const requestId = String(payload.request_id);
+    const requestId = safeRequestId(req);
 
     if (!requestId || !payload.people?.length) {
       console.warn("[Apollo Service][webhook/waterfall] Empty payload or missing request_id", { requestId });
       return res.status(200).json({ received: true, updated: 0 });
     }
 
+    const creditsConsumed = payload.credits_consumed ?? 0;
+
     console.log("[Apollo Service][webhook/waterfall] Received", {
       requestId,
       status: payload.status,
       peopleCount: payload.people.length,
-      creditsConsumed: payload.credits_consumed,
+      creditsConsumed,
       emailRecordsEnriched: payload.email_records_enriched,
     });
 
@@ -87,7 +104,7 @@ router.post("/webhook/waterfall", async (req: Request, res: Response) => {
       "x-campaign-id": firstEnrichment.campaignId ?? undefined,
     };
     if (firstEnrichment.enrichmentRunId) {
-      traceEvent(firstEnrichment.enrichmentRunId, { service: "apollo-service", event: "waterfall-webhook-received", detail: `requestId=${requestId}, peopleCount=${payload.people.length}, creditsConsumed=${payload.credits_consumed}`, data: { requestId, peopleCount: payload.people.length, creditsConsumed: payload.credits_consumed } }, webhookTraceHeaders).catch(() => {});
+      traceEvent(firstEnrichment.enrichmentRunId, { service: "apollo-service", event: "waterfall-webhook-received", detail: `requestId=${requestId}, peopleCount=${payload.people.length}, creditsConsumed=${creditsConsumed}`, data: { requestId, peopleCount: payload.people.length, creditsConsumed } }, webhookTraceHeaders).catch(() => {});
     }
 
     // Index pending enrichments by Apollo person ID for fast lookup
@@ -97,8 +114,8 @@ router.post("/webhook/waterfall", async (req: Request, res: Response) => {
         .map((e) => [e.apolloPersonId!, e])
     );
 
+    // Process each person: update DB records
     let updated = 0;
-    const creditsConsumed = payload.credits_consumed ?? 0;
 
     for (const person of payload.people) {
       const enrichment = enrichmentByPersonId.get(person.id);
@@ -132,46 +149,45 @@ router.post("/webhook/waterfall", async (req: Request, res: Response) => {
         })
         .where(eq(apolloPeopleEnrichments.id, enrichment.id));
 
-      // Track waterfall cost in runs-service using real credits from Apollo response
-      if (enrichment.enrichmentRunId && creditsConsumed > 0) {
-        const identity: IdentityHeaders = {
-          orgId: enrichment.orgId,
-          brandId: enrichment.brandIds.join(","),
-          campaignId: enrichment.campaignId,
-        };
-
-        const costSource = (enrichment.keySource as "platform" | "org") ?? "platform";
-
-        try {
-          const waterfallRun = await createRun({
-            orgId: enrichment.orgId,
-            brandId: enrichment.brandIds.join(","),
-            campaignId: enrichment.campaignId,
-            featureSlug: enrichment.featureSlug ?? undefined,
-            serviceName: "apollo-service",
-            taskName: "waterfall-enrichment",
-            parentRunId: enrichment.enrichmentRunId,
-            workflowSlug: enrichment.workflowSlug ?? undefined,
-          });
-
-          await addCosts(
-            waterfallRun.id,
-            [{ costName: "apollo-credit", costSource, quantity: creditsConsumed }],
-            identity
-          );
-          await updateRun(waterfallRun.id, "completed", identity);
-        } catch (err) {
-          console.error("[Apollo Service][webhook/waterfall] Failed to track cost for enrichment", enrichment.id, err);
-        }
-      }
-
       updated++;
     }
 
-    console.log("[Apollo Service][webhook/waterfall] Processed", { requestId, updated, total: payload.people.length });
+    // Track waterfall cost ONCE for the entire batch (not per person)
+    if (creditsConsumed > 0 && firstEnrichment.enrichmentRunId) {
+      const identity: IdentityHeaders = {
+        orgId: firstEnrichment.orgId,
+        brandId: firstEnrichment.brandIds.join(","),
+        campaignId: firstEnrichment.campaignId,
+      };
+      const costSource = (firstEnrichment.keySource as "platform" | "org") ?? "platform";
+
+      try {
+        const waterfallRun = await createRun({
+          orgId: firstEnrichment.orgId,
+          brandId: firstEnrichment.brandIds.join(","),
+          campaignId: firstEnrichment.campaignId,
+          featureSlug: firstEnrichment.featureSlug ?? undefined,
+          serviceName: "apollo-service",
+          taskName: "waterfall-enrichment",
+          parentRunId: firstEnrichment.enrichmentRunId,
+          workflowSlug: firstEnrichment.workflowSlug ?? undefined,
+        });
+
+        await addCosts(
+          waterfallRun.id,
+          [{ costName: "apollo-credit", costSource, quantity: creditsConsumed }],
+          identity
+        );
+        await updateRun(waterfallRun.id, "completed", identity);
+      } catch (err) {
+        console.error("[Apollo Service][webhook/waterfall] Failed to track waterfall cost", err);
+      }
+    }
+
+    console.log("[Apollo Service][webhook/waterfall] Processed", { requestId, updated, total: payload.people.length, creditsConsumed });
 
     if (firstEnrichment.enrichmentRunId) {
-      traceEvent(firstEnrichment.enrichmentRunId, { service: "apollo-service", event: "waterfall-webhook-done", detail: `requestId=${requestId}, updated=${updated}/${payload.people.length}`, data: { requestId, updated, total: payload.people.length } }, webhookTraceHeaders).catch(() => {});
+      traceEvent(firstEnrichment.enrichmentRunId, { service: "apollo-service", event: "waterfall-webhook-done", detail: `requestId=${requestId}, updated=${updated}/${payload.people.length}, creditsConsumed=${creditsConsumed}`, data: { requestId, updated, total: payload.people.length, creditsConsumed } }, webhookTraceHeaders).catch(() => {});
     }
 
     res.status(200).json({ received: true, updated });
