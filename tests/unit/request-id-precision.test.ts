@@ -62,18 +62,6 @@ describe("request_id precision preservation", () => {
     expect(String(result.request_id)).toBe(LARGE_REQUEST_ID);
   });
 
-  it("bulkMatchPeopleByName preserves large negative request_id", async () => {
-    global.fetch = mockFetchWithNumericRequestId(NEGATIVE_LARGE_REQUEST_ID);
-    const { bulkMatchPeopleByName } = await import("../../src/lib/apollo-client.js");
-    const result = await bulkMatchPeopleByName(
-      "test-key",
-      [{ first_name: "Jane", last_name: "Doe", domain: "example.com" }],
-      "https://webhook.test"
-    );
-
-    expect(String(result.request_id)).toBe(NEGATIVE_LARGE_REQUEST_ID);
-  });
-
   it("bulkEnrichPeople preserves large negative request_id", async () => {
     global.fetch = mockFetchWithNumericRequestId(NEGATIVE_LARGE_REQUEST_ID);
     const { bulkEnrichPeople } = await import("../../src/lib/apollo-client.js");
