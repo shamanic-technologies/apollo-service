@@ -10,6 +10,7 @@ import { authorizeCredit } from "../lib/billing-client.js";
 import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment } from "../lib/transform.js";
 import { MatchRequestSchema } from "../schemas.js";
 import { traceEvent } from "../lib/trace-event.js";
+import { assertKeySource } from "../lib/validators.js";
 
 const router = Router();
 
@@ -122,15 +123,6 @@ async function pollForWaterfallEmail(
   }
 
   return null;
-}
-
-/**
- * Guard: every INSERT into apolloPeopleEnrichments MUST have a non-null keySource.
- */
-function assertKeySource(keySource: unknown): asserts keySource is "org" | "platform" {
-  if (!keySource) {
-    throw new Error("[Apollo Service] keySource is required for all enrichment inserts — got: " + keySource);
-  }
 }
 
 /**
