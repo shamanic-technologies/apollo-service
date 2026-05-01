@@ -552,69 +552,6 @@ registry.registerPath({
   },
 });
 
-// ─── POST /match/bulk ───────────────────────────────────────────────────────
-
-const MatchBulkItemSchema = z
-  .object({
-    firstName: z.string().min(1),
-    lastName: z.string().min(1),
-    organizationDomain: z.string().min(1),
-  })
-  .openapi("MatchBulkItem");
-
-export const MatchBulkRequestSchema = z
-  .object({
-    items: z
-      .array(MatchBulkItemSchema)
-      .min(1, "At least one item required")
-      .max(10, "Maximum 10 items per request"),
-  })
-  .openapi("MatchBulkRequest");
-
-const MatchBulkResultSchema = z
-  .object({
-    enrichmentId: z.string().nullable(),
-    person: PersonSchema.nullable(),
-    cached: z.boolean(),
-  })
-  .openapi("MatchBulkResult");
-
-const MatchBulkResponseSchema = z
-  .object({
-    results: z.array(MatchBulkResultSchema).openapi({
-      description: "Results in the same order as the input items array.",
-    }),
-  })
-  .openapi("MatchBulkResponse");
-
-registry.registerPath({
-  method: "post",
-  path: "/match/bulk",
-  summary: "Bulk match people by name and organization domain via Apollo",
-  description:
-    "Match up to 10 people by firstName + lastName + organizationDomain. Each item is cached independently. A single run covers the whole batch; costs tracked per item (apollo-credit, only when email found).",
-  request: {
-    headers: runContextHeaders,
-    body: {
-      content: { "application/json": { schema: MatchBulkRequestSchema } },
-      required: true,
-    },
-  },
-  responses: {
-    200: {
-      description: "Bulk match results",
-      content: { "application/json": { schema: MatchBulkResponseSchema } },
-    },
-    400: {
-      description: "Validation error",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-    500: {
-      description: "Internal server error",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-  },
-});
 
 // ─── GET /searches/:runId ────────────────────────────────────────────────────
 

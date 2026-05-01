@@ -177,11 +177,6 @@ export interface ApolloMatchResponse {
   request_id?: string | number;
 }
 
-export interface BulkMatchInput {
-  first_name: string;
-  last_name: string;
-  domain: string;
-}
 
 /**
  * Search for people using Apollo API
@@ -281,36 +276,6 @@ export async function matchPersonByName(
   return parseWithSafeRequestId<ApolloMatchResponse>(response);
 }
 
-/**
- * Bulk match people by name + domain using Apollo's bulk_match endpoint.
- * Max 10 items per call (Apollo limit).
- */
-export async function bulkMatchPeopleByName(
-  apiKey: string,
-  items: BulkMatchInput[],
-  webhookUrl?: string
-): Promise<{ matches: (ApolloPerson | null)[]; waterfall?: ApolloWaterfallStatus; request_id?: string | number }> {
-  const response = await fetch(`${APOLLO_API_BASE}/people/bulk_match`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Api-Key": apiKey,
-    },
-    body: JSON.stringify({
-      details: items,
-      reveal_personal_emails: false,
-      run_waterfall_email: true,
-      ...(webhookUrl && { webhook_url: webhookUrl }),
-    }),
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Apollo bulk match failed: ${response.status} - ${error}`);
-  }
-
-  return parseWithSafeRequestId<{ matches: (ApolloPerson | null)[]; waterfall?: ApolloWaterfallStatus; request_id?: string | number }>(response);
-}
 
 /**
  * Bulk enrich people using Apollo API

@@ -3,7 +3,7 @@ import express from "express";
 import request from "supertest";
 
 /**
- * Tests for negative email cache on /match and /match/bulk.
+ * Tests for negative email cache on /match.
  *
  * findCachedMatch makes two sequential db.select() calls:
  *   1. Positive cache (has email, 12-month TTL)
@@ -52,6 +52,7 @@ vi.mock("../../src/db/index.js", () => ({
           orderBy: vi.fn().mockReturnValue({
             limit: (...args: unknown[]) => mockSelectLimit(...args),
           }),
+          limit: (...args: unknown[]) => mockSelectLimit(...args),
         }),
       }),
     }),
@@ -67,6 +68,7 @@ vi.mock("../../src/db/schema.js", () => ({
     email: { name: "email" },
     emailStatus: { name: "email_status" },
     waterfallStatus: { name: "waterfall_status" },
+    waterfallRequestId: { name: "waterfall_request_id" },
     createdAt: { name: "created_at" },
     apolloPersonId: { name: "apollo_person_id" },
   },
@@ -105,11 +107,9 @@ const MOCK_PERSON = {
 };
 
 const mockMatchPersonByName = vi.fn().mockResolvedValue({ person: MOCK_PERSON });
-const mockBulkMatchPeopleByName = vi.fn().mockResolvedValue({ matches: [MOCK_PERSON] });
 
 vi.mock("../../src/lib/apollo-client.js", () => ({
   matchPersonByName: (...args: unknown[]) => mockMatchPersonByName(...args),
-  bulkMatchPeopleByName: (...args: unknown[]) => mockBulkMatchPeopleByName(...args),
   buildWaterfallWebhookUrl: () => undefined,
 }));
 
@@ -140,6 +140,7 @@ const NEGATIVE_CACHE_RECORD = {
   organizationName: null,
   organizationDomain: "acme.com",
   waterfallStatus: null,
+  waterfallRequestId: null,
   createdAt: new Date(), // < 24h ago
 };
 
@@ -155,6 +156,7 @@ const POSITIVE_CACHE_RECORD = {
   organizationName: "Acme Inc",
   organizationDomain: "acme.com",
   waterfallStatus: null,
+  waterfallRequestId: null,
   createdAt: new Date(),
 };
 
@@ -201,7 +203,7 @@ describe("POST /match — negative cache", () => {
   });
 
   it("should call Apollo when negative cache expired (> 24h)", async () => {
-    // Both queries return empty → cache miss
+    // Both queries return empty -> cache miss
     mockSelectLimit.mockResolvedValueOnce([]);
     mockSelectLimit.mockResolvedValueOnce([]);
 
@@ -214,7 +216,7 @@ describe("POST /match — negative cache", () => {
   });
 
   it("should return positive cache even when negative cache also exists", async () => {
-    // Query 1 (positive): hit → returns early, query 2 never called
+    // Query 1 (positive): hit -> returns early, query 2 never called
     mockSelectLimit.mockResolvedValueOnce([POSITIVE_CACHE_RECORD]);
 
     const res = await setBaseHeaders(request(app).post("/match"))
@@ -225,19 +227,6 @@ describe("POST /match — negative cache", () => {
     expect(res.body.person).not.toBeNull();
     expect(res.body.person.email).toBe("john@acme.com");
     expect(mockMatchPersonByName).not.toHaveBeenCalled();
-  });
-
-  it("should call Apollo when waterfall is pending and < 24h (still waiting for webhook)", async () => {
-    // Both queries return empty (pending records are excluded from negative cache < 24h)
-    mockSelectLimit.mockResolvedValueOnce([]);
-    mockSelectLimit.mockResolvedValueOnce([]);
-
-    const res = await setBaseHeaders(request(app).post("/match"))
-      .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" })
-      .expect(200);
-
-    expect(res.body.cached).toBe(false);
-    expect(mockMatchPersonByName).toHaveBeenCalled();
   });
 
   it("should return negative cache when waterfall is pending > 24h (webhook never arrived)", async () => {
@@ -279,52 +268,5 @@ describe("POST /match — negative cache", () => {
         organizationDomain: "acme.com",
       })
     );
-  });
-});
-
-// ─── POST /match/bulk — Negative cache ─────────────────────────────────────
-
-describe("POST /match/bulk — negative cache", () => {
-  let app: express.Express;
-
-  beforeEach(async () => {
-    vi.clearAllMocks();
-    mockUpdateRun.mockResolvedValue({});
-    mockAddCosts.mockResolvedValue({ costs: [] });
-    mockInsertReturning.mockResolvedValue([{ id: "record-1" }]);
-    mockBulkMatchPeopleByName.mockResolvedValue({ matches: [MOCK_PERSON] });
-    mockDecryptKey.mockResolvedValue({ key: "fake-apollo-key", keySource: "platform" });
-    mockSelectLimit.mockResolvedValue([]); // default: cache miss
-
-    let callCount = 0;
-    mockCreateRun.mockImplementation(() => {
-      callCount++;
-      return Promise.resolve({ id: `run-${callCount}` });
-    });
-
-    app = createTestApp();
-    const { default: matchRoutes } = await import("../../src/routes/match.js");
-    app.use(matchRoutes);
-  });
-
-  it("should skip Apollo entirely when all bulk items are negative-cached", async () => {
-    // Single item: negative cache hit (2 select calls)
-    mockSelectLimit.mockResolvedValueOnce([]); // positive: miss
-    mockSelectLimit.mockResolvedValueOnce([NEGATIVE_CACHE_RECORD]); // negative: hit
-
-    const res = await setBaseHeaders(request(app).post("/match/bulk"))
-      .send({
-        items: [
-          { firstName: "John", lastName: "Doe", organizationDomain: "acme.com" },
-        ],
-      })
-      .expect(200);
-
-    expect(res.body.results).toHaveLength(1);
-    expect(res.body.results[0].cached).toBe(true);
-    expect(res.body.results[0].person).toBeNull();
-    expect(mockBulkMatchPeopleByName).not.toHaveBeenCalled();
-    expect(mockDecryptKey).not.toHaveBeenCalled();
-    expect(mockAddCosts).not.toHaveBeenCalled();
   });
 });
