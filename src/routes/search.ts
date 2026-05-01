@@ -8,6 +8,7 @@ import { decryptKey } from "../lib/keys-client.js";
 import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/runs-client.js";
 import { authorizeCredit } from "../lib/billing-client.js";
 import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment, toApolloSearchParams } from "../lib/transform.js";
+import { assertKeySource } from "../lib/validators.js";
 import { SearchRequestSchema, SearchNextRequestSchema, EnrichRequestSchema, StatsRequestSchema, type EmailStatus } from "../schemas.js";
 import { deepEqual } from "../lib/deep-equal.js";
 import { traceEvent } from "../lib/trace-event.js";
@@ -99,6 +100,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
       .returning();
 
     // Store search result records (no enrichment costs — those are tracked when POST /enrich is called)
+    assertKeySource(keySource);
     for (const person of result.people as ApolloPerson[]) {
       await db.insert(apolloPeopleEnrichments).values({
         orgId: req.orgId!,
@@ -108,6 +110,7 @@ router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
         campaignId,
         featureSlug,
         workflowSlug,
+        keySource,
         ...toEnrichmentDbValues(person),
       });
     }
@@ -283,6 +286,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
         workflowSlug,
       });
 
+      assertKeySource(keySource);
       const [enrichment] = await db.insert(apolloPeopleEnrichments).values({
         orgId: req.orgId!,
         runId,
