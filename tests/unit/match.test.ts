@@ -3,9 +3,10 @@ import express from "express";
 import request from "supertest";
 
 /**
- * Tests for POST /match and POST /match/bulk endpoints.
+ * Tests for POST /match endpoint.
  *
- * Covers: validation, cache hits/misses, cost tracking, error handling.
+ * Covers: validation, cache hits/misses, cost tracking, error handling,
+ * waterfall polling, keySource guard, /match/bulk removal.
  */
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
@@ -34,19 +35,21 @@ vi.mock("../../src/middleware/auth.js", () => ({
 }));
 
 const mockInsertReturning = vi.fn().mockResolvedValue([{ id: "record-1" }]);
+const mockInsertValues = vi.fn().mockReturnValue({ returning: (...args: unknown[]) => mockInsertReturning(...args) });
+const mockSelectLimit = vi.fn().mockResolvedValue([]);
+
 vi.mock("../../src/db/index.js", () => ({
   db: {
     insert: vi.fn().mockReturnValue({
-      values: vi.fn().mockReturnValue({
-        returning: (...args: unknown[]) => mockInsertReturning(...args),
-      }),
+      values: (...args: unknown[]) => mockInsertValues(...args),
     }),
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockReturnValue({
           orderBy: vi.fn().mockReturnValue({
-            limit: vi.fn().mockResolvedValue([]),
+            limit: (...args: unknown[]) => mockSelectLimit(...args),
           }),
+          limit: (...args: unknown[]) => mockSelectLimit(...args),
         }),
       }),
     }),
@@ -60,6 +63,9 @@ vi.mock("../../src/db/schema.js", () => ({
     lastName: { name: "last_name" },
     organizationDomain: { name: "organization_domain" },
     email: { name: "email" },
+    emailStatus: { name: "email_status" },
+    waterfallStatus: { name: "waterfall_status" },
+    waterfallRequestId: { name: "waterfall_request_id" },
     createdAt: { name: "created_at" },
     apolloPersonId: { name: "apollo_person_id" },
   },
@@ -98,11 +104,9 @@ const MOCK_PERSON = {
 };
 
 const mockMatchPersonByName = vi.fn().mockResolvedValue({ person: MOCK_PERSON });
-const mockBulkMatchPeopleByName = vi.fn().mockResolvedValue({ matches: [MOCK_PERSON] });
 
 vi.mock("../../src/lib/apollo-client.js", () => ({
   matchPersonByName: (...args: unknown[]) => mockMatchPersonByName(...args),
-  bulkMatchPeopleByName: (...args: unknown[]) => mockBulkMatchPeopleByName(...args),
   buildWaterfallWebhookUrl: () => undefined,
 }));
 
@@ -112,20 +116,46 @@ function createTestApp() {
   return app;
 }
 
-const BASE_HEADERS = {
-  "X-Run-Id": "run-abc",
-  "X-Brand-Id": "brand-1",
-  "X-Campaign-Id": "campaign-1",
-};
-
 function setBaseHeaders(req: request.Test): request.Test {
   return req
     .set("X-Org-Id", "org_test")
     .set("X-User-Id", "user_test")
-    .set("X-Run-Id", BASE_HEADERS["X-Run-Id"])
-    .set("X-Brand-Id", BASE_HEADERS["X-Brand-Id"])
-    .set("X-Campaign-Id", BASE_HEADERS["X-Campaign-Id"]);
+    .set("X-Run-Id", "run-abc")
+    .set("X-Brand-Id", "brand-1")
+    .set("X-Campaign-Id", "campaign-1");
 }
+
+const POSITIVE_CACHE_RECORD = {
+  id: "pos-1",
+  apolloPersonId: "person-match-1",
+  firstName: "John",
+  lastName: "Doe",
+  email: "john@acme.com",
+  emailStatus: "verified",
+  title: "CTO",
+  linkedinUrl: "https://linkedin.com/in/johndoe",
+  organizationName: "Acme Inc",
+  organizationDomain: "acme.com",
+  waterfallStatus: null,
+  waterfallRequestId: null,
+  createdAt: new Date(),
+};
+
+const NEGATIVE_CACHE_RECORD = {
+  id: "neg-1",
+  apolloPersonId: null,
+  firstName: "John",
+  lastName: "Doe",
+  email: null,
+  emailStatus: null,
+  title: null,
+  linkedinUrl: null,
+  organizationName: null,
+  organizationDomain: "acme.com",
+  waterfallStatus: null,
+  waterfallRequestId: null,
+  createdAt: new Date(),
+};
 
 // ─── POST /match ────────────────────────────────────────────────────────────
 
@@ -139,6 +169,7 @@ describe("POST /match", () => {
     mockInsertReturning.mockResolvedValue([{ id: "record-1" }]);
     mockMatchPersonByName.mockResolvedValue({ person: MOCK_PERSON });
     mockDecryptKey.mockResolvedValue({ key: "fake-apollo-key", keySource: "platform" });
+    mockSelectLimit.mockResolvedValue([]);
 
     let callCount = 0;
     mockCreateRun.mockImplementation(() => {
@@ -237,32 +268,11 @@ describe("POST /match", () => {
     expect(mockAddCosts).not.toHaveBeenCalled();
   });
 
-  // ─── Cache hit ────────────────────────────────────────────────────────────
+  // ─── Positive cache hit ────────────────────────────────────────────────────
 
-  it("should return cached result and skip Apollo on cache hit", async () => {
-    const { db } = await import("../../src/db/index.js");
-    const selectMock = vi.mocked(db.select);
-    selectMock.mockReturnValueOnce({
-      from: vi.fn().mockReturnValue({
-        where: vi.fn().mockReturnValue({
-          orderBy: vi.fn().mockReturnValue({
-            limit: vi.fn().mockResolvedValue([{
-              id: "cached-1",
-              apolloPersonId: "person-match-1",
-              firstName: "John",
-              lastName: "Doe",
-              email: "john@acme.com",
-              emailStatus: "verified",
-              title: "CTO",
-              linkedinUrl: "https://linkedin.com/in/johndoe",
-              organizationName: "Acme Inc",
-              organizationDomain: "acme.com",
-              createdAt: new Date(),
-            }]),
-          }),
-        }),
-      }),
-    } as any);
+  it("should return cached result and skip Apollo on positive cache hit", async () => {
+    // Query 1 (positive): hit
+    mockSelectLimit.mockResolvedValueOnce([POSITIVE_CACHE_RECORD]);
 
     const res = await setBaseHeaders(request(app).post("/match"))
       .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" })
@@ -273,6 +283,102 @@ describe("POST /match", () => {
     expect(res.body.person.email).toBe("john@acme.com");
     expect(mockMatchPersonByName).not.toHaveBeenCalled();
     expect(mockAddCosts).not.toHaveBeenCalled();
+  });
+
+  // ─── Negative cache hit ────────────────────────────────────────────────────
+
+  it("should return person:null and skip Apollo on negative cache hit", async () => {
+    // Query 1 (positive): miss
+    mockSelectLimit.mockResolvedValueOnce([]);
+    // Query 2 (negative): hit
+    mockSelectLimit.mockResolvedValueOnce([NEGATIVE_CACHE_RECORD]);
+
+    const res = await setBaseHeaders(request(app).post("/match"))
+      .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" })
+      .expect(200);
+
+    expect(res.body.cached).toBe(true);
+    expect(res.body.person).toBeNull();
+    expect(mockMatchPersonByName).not.toHaveBeenCalled();
+    expect(mockDecryptKey).not.toHaveBeenCalled();
+  });
+
+  // ─── Waterfall polling ────────────────────────────────────────────────────
+
+  it("should poll and return email when waterfall completes within timeout", async () => {
+    // Speed up polling for tests
+    process.env.WATERFALL_POLL_INTERVAL_MS = "10";
+    process.env.WATERFALL_POLL_TIMEOUT_MS = "200";
+    // Apollo returns person without email, waterfall accepted
+    mockMatchPersonByName.mockResolvedValueOnce({
+      person: { ...MOCK_PERSON, email: null, email_status: null },
+      waterfall: { status: "accepted" },
+      request_id: "12345",
+    });
+
+    // After INSERT, simulate polling: first poll returns no email, second poll returns email
+    let pollCount = 0;
+    mockSelectLimit.mockImplementation(() => {
+      pollCount++;
+      // Calls 1-2: findCachedMatch positive + negative (cache miss)
+      if (pollCount <= 2) return Promise.resolve([]);
+      // Call 3: first poll — still pending
+      if (pollCount === 3) return Promise.resolve([{ ...NEGATIVE_CACHE_RECORD, waterfallStatus: "pending", waterfallRequestId: "12345" }]);
+      // Call 4: second poll — email arrived
+      return Promise.resolve([{ ...POSITIVE_CACHE_RECORD, waterfallStatus: "completed", waterfallRequestId: "12345" }]);
+    });
+
+    const res = await setBaseHeaders(request(app).post("/match"))
+      .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" })
+      .expect(200);
+
+    expect(res.body.person.email).toBe("john@acme.com");
+    expect(res.body.cached).toBe(false);
+    expect(pollCount).toBeGreaterThanOrEqual(4);
+  });
+
+  it("should return 504 when waterfall polling times out", async () => {
+    // Speed up polling for tests
+    process.env.WATERFALL_POLL_INTERVAL_MS = "10";
+    process.env.WATERFALL_POLL_TIMEOUT_MS = "50";
+    // Apollo returns person without email, waterfall accepted
+    mockMatchPersonByName.mockResolvedValueOnce({
+      person: { ...MOCK_PERSON, email: null, email_status: null },
+      waterfall: { status: "accepted" },
+      request_id: "12345",
+    });
+
+    // Polling always returns pending (webhook never arrives)
+    let pollCount = 0;
+    mockSelectLimit.mockImplementation(() => {
+      pollCount++;
+      // Calls 1-2: findCachedMatch
+      if (pollCount <= 2) return Promise.resolve([]);
+      // All polls: still pending
+      return Promise.resolve([{ ...NEGATIVE_CACHE_RECORD, waterfallStatus: "pending", waterfallRequestId: "12345" }]);
+    });
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await setBaseHeaders(request(app).post("/match"))
+      .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" })
+      .expect(504);
+
+    expect(res.body.error).toContain("timeout");
+    errorSpy.mockRestore();
+  });
+
+  // ─── keySource guard ──────────────────────────────────────────────────────
+
+  it("should throw when keySource is null/undefined on INSERT", async () => {
+    mockDecryptKey.mockResolvedValueOnce({ key: "fake-key", keySource: undefined });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await setBaseHeaders(request(app).post("/match"))
+      .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" })
+      .expect(500);
+
+    errorSpy.mockRestore();
   });
 
   // ─── workflowSlug propagation ─────────────────────────────────────────────
@@ -318,193 +424,28 @@ describe("POST /match", () => {
   });
 });
 
-// ─── POST /match/bulk ───────────────────────────────────────────────────────
+// ─── POST /match/bulk — Removed ─────────────────────────────────────────────
 
-describe("POST /match/bulk", () => {
+describe("POST /match/bulk — removed", () => {
   let app: express.Express;
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    mockUpdateRun.mockResolvedValue({});
-    mockAddCosts.mockResolvedValue({ costs: [] });
-    mockInsertReturning.mockResolvedValue([{ id: "record-1" }]);
-    mockBulkMatchPeopleByName.mockResolvedValue({ matches: [MOCK_PERSON] });
-    mockDecryptKey.mockResolvedValue({ key: "fake-apollo-key", keySource: "platform" });
-
     let callCount = 0;
     mockCreateRun.mockImplementation(() => {
       callCount++;
       return Promise.resolve({ id: `run-${callCount}` });
     });
-
     app = createTestApp();
     const { default: matchRoutes } = await import("../../src/routes/match.js");
     app.use(matchRoutes);
   });
 
-  // ─── Validation ──────────────────────────────────────────────────────────
-
-  it("should return 400 when items array is empty", async () => {
-    await setBaseHeaders(request(app).post("/match/bulk"))
-      .send({ items: [] })
-      .expect(400);
-  });
-
-  it("should return 400 when items exceed max 10", async () => {
-    const items = Array.from({ length: 11 }, (_, i) => ({
-      firstName: `First${i}`,
-      lastName: `Last${i}`,
-      organizationDomain: `company${i}.com`,
-    }));
-
-    await setBaseHeaders(request(app).post("/match/bulk"))
-      .send({ items })
-      .expect(400);
-  });
-
-  // ─── Happy path ──────────────────────────────────────────────────────────
-
-  it("should create a single run for the batch", async () => {
-    mockBulkMatchPeopleByName.mockResolvedValueOnce({
-      matches: [MOCK_PERSON, { ...MOCK_PERSON, id: "person-2", email: "p2@acme.com" }],
-    });
-
-    await setBaseHeaders(request(app).post("/match/bulk"))
-      .send({
-        items: [
-          { firstName: "John", lastName: "Doe", organizationDomain: "acme.com" },
-          { firstName: "Jane", lastName: "Smith", organizationDomain: "acme.com" },
-        ],
-      })
-      .expect(200);
-
-    expect(mockCreateRun).toHaveBeenCalledTimes(1);
-    expect(mockCreateRun).toHaveBeenCalledWith(
-      expect.objectContaining({ taskName: "person-match-bulk" })
-    );
-  });
-
-  it("should aggregate costs for items with emails", async () => {
-    mockBulkMatchPeopleByName.mockResolvedValueOnce({
-      matches: [
-        MOCK_PERSON,
-        { ...MOCK_PERSON, id: "p2", email: "p2@acme.com" },
-        { ...MOCK_PERSON, id: "p3", email: null },
-      ],
-    });
-
-    await setBaseHeaders(request(app).post("/match/bulk"))
-      .send({
-        items: [
-          { firstName: "A", lastName: "B", organizationDomain: "acme.com" },
-          { firstName: "C", lastName: "D", organizationDomain: "acme.com" },
-          { firstName: "E", lastName: "F", organizationDomain: "acme.com" },
-        ],
-      })
-      .expect(200);
-
-    expect(mockAddCosts).toHaveBeenCalledTimes(1);
-    expect(mockAddCosts).toHaveBeenCalledWith("run-1", [
-      { costName: "apollo-credit", costSource: "platform", quantity: 2 },
-    ], expect.objectContaining({ orgId: "org_test" }));
-  });
-
-  it("should return results in same order as input", async () => {
-    mockBulkMatchPeopleByName.mockResolvedValueOnce({
-      matches: [MOCK_PERSON, null],
-    });
-
-    const res = await setBaseHeaders(request(app).post("/match/bulk"))
-      .send({
-        items: [
-          { firstName: "John", lastName: "Doe", organizationDomain: "acme.com" },
-          { firstName: "Nobody", lastName: "Exists", organizationDomain: "none.com" },
-        ],
-      })
-      .expect(200);
-
-    expect(res.body.results).toHaveLength(2);
-    expect(res.body.results[0].person).not.toBeNull();
-    expect(res.body.results[0].person.firstName).toBe("John");
-    expect(res.body.results[1].person).toBeNull();
-  });
-
-  it("should NOT call Apollo when all items are cached", async () => {
-    const { db } = await import("../../src/db/index.js");
-    const selectMock = vi.mocked(db.select);
-
-    // Mock cache hit for the single item
-    selectMock.mockReturnValueOnce({
-      from: vi.fn().mockReturnValue({
-        where: vi.fn().mockReturnValue({
-          orderBy: vi.fn().mockReturnValue({
-            limit: vi.fn().mockResolvedValue([{
-              id: "cached-1",
-              apolloPersonId: "person-match-1",
-              firstName: "John",
-              lastName: "Doe",
-              email: "john@acme.com",
-              emailStatus: "verified",
-              title: "CTO",
-              organizationName: "Acme Inc",
-              organizationDomain: "acme.com",
-              createdAt: new Date(),
-            }]),
-          }),
-        }),
-      }),
-    } as any);
-
-    const res = await setBaseHeaders(request(app).post("/match/bulk"))
-      .send({
-        items: [{ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" }],
-      })
-      .expect(200);
-
-    expect(mockBulkMatchPeopleByName).not.toHaveBeenCalled();
-    expect(res.body.results[0].cached).toBe(true);
-    expect(mockAddCosts).not.toHaveBeenCalled();
-  });
-
-  it("should NOT add costs when no items have emails", async () => {
-    mockBulkMatchPeopleByName.mockResolvedValueOnce({
-      matches: [{ ...MOCK_PERSON, email: null }],
-    });
-
-    await setBaseHeaders(request(app).post("/match/bulk"))
-      .send({
-        items: [{ firstName: "A", lastName: "B", organizationDomain: "acme.com" }],
-      })
-      .expect(200);
-
-    expect(mockAddCosts).not.toHaveBeenCalled();
-  });
-
-  // ─── Error handling ───────────────────────────────────────────────────────
-
-  it("should return 500 when Apollo bulk API fails", async () => {
-    mockBulkMatchPeopleByName.mockRejectedValueOnce(new Error("Apollo bulk match failed: 500"));
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
+  it("should return 404 for /match/bulk", async () => {
     await setBaseHeaders(request(app).post("/match/bulk"))
       .send({
         items: [{ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" }],
       })
-      .expect(500);
-
-    errorSpy.mockRestore();
-  });
-
-  it("should pass workflowSlug to createRun", async () => {
-    await setBaseHeaders(request(app).post("/match/bulk"))
-      .set("X-Workflow-Slug", "fetch-lead")
-      .send({
-        items: [{ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" }],
-      })
-      .expect(200);
-
-    expect(mockCreateRun).toHaveBeenCalledWith(
-      expect.objectContaining({ workflowSlug: "fetch-lead", taskName: "person-match-bulk" })
-    );
+      .expect(404);
   });
 });

@@ -57,18 +57,6 @@ describe("run_waterfall_email flag", () => {
     expect(body.first_name).toBe("John");
   });
 
-  it("bulkMatchPeopleByName sends run_waterfall_email: true", async () => {
-    const { bulkMatchPeopleByName } = await importClient();
-    await bulkMatchPeopleByName("key", [
-      { first_name: "John", last_name: "Doe", domain: "acme.com" },
-    ]);
-
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    const body = parsedBody(0);
-    expect(body.run_waterfall_email).toBe(true);
-    expect(body.details).toHaveLength(1);
-  });
-
   it("bulkEnrichPeople sends run_waterfall_email: true", async () => {
     const { bulkEnrichPeople } = await importClient();
     await bulkEnrichPeople("key", ["person-1", "person-2"]);
