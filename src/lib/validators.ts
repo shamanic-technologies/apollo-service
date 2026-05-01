@@ -78,6 +78,15 @@ export const bulkPeopleEnrichSchema = z.object({
     .max(10, "Maximum 10 person IDs per request"),
 });
 
+/**
+ * Guard: every INSERT into apolloPeopleEnrichments MUST have a non-null keySource.
+ */
+export function assertKeySource(keySource: unknown): asserts keySource is "org" | "platform" {
+  if (!keySource) {
+    throw new Error("[Apollo Service] keySource is required for all enrichment inserts — got: " + keySource);
+  }
+}
+
 export type EndpointType = "search" | "enrich" | "bulk-enrich";
 
 const schemaByEndpoint: Record<EndpointType, z.ZodTypeAny> = {
