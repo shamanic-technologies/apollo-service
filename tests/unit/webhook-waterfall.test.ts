@@ -6,6 +6,11 @@ import request from "supertest";
  * Tests for POST /webhook/waterfall — Apollo waterfall enrichment callback.
  *
  * Covers: secret validation, enrichment update, cost tracking, edge cases.
+ *
+ * Key invariants:
+ * - credits_consumed is tracked ONCE per webhook (not per person)
+ * - A single waterfall run is created per webhook batch
+ * - request_id precision is preserved via rawBody parsing
  */
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
@@ -95,7 +100,11 @@ function makeWebhookPayload(overrides: Record<string, unknown> = {}) {
 
 function createTestApp() {
   const app = express();
-  app.use(express.json());
+  app.use(express.json({
+    verify: (req, _res, buf) => {
+      (req as any).rawBody = buf.toString();
+    },
+  }));
   return app;
 }
 
@@ -165,13 +174,14 @@ describe("POST /webhook/waterfall", () => {
     );
   });
 
-  it("creates a waterfall run and tracks costs", async () => {
+  it("creates ONE waterfall run and tracks credits_consumed ONCE for batch", async () => {
     await request(app)
       .post(`/webhook/waterfall?secret=${WEBHOOK_SECRET}`)
       .send(makeWebhookPayload())
       .expect(200);
 
-    // Should create a child run under the enrichment run
+    // Single run for the batch
+    expect(mockCreateRun).toHaveBeenCalledTimes(1);
     expect(mockCreateRun).toHaveBeenCalledWith(
       expect.objectContaining({
         orgId: "org-123",
@@ -181,23 +191,56 @@ describe("POST /webhook/waterfall", () => {
       })
     );
 
-    // Should track waterfall cost
+    // Single addCosts with the batch total
+    expect(mockAddCosts).toHaveBeenCalledTimes(1);
     expect(mockAddCosts).toHaveBeenCalledWith(
       "waterfall-run-1",
       [{ costName: "apollo-credit", costSource: "platform", quantity: 1 }],
       expect.objectContaining({ orgId: "org-123" })
     );
 
-    // Should complete the waterfall run
-    expect(mockUpdateRun).toHaveBeenCalledWith(
+    expect(mockUpdateRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("tracks credits_consumed=3 once even with 3 people (regression: no over-count)", async () => {
+    const threeEnrichments = [
+      { ...PENDING_ENRICHMENT, id: "e-1", apolloPersonId: "p-1" },
+      { ...PENDING_ENRICHMENT, id: "e-2", apolloPersonId: "p-2" },
+      { ...PENDING_ENRICHMENT, id: "e-3", apolloPersonId: "p-3" },
+    ];
+    mockDbSelect.mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue(threeEnrichments),
+      }),
+    });
+
+    const payload = makeWebhookPayload({
+      credits_consumed: 3,
+      people: [
+        { id: "p-1", emails: [{ email: "a@x.com", email_status: "verified" }], waterfall: { emails: [{ vendors: [{ id: "v", name: "V", status: "ok" }] }] } },
+        { id: "p-2", emails: [{ email: "b@x.com", email_status: "verified" }], waterfall: { emails: [{ vendors: [{ id: "v", name: "V", status: "ok" }] }] } },
+        { id: "p-3", emails: [{ email: "c@x.com", email_status: "verified" }], waterfall: { emails: [{ vendors: [{ id: "v", name: "V", status: "ok" }] }] } },
+      ],
+    });
+
+    await request(app)
+      .post(`/webhook/waterfall?secret=${WEBHOOK_SECRET}`)
+      .send(payload)
+      .expect(200);
+
+    // ONE run, ONE addCosts with quantity=3 (not 3 runs with quantity=3 each)
+    expect(mockCreateRun).toHaveBeenCalledTimes(1);
+    expect(mockAddCosts).toHaveBeenCalledTimes(1);
+    expect(mockAddCosts).toHaveBeenCalledWith(
       "waterfall-run-1",
-      "completed",
+      [{ costName: "apollo-credit", costSource: "platform", quantity: 3 }],
       expect.any(Object)
     );
   });
 
   it("marks enrichment as failed when no email found", async () => {
     const payload = makeWebhookPayload({
+      credits_consumed: 0,
       people: [
         {
           id: "apollo-person-1",
@@ -217,6 +260,10 @@ describe("POST /webhook/waterfall", () => {
     // Should mark as failed, not completed
     const setCall = mockDbUpdate.mock.results[0].value.set;
     expect(setCall).toHaveBeenCalledWith({ waterfallStatus: "failed" });
+
+    // No cost tracking when credits_consumed=0
+    expect(mockCreateRun).not.toHaveBeenCalled();
+    expect(mockAddCosts).not.toHaveBeenCalled();
   });
 
   it("returns 200 with updated=0 when no pending enrichments found", async () => {
