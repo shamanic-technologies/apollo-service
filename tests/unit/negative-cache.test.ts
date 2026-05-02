@@ -17,11 +17,13 @@ import request from "supertest";
 const mockCreateRun = vi.fn();
 const mockUpdateRun = vi.fn().mockResolvedValue({});
 const mockAddCosts = vi.fn().mockResolvedValue({ costs: [] });
+const mockUpdateCostStatus = vi.fn().mockResolvedValue({});
 
 vi.mock("../../src/lib/runs-client.js", () => ({
   createRun: (...args: unknown[]) => mockCreateRun(...args),
   updateRun: (...args: unknown[]) => mockUpdateRun(...args),
   addCosts: (...args: unknown[]) => mockAddCosts(...args),
+  updateCostStatus: (...args: unknown[]) => mockUpdateCostStatus(...args),
 }));
 
 vi.mock("../../src/middleware/auth.js", () => ({
@@ -54,6 +56,11 @@ vi.mock("../../src/db/index.js", () => ({
           }),
           limit: (...args: unknown[]) => mockSelectLimit(...args),
         }),
+      }),
+    }),
+    update: vi.fn().mockReturnValue({
+      set: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue([]),
       }),
     }),
   },
@@ -230,10 +237,18 @@ describe("POST /match — negative cache", () => {
   });
 
   it("should return negative cache when waterfall is pending > 24h (webhook never arrived)", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const stalePendingRecord = {
       ...NEGATIVE_CACHE_RECORD,
       waterfallStatus: "pending",
+      waterfallRequestId: "req-stale",
       createdAt: new Date(Date.now() - 25 * 60 * 60 * 1000), // 25h ago
+      enrichmentRunId: "run-stale",
+      provisionedCostId: "prov-stale",
+      orgId: "org_test",
+      brandIds: ["brand-1"],
+      campaignId: "campaign-1",
+      keySource: "platform",
     };
 
     // Query 1 (positive): miss
@@ -248,6 +263,7 @@ describe("POST /match — negative cache", () => {
     expect(res.body.cached).toBe(true);
     expect(res.body.person).toBeNull();
     expect(mockMatchPersonByName).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 
   it("should store a negative cache record when Apollo returns no person", async () => {

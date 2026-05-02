@@ -2,7 +2,7 @@ import { Router, Request, Response } from "express";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloPeopleEnrichments } from "../db/schema.js";
-import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/runs-client.js";
+import { addCosts, updateCostStatus, type IdentityHeaders } from "../lib/runs-client.js";
 import type { EmailStatus } from "../schemas.js";
 import { traceEvent } from "../lib/trace-event.js";
 
@@ -54,6 +54,10 @@ function safeRequestId(req: Request): string {
 /**
  * POST /webhook/waterfall - Apollo waterfall enrichment callback
  * Public endpoint authenticated via secret query param.
+ *
+ * Cost reconciliation: cancels the provisioned cost on the original match run,
+ * then adds the actual cost (credits_consumed) on the same run.
+ * No child run is created — costs stay on the original person-match run.
  */
 router.post("/webhook/waterfall", async (req: Request, res: Response) => {
   try {
@@ -152,8 +156,9 @@ router.post("/webhook/waterfall", async (req: Request, res: Response) => {
       updated++;
     }
 
-    // Track waterfall cost ONCE for the entire batch (not per person)
-    if (creditsConsumed > 0 && firstEnrichment.enrichmentRunId) {
+    // Cost reconciliation: cancel provisioned + add actual on the ORIGINAL match run
+    // No child run created — costs stay on the person-match run
+    if (firstEnrichment.enrichmentRunId) {
       const identity: IdentityHeaders = {
         orgId: firstEnrichment.orgId,
         brandId: firstEnrichment.brandIds.join(","),
@@ -162,25 +167,21 @@ router.post("/webhook/waterfall", async (req: Request, res: Response) => {
       const costSource = (firstEnrichment.keySource as "platform" | "org") ?? "platform";
 
       try {
-        const waterfallRun = await createRun({
-          orgId: firstEnrichment.orgId,
-          brandId: firstEnrichment.brandIds.join(","),
-          campaignId: firstEnrichment.campaignId,
-          featureSlug: firstEnrichment.featureSlug ?? undefined,
-          serviceName: "apollo-service",
-          taskName: "waterfall-enrichment",
-          parentRunId: firstEnrichment.enrichmentRunId,
-          workflowSlug: firstEnrichment.workflowSlug ?? undefined,
-        });
+        // Cancel the provisioned cost
+        if (firstEnrichment.provisionedCostId) {
+          await updateCostStatus(firstEnrichment.enrichmentRunId, firstEnrichment.provisionedCostId, "cancelled", identity);
+        }
 
-        await addCosts(
-          waterfallRun.id,
-          [{ costName: "apollo-credit", costSource, quantity: creditsConsumed }],
-          identity
-        );
-        await updateRun(waterfallRun.id, "completed", identity);
+        // Add actual cost with real credits_consumed
+        if (creditsConsumed > 0) {
+          await addCosts(
+            firstEnrichment.enrichmentRunId,
+            [{ costName: "apollo-credit", costSource, quantity: creditsConsumed, status: "actual" }],
+            identity
+          );
+        }
       } catch (err) {
-        console.error("[Apollo Service][webhook/waterfall] Failed to track waterfall cost", err);
+        console.error("[Apollo Service][webhook/waterfall] Failed to reconcile waterfall cost", err);
       }
     }
 
