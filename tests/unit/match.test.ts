@@ -14,11 +14,13 @@ import request from "supertest";
 const mockCreateRun = vi.fn();
 const mockUpdateRun = vi.fn().mockResolvedValue({});
 const mockAddCosts = vi.fn().mockResolvedValue({ costs: [] });
+const mockUpdateCostStatus = vi.fn().mockResolvedValue({});
 
 vi.mock("../../src/lib/runs-client.js", () => ({
   createRun: (...args: unknown[]) => mockCreateRun(...args),
   updateRun: (...args: unknown[]) => mockUpdateRun(...args),
   addCosts: (...args: unknown[]) => mockAddCosts(...args),
+  updateCostStatus: (...args: unknown[]) => mockUpdateCostStatus(...args),
 }));
 
 vi.mock("../../src/middleware/auth.js", () => ({
@@ -165,7 +167,8 @@ describe("POST /match", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     mockUpdateRun.mockResolvedValue({});
-    mockAddCosts.mockResolvedValue({ costs: [] });
+    mockAddCosts.mockResolvedValue({ costs: [{ id: "prov-cost-1" }] });
+    mockUpdateCostStatus.mockResolvedValue({});
     mockInsertReturning.mockResolvedValue([{ id: "record-1" }]);
     mockMatchPersonByName.mockResolvedValue({ person: MOCK_PERSON });
     mockDecryptKey.mockResolvedValue({ key: "fake-apollo-key", keySource: "platform" });
@@ -365,6 +368,8 @@ describe("POST /match", () => {
       .expect(504);
 
     expect(res.body.error).toContain("timeout");
+    // Run should be marked as failed on timeout
+    expect(mockUpdateRun).toHaveBeenCalledWith(expect.any(String), "failed", expect.any(Object));
     errorSpy.mockRestore();
   });
 
