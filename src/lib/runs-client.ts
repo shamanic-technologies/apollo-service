@@ -76,6 +76,7 @@ export interface CostItem {
   costName: string;
   costSource: "platform" | "org";
   quantity: number;
+  status?: "provisioned" | "actual" | "cancelled";
 }
 
 export interface ListRunsParams {
