@@ -126,6 +126,7 @@ export const apolloPeopleEnrichments = pgTable(
     waterfallStatus: text("waterfall_status"), // "pending" | "completed" | "failed" | null
     waterfallSource: text("waterfall_source"), // vendor name that found the email
     keySource: text("key_source"), // "platform" | "org" — needed for deferred cost tracking
+    provisionedCostId: text("provisioned_cost_id"), // runs-service cost ID for provisioned waterfall cost
 
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },

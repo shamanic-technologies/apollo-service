@@ -15,14 +15,12 @@ import request from "supertest";
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
-const mockCreateRun = vi.fn().mockResolvedValue({ id: "waterfall-run-1" });
-const mockUpdateRun = vi.fn().mockResolvedValue({});
 const mockAddCosts = vi.fn().mockResolvedValue({ costs: [] });
+const mockUpdateCostStatus = vi.fn().mockResolvedValue({});
 
 vi.mock("../../src/lib/runs-client.js", () => ({
-  createRun: (...args: unknown[]) => mockCreateRun(...args),
-  updateRun: (...args: unknown[]) => mockUpdateRun(...args),
   addCosts: (...args: unknown[]) => mockAddCosts(...args),
+  updateCostStatus: (...args: unknown[]) => mockUpdateCostStatus(...args),
 }));
 
 const mockDbSelect = vi.fn();
@@ -63,6 +61,7 @@ const PENDING_ENRICHMENT = {
   waterfallRequestId: "req-abc",
   waterfallStatus: "pending",
   keySource: "platform",
+  provisionedCostId: "prov-cost-1",
 };
 
 function makeWebhookPayload(overrides: Record<string, unknown> = {}) {
@@ -174,32 +173,28 @@ describe("POST /webhook/waterfall", () => {
     );
   });
 
-  it("creates ONE waterfall run and tracks credits_consumed ONCE for batch", async () => {
+  it("cancels provisioned cost and adds actual cost on webhook", async () => {
     await request(app)
       .post(`/webhook/waterfall?secret=${WEBHOOK_SECRET}`)
       .send(makeWebhookPayload())
       .expect(200);
 
-    // Single run for the batch
-    expect(mockCreateRun).toHaveBeenCalledTimes(1);
-    expect(mockCreateRun).toHaveBeenCalledWith(
-      expect.objectContaining({
-        orgId: "org-123",
-        serviceName: "apollo-service",
-        taskName: "waterfall-enrichment",
-        parentRunId: "enrich-run-1",
-      })
-    );
-
-    // Single addCosts with the batch total
-    expect(mockAddCosts).toHaveBeenCalledTimes(1);
-    expect(mockAddCosts).toHaveBeenCalledWith(
-      "waterfall-run-1",
-      [{ costName: "apollo-credit", costSource: "platform", quantity: 1 }],
+    // Cancel provisioned cost on the original match run
+    expect(mockUpdateCostStatus).toHaveBeenCalledTimes(1);
+    expect(mockUpdateCostStatus).toHaveBeenCalledWith(
+      "enrich-run-1",
+      "prov-cost-1",
+      "cancelled",
       expect.objectContaining({ orgId: "org-123" })
     );
 
-    expect(mockUpdateRun).toHaveBeenCalledTimes(1);
+    // Add actual cost with credits_consumed from payload
+    expect(mockAddCosts).toHaveBeenCalledTimes(1);
+    expect(mockAddCosts).toHaveBeenCalledWith(
+      "enrich-run-1",
+      [{ costName: "apollo-credit", costSource: "platform", quantity: 1, status: "actual" }],
+      expect.objectContaining({ orgId: "org-123" })
+    );
   });
 
   it("tracks credits_consumed=3 once even with 3 people (regression: no over-count)", async () => {
@@ -228,12 +223,11 @@ describe("POST /webhook/waterfall", () => {
       .send(payload)
       .expect(200);
 
-    // ONE run, ONE addCosts with quantity=3 (not 3 runs with quantity=3 each)
-    expect(mockCreateRun).toHaveBeenCalledTimes(1);
+    // ONE addCosts with quantity=3 (not per-person)
     expect(mockAddCosts).toHaveBeenCalledTimes(1);
     expect(mockAddCosts).toHaveBeenCalledWith(
-      "waterfall-run-1",
-      [{ costName: "apollo-credit", costSource: "platform", quantity: 3 }],
+      "enrich-run-1",
+      [{ costName: "apollo-credit", costSource: "platform", quantity: 3, status: "actual" }],
       expect.any(Object)
     );
   });
@@ -261,8 +255,8 @@ describe("POST /webhook/waterfall", () => {
     const setCall = mockDbUpdate.mock.results[0].value.set;
     expect(setCall).toHaveBeenCalledWith({ waterfallStatus: "failed" });
 
-    // No cost tracking when credits_consumed=0
-    expect(mockCreateRun).not.toHaveBeenCalled();
+    // Provisioned cost still cancelled, but no actual cost added (credits_consumed=0)
+    expect(mockUpdateCostStatus).toHaveBeenCalledTimes(1);
     expect(mockAddCosts).not.toHaveBeenCalled();
   });
 
@@ -304,8 +298,8 @@ describe("POST /webhook/waterfall", () => {
       .expect(200);
 
     expect(mockAddCosts).toHaveBeenCalledWith(
-      expect.any(String),
-      [{ costName: "apollo-credit", costSource: "org", quantity: 1 }],
+      "enrich-run-1",
+      [{ costName: "apollo-credit", costSource: "org", quantity: 1, status: "actual" }],
       expect.any(Object)
     );
   });

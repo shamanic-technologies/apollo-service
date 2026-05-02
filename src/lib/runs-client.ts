@@ -200,6 +200,22 @@ export async function addCosts(
 }
 
 /**
+ * Update a cost item's status (provisioned → actual or cancelled).
+ */
+export async function updateCostStatus(
+  runId: string,
+  costId: string,
+  status: "actual" | "provisioned" | "cancelled",
+  identity: IdentityHeaders
+): Promise<RunCost> {
+  return runsRequest<RunCost>(`/v1/runs/${runId}/costs/${costId}`, {
+    method: "PATCH",
+    identity: { ...identity, runId },
+    body: { status },
+  });
+}
+
+/**
  * Get a single run with costs (including descendant runs and their costs).
  */
 export async function getRun(runId: string, identity: IdentityHeaders): Promise<RunWithCosts> {
