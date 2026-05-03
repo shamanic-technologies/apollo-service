@@ -100,6 +100,10 @@
             "type": "string",
             "nullable": true
           },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
           "email": {
             "type": "string",
             "nullable": true
@@ -185,6 +189,53 @@
             "type": "string",
             "nullable": true
           },
+          "personalEmails": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "mobilePhone": {
+            "type": "string",
+            "nullable": true
+          },
+          "phoneNumbers": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "object",
+              "properties": {
+                "rawNumber": {
+                  "type": "string"
+                },
+                "sanitizedNumber": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "position": {
+                  "type": "number"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "dncStatus": {
+                  "type": "string"
+                },
+                "dncOtherInfo": {
+                  "type": "string"
+                },
+                "dialerFlags": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
           "employmentHistory": {
             "type": "array",
             "nullable": true,
@@ -211,6 +262,10 @@
                 }
               }
             }
+          },
+          "organizationId": {
+            "type": "string",
+            "nullable": true
           },
           "organizationName": {
             "type": "string",
@@ -355,6 +410,10 @@
             "type": "string",
             "nullable": true
           },
+          "organizationRawAddress": {
+            "type": "string",
+            "nullable": true
+          },
           "organizationTechnologyNames": {
             "type": "array",
             "nullable": true,
@@ -412,6 +471,14 @@
           "organizationAlexaRanking": {
             "type": "number",
             "nullable": true
+          },
+          "raw": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": {
+              "nullable": true
+            },
+            "description": "Full Apollo person payload (snake_case, verbatim). Includes any field returned by Apollo not yet mapped to a typed property. Use this for fields not exposed as typed columns."
           }
         },
         "required": [
@@ -1089,6 +1156,10 @@
             "type": "string",
             "nullable": true
           },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
           "email": {
             "type": "string",
             "nullable": true
@@ -1174,6 +1245,53 @@
             "type": "string",
             "nullable": true
           },
+          "personalEmails": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "mobilePhone": {
+            "type": "string",
+            "nullable": true
+          },
+          "phoneNumbers": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "object",
+              "properties": {
+                "rawNumber": {
+                  "type": "string"
+                },
+                "sanitizedNumber": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "position": {
+                  "type": "number"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "dncStatus": {
+                  "type": "string"
+                },
+                "dncOtherInfo": {
+                  "type": "string"
+                },
+                "dialerFlags": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          },
           "employmentHistory": {
             "type": "array",
             "nullable": true,
@@ -1200,6 +1318,10 @@
                 }
               }
             }
+          },
+          "organizationId": {
+            "type": "string",
+            "nullable": true
           },
           "organizationName": {
             "type": "string",
@@ -1341,6 +1463,10 @@
             "nullable": true
           },
           "organizationPostalCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationRawAddress": {
             "type": "string",
             "nullable": true
           },

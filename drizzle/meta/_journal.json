@@ -120,6 +120,13 @@
       "when": 1777545600000,
       "tag": "0016_add_provisioned_cost_id",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1778889600000,
+      "tag": "0017_add_apollo_full_coverage_fields",
+      "breakpoints": true
     }
   ]
 }

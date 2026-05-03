@@ -57,6 +57,7 @@ export const apolloPeopleEnrichments = pgTable(
     // Person fields
     firstName: text("first_name"),
     lastName: text("last_name"),
+    name: text("name"),
     email: text("email"),
     emailStatus: text("email_status"),
     title: text("title"),
@@ -73,9 +74,13 @@ export const apolloPeopleEnrichments = pgTable(
     twitterUrl: text("twitter_url"),
     githubUrl: text("github_url"),
     facebookUrl: text("facebook_url"),
+    personalEmails: jsonb("personal_emails"),
+    mobilePhone: text("mobile_phone"),
+    phoneNumbers: jsonb("phone_numbers"),
     employmentHistory: jsonb("employment_history"),
 
     // Organization fields
+    organizationId: text("organization_id"),
     organizationName: text("organization_name"),
     organizationDomain: text("organization_domain"),
     organizationIndustry: text("organization_industry"),
@@ -106,6 +111,7 @@ export const apolloPeopleEnrichments = pgTable(
     organizationCountry: text("organization_country"),
     organizationStreetAddress: text("organization_street_address"),
     organizationPostalCode: text("organization_postal_code"),
+    organizationRawAddress: text("organization_raw_address"),
     organizationTechnologyNames: jsonb("organization_technology_names"),
     organizationCurrentTechnologies: jsonb("organization_current_technologies"),
     organizationKeywords: jsonb("organization_keywords"),
