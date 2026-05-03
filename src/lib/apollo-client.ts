@@ -67,6 +67,17 @@ export interface ApolloTechnology {
   category?: string;
 }
 
+export interface ApolloPhoneNumber {
+  raw_number?: string;
+  sanitized_number?: string;
+  type?: string;
+  position?: number;
+  status?: string;
+  dnc_status?: string;
+  dnc_other_info?: string;
+  dialer_flags?: Record<string, unknown>;
+}
+
 export interface ApolloOrganization {
   id: string;
   name: string;
@@ -142,6 +153,10 @@ export interface ApolloPerson {
   twitter_url?: string;
   github_url?: string;
   facebook_url?: string;
+  // Contact details
+  personal_emails?: string[];
+  mobile_phone?: string;
+  phone_numbers?: ApolloPhoneNumber[];
   // History
   employment_history?: ApolloEmploymentHistory[];
   // Organization

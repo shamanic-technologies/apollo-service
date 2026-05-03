@@ -38,6 +38,11 @@ const fullPerson: ApolloPerson = {
       end_date: "2019-12-31",
     },
   ],
+  personal_emails: ["john.personal@gmail.com", "johnd@yahoo.com"],
+  mobile_phone: "+1-555-0199",
+  phone_numbers: [
+    { raw_number: "+1-555-0199", sanitized_number: "+15550199", type: "mobile", position: 1, status: "no_status" },
+  ],
   organization: {
     id: "org-1",
     name: "Acme Corp",
@@ -187,6 +192,24 @@ describe("transformApolloPerson", () => {
     expect(result.organizationNumSuborganizations).toBe(3);
     expect(result.organizationRetailLocationCount).toBe(0);
     expect(result.organizationAlexaRanking).toBe(50000);
+
+    // New typed fields (100% coverage)
+    expect(result.name).toBe("John Doe");
+    expect(result.personalEmails).toEqual(["john.personal@gmail.com", "johnd@yahoo.com"]);
+    expect(result.mobilePhone).toBe("+1-555-0199");
+    expect(result.phoneNumbers).toHaveLength(1);
+    expect(result.phoneNumbers![0].sanitizedNumber).toBe("+15550199");
+    expect(result.organizationId).toBe("org-1");
+    expect(result.organizationRawAddress).toBe("123 Market St, San Francisco, CA 94105");
+
+    // Raw passthrough — full Apollo person object preserved verbatim
+    expect(result.raw).toBeDefined();
+    expect(result.raw).toStrictEqual(fullPerson);
+    expect((result.raw as { personal_emails: string[] }).personal_emails).toEqual([
+      "john.personal@gmail.com",
+      "johnd@yahoo.com",
+    ]);
+    expect((result.raw as { mobile_phone: string }).mobile_phone).toBe("+1-555-0199");
   });
 
   it("should handle missing organization", () => {
@@ -209,6 +232,11 @@ describe("transformApolloPerson", () => {
     expect(result.organizationFundingEvents).toBeUndefined();
     expect(result.photoUrl).toBeUndefined();
     expect(result.seniority).toBeUndefined();
+    expect(result.organizationId).toBeUndefined();
+    expect(result.organizationRawAddress).toBeUndefined();
+    expect(result.personalEmails).toBeUndefined();
+    expect(result.mobilePhone).toBeUndefined();
+    expect(result.phoneNumbers).toBeUndefined();
   });
 
   it("should handle null email gracefully", () => {
@@ -247,6 +275,14 @@ describe("toEnrichmentDbValues", () => {
     expect(result.organizationFundingEvents).toHaveLength(2);
     expect(result.organizationCurrentTechnologies).toHaveLength(2);
     expect(result.responseRaw).toStrictEqual({ ...fullPerson, organization: fullPerson.organization });
+
+    // New DB columns for 100% coverage
+    expect(result.name).toBe("John Doe");
+    expect(result.personalEmails).toEqual(["john.personal@gmail.com", "johnd@yahoo.com"]);
+    expect(result.mobilePhone).toBe("+1-555-0199");
+    expect(result.phoneNumbers).toHaveLength(1);
+    expect(result.organizationId).toBe("org-1");
+    expect(result.organizationRawAddress).toBe("123 Market St, San Francisco, CA 94105");
   });
 
   it("should handle missing organization", () => {
@@ -357,7 +393,20 @@ describe("transformCachedEnrichment", () => {
       organizationNumSuborganizations: 3,
       organizationRetailLocationCount: 0,
       organizationAlexaRanking: 50000,
-      responseRaw: {},
+      name: "John Doe",
+      personalEmails: ["john.personal@gmail.com"],
+      mobilePhone: "+1-555-0199",
+      phoneNumbers: [{ raw_number: "+1-555-0199", sanitized_number: "+15550199", type: "mobile" }],
+      organizationId: "org-1",
+      organizationRawAddress: "123 Market St, San Francisco, CA 94105",
+      responseRaw: {
+        id: "abc123",
+        first_name: "John",
+        last_name: "Doe",
+        name: "John Doe",
+        personal_emails: ["john.personal@gmail.com"],
+        mobile_phone: "+1-555-0199",
+      },
       enrichmentRunId: null,
       createdAt: new Date(),
     };
@@ -370,5 +419,19 @@ describe("transformCachedEnrichment", () => {
     expect(result.seniority).toBe("c_suite");
     expect(result.organizationFundingEvents).toHaveLength(1);
     expect(result.organizationCurrentTechnologies).toHaveLength(1);
+
+    // New typed fields
+    expect(result.name).toBe("John Doe");
+    expect(result.personalEmails).toEqual(["john.personal@gmail.com"]);
+    expect(result.mobilePhone).toBe("+1-555-0199");
+    expect(result.phoneNumbers).toHaveLength(1);
+    expect(result.organizationId).toBe("org-1");
+    expect(result.organizationRawAddress).toBe("123 Market St, San Francisco, CA 94105");
+
+    // Raw reconstructed from responseRaw
+    expect(result.raw).toBeDefined();
+    expect((result.raw as { personal_emails: string[] }).personal_emails).toEqual([
+      "john.personal@gmail.com",
+    ]);
   });
 });

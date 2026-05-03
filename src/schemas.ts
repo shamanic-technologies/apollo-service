@@ -102,11 +102,23 @@ const TechnologySchema = z.object({
   category: z.string().optional(),
 });
 
-const PersonSchema = z
+const PhoneNumberSchema = z.object({
+  rawNumber: z.string().optional(),
+  sanitizedNumber: z.string().optional(),
+  type: z.string().optional(),
+  position: z.number().optional(),
+  status: z.string().optional(),
+  dncStatus: z.string().optional(),
+  dncOtherInfo: z.string().optional(),
+  dialerFlags: z.record(z.string(), z.unknown()).optional(),
+});
+
+export const PersonSchema = z
   .object({
     id: z.string(),
     firstName: z.string().nullable(),
     lastName: z.string().nullable(),
+    name: z.string().nullable().optional(),
     email: z.string().nullable(),
     emailStatus: EmailStatusSchema,
     title: z.string().nullable(),
@@ -124,8 +136,13 @@ const PersonSchema = z
     twitterUrl: z.string().nullable().optional(),
     githubUrl: z.string().nullable().optional(),
     facebookUrl: z.string().nullable().optional(),
+    // Contact details
+    personalEmails: z.array(z.string()).nullable().optional(),
+    mobilePhone: z.string().nullable().optional(),
+    phoneNumbers: z.array(PhoneNumberSchema).nullable().optional(),
     employmentHistory: z.array(EmploymentHistorySchema).nullable().optional(),
     // Organization (flat fields — Apollo's nested organization object is flattened to camelCase)
+    organizationId: z.string().nullable().optional(),
     organizationName: z.string().nullable().optional(),
     organizationDomain: z.string().nullable().optional(),
     organizationIndustry: z.string().nullable().optional(),
@@ -156,6 +173,7 @@ const PersonSchema = z
     organizationCountry: z.string().nullable().optional(),
     organizationStreetAddress: z.string().nullable().optional(),
     organizationPostalCode: z.string().nullable().optional(),
+    organizationRawAddress: z.string().nullable().optional(),
     organizationTechnologyNames: z.array(z.string()).nullable().optional(),
     organizationCurrentTechnologies: z.array(TechnologySchema).nullable().optional(),
     organizationKeywords: z.array(z.string()).nullable().optional(),
@@ -164,6 +182,10 @@ const PersonSchema = z
     organizationNumSuborganizations: z.number().nullable().optional(),
     organizationRetailLocationCount: z.number().nullable().optional(),
     organizationAlexaRanking: z.number().nullable().optional(),
+    raw: z.record(z.string(), z.unknown()).nullable().optional().openapi({
+      description:
+        "Full Apollo person payload (snake_case, verbatim). Includes any field returned by Apollo not yet mapped to a typed property. Use this for fields not exposed as typed columns.",
+    }),
   })
   .openapi("Person");
 
@@ -608,6 +630,7 @@ const EnrichmentRecordSchema = z
     // Person fields
     firstName: z.string().nullable().optional(),
     lastName: z.string().nullable().optional(),
+    name: z.string().nullable().optional(),
     email: z.string().nullable().optional(),
     emailStatus: EmailStatusSchema.optional(),
     title: z.string().nullable().optional(),
@@ -624,8 +647,12 @@ const EnrichmentRecordSchema = z
     twitterUrl: z.string().nullable().optional(),
     githubUrl: z.string().nullable().optional(),
     facebookUrl: z.string().nullable().optional(),
+    personalEmails: z.array(z.string()).nullable().optional(),
+    mobilePhone: z.string().nullable().optional(),
+    phoneNumbers: z.array(PhoneNumberSchema).nullable().optional(),
     employmentHistory: z.array(EmploymentHistorySchema).nullable().optional(),
     // Organization fields
+    organizationId: z.string().nullable().optional(),
     organizationName: z.string().nullable().optional(),
     organizationDomain: z.string().nullable().optional(),
     organizationIndustry: z.string().nullable().optional(),
@@ -656,6 +683,7 @@ const EnrichmentRecordSchema = z
     organizationCountry: z.string().nullable().optional(),
     organizationStreetAddress: z.string().nullable().optional(),
     organizationPostalCode: z.string().nullable().optional(),
+    organizationRawAddress: z.string().nullable().optional(),
     organizationTechnologyNames: z.array(z.string()).nullable().optional(),
     organizationCurrentTechnologies: z.array(TechnologySchema).nullable().optional(),
     organizationKeywords: z.array(z.string()).nullable().optional(),
