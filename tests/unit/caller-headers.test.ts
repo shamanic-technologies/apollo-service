@@ -28,14 +28,14 @@ describe("decryptKey caller headers", () => {
     mockFetch.mockResolvedValueOnce(okResponse("decrypted-key-123"));
 
     const { decryptKey } = await import("../../src/lib/keys-client.js");
-    await decryptKey("org_test", "user_test", "apollo", { callerMethod: "POST", callerPath: "/search" });
+    await decryptKey("org_test", "user_test", "apollo", { callerMethod: "POST", callerPath: "/search/next" });
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
     const [, opts] = mockFetch.mock.calls[0];
     expect(opts.headers).toMatchObject({
       "X-Caller-Service": "apollo",
       "X-Caller-Method": "POST",
-      "X-Caller-Path": "/search",
+      "X-Caller-Path": "/search/next",
     });
   });
 
@@ -43,7 +43,7 @@ describe("decryptKey caller headers", () => {
     mockFetch.mockResolvedValueOnce(okResponse("my-key", "org"));
 
     const { decryptKey } = await import("../../src/lib/keys-client.js");
-    const result = await decryptKey("org_test", "user_test", "apollo", { callerMethod: "POST", callerPath: "/search" });
+    const result = await decryptKey("org_test", "user_test", "apollo", { callerMethod: "POST", callerPath: "/search/next" });
 
     expect(result).toEqual({ key: "my-key", keySource: "org" });
   });
@@ -52,10 +52,10 @@ describe("decryptKey caller headers", () => {
     mockFetch.mockResolvedValueOnce(okResponse("key-abc"));
 
     const { decryptKey } = await import("../../src/lib/keys-client.js");
-    await decryptKey("org-uuid-1", "user-uuid-2", "anthropic", { callerMethod: "POST", callerPath: "/search/params" });
+    await decryptKey("org-uuid-1", "user-uuid-2", "apollo", { callerMethod: "POST", callerPath: "/search/dry-run" });
 
     const [url, opts] = mockFetch.mock.calls[0];
-    expect(url).toContain("/keys/anthropic/decrypt");
+    expect(url).toContain("/keys/apollo/decrypt");
     expect(url).not.toContain("orgId=");
     expect(opts.headers).toMatchObject({
       "x-org-id": "org-uuid-1",

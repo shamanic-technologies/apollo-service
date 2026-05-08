@@ -91,12 +91,20 @@ let lastInsertValues: Record<string, unknown> | null = null;
 
 vi.mock("../../src/db/index.js", () => ({
   db: {
-    insert: vi.fn().mockReturnValue({
+    insert: vi.fn().mockImplementation((table: unknown) => ({
       values: vi.fn().mockImplementation((vals: unknown) => {
-        lastInsertValues = vals as Record<string, unknown>;
+        const tableName = (table as { _?: { name?: string } } | undefined)?._?.name;
+        if (tableName !== "apollo_search_cursors") {
+          lastInsertValues = vals as Record<string, unknown>;
+        }
         return {
           returning: vi.fn().mockResolvedValue([{ id: "record-1" }]),
         };
+      }),
+    })),
+    update: vi.fn().mockReturnValue({
+      set: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue(undefined),
       }),
     }),
     select: vi.fn().mockReturnValue({
@@ -158,9 +166,9 @@ describe("multi-brand DB inserts", () => {
     app.use(searchRouter);
 
     await request(app)
-      .post("/search")
+      .post("/search/next")
       .set(MULTI_BRAND_HEADERS)
-      .send({ personTitles: ["CEO"] })
+      .send({ searchParams: { personTitles: ["CEO"] } })
       .expect(200);
 
     expect(lastInsertValues).toMatchObject({
@@ -175,9 +183,9 @@ describe("multi-brand DB inserts", () => {
     app.use(searchRouter);
 
     await request(app)
-      .post("/search")
+      .post("/search/next")
       .set(MULTI_BRAND_HEADERS)
-      .send({ personTitles: ["CEO"] })
+      .send({ searchParams: { personTitles: ["CEO"] } })
       .expect(200);
 
     // identity passed to updateRun should contain raw CSV brandId
@@ -197,9 +205,9 @@ describe("multi-brand DB inserts", () => {
     app.use(searchRouter);
 
     await request(app)
-      .post("/search")
+      .post("/search/next")
       .set({ ...MULTI_BRAND_HEADERS, "X-Brand-Id": "brand-single" })
-      .send({ personTitles: ["CEO"] })
+      .send({ searchParams: { personTitles: ["CEO"] } })
       .expect(200);
 
     expect(lastInsertValues).toMatchObject({

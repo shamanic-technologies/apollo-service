@@ -55,36 +55,245 @@
           "keyServiceStatus"
         ]
       },
-      "SearchResponse": {
+      "SearchDryRunResponse": {
         "type": "object",
         "properties": {
-          "searchId": {
-            "type": "string",
-            "nullable": true
-          },
-          "peopleCount": {
-            "type": "number"
-          },
           "totalEntries": {
-            "type": "number"
+            "type": "number",
+            "description": "Total number of people matching the filters across all pages."
           },
+          "validationErrors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Empty array on a successful 200. On a 400, lists the schema validation errors that prevented the call."
+          }
+        },
+        "required": [
+          "totalEntries",
+          "validationErrors"
+        ]
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "SearchDryRunRequest": {
+        "type": "object",
+        "properties": {
+          "personTitles": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Filter by job titles.",
+            "example": [
+              "CEO",
+              "CTO",
+              "VP Engineering"
+            ]
+          },
+          "qOrganizationKeywordTags": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Filter by organization keyword tags.",
+            "example": [
+              "SaaS",
+              "fintech"
+            ]
+          },
+          "organizationLocations": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Filter by organization HQ location.",
+            "example": [
+              "United States",
+              "California, US"
+            ]
+          },
+          "organizationNumEmployeesRanges": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "1,10",
+                "11,20",
+                "21,50",
+                "51,100",
+                "101,200",
+                "201,500",
+                "501,1000",
+                "1001,2000",
+                "2001,5000",
+                "5001,10000",
+                "10001,"
+              ]
+            },
+            "description": "Filter by employee count ranges.",
+            "example": [
+              "11,20",
+              "21,50",
+              "51,100"
+            ]
+          },
+          "qOrganizationIndustryTagIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Filter by industry names (use GET /reference/industries for valid values).",
+            "example": [
+              "Information Technology and Services",
+              "Computer Software"
+            ]
+          },
+          "qKeywords": {
+            "type": "string",
+            "description": "Free-text keyword search across person and organization fields.",
+            "example": "machine learning"
+          },
+          "personLocations": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Filter by person's location (city, state, country). Different from organizationLocations which filters by company HQ.",
+            "example": [
+              "San Francisco, California, US",
+              "New York, US"
+            ]
+          },
+          "personSeniorities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "entry",
+                "senior",
+                "manager",
+                "director",
+                "vp",
+                "c_suite",
+                "owner",
+                "founder",
+                "partner"
+              ]
+            },
+            "description": "Filter by seniority level. Valid values: entry, senior, manager, director, vp, c_suite, owner, founder, partner.",
+            "example": [
+              "director",
+              "vp",
+              "c_suite"
+            ]
+          },
+          "contactEmailStatus": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "verified",
+                "unverified",
+                "likely to engage",
+                "unavailable"
+              ]
+            },
+            "description": "Filter by email verification status. Valid values: verified, unverified, likely to engage, unavailable.",
+            "example": [
+              "verified"
+            ]
+          },
+          "qOrganizationDomains": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Filter by specific company domains.",
+            "example": [
+              "google.com",
+              "meta.com"
+            ]
+          },
+          "currentlyUsingAnyOfTechnologyUids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Filter by technology stack (Apollo technology UIDs).",
+            "example": [
+              "salesforce",
+              "hubspot"
+            ]
+          },
+          "revenueRange": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Filter by annual revenue ranges (comma-separated min,max format).",
+            "example": [
+              "1000000,10000000",
+              "10000000,50000000"
+            ]
+          },
+          "organizationIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Filter by specific Apollo organization IDs.",
+            "example": [
+              "5f5e100a01d6b1000169c754"
+            ]
+          }
+        },
+        "description": "Apollo search filters. Used to count matching people without consuming credits, creating runs, or writing to the DB."
+      },
+      "SearchNextResponse": {
+        "type": "object",
+        "properties": {
           "people": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Person"
-            }
+            },
+            "description": "People returned for this page. Empty array when done=true."
           },
-          "pagination": {
-            "$ref": "#/components/schemas/Pagination"
+          "done": {
+            "type": "boolean",
+            "description": "True when all pages have been exhausted. No more results to fetch."
+          },
+          "totalEntries": {
+            "type": "number",
+            "description": "Total number of people matching the search filters across all pages."
           }
         },
         "required": [
-          "searchId",
-          "peopleCount",
-          "totalEntries",
           "people",
-          "pagination"
-        ]
+          "done",
+          "totalEntries"
+        ],
+        "description": "One page of search results with pagination state."
       },
       "Person": {
         "type": "object",
@@ -490,259 +699,6 @@
           "title",
           "linkedinUrl"
         ]
-      },
-      "Pagination": {
-        "type": "object",
-        "properties": {
-          "page": {
-            "type": "number"
-          },
-          "perPage": {
-            "type": "number"
-          },
-          "totalEntries": {
-            "type": "number"
-          },
-          "totalPages": {
-            "type": "number"
-          }
-        },
-        "required": [
-          "page",
-          "perPage",
-          "totalEntries",
-          "totalPages"
-        ]
-      },
-      "ErrorResponse": {
-        "type": "object",
-        "properties": {
-          "error": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "error"
-        ]
-      },
-      "SearchRequest": {
-        "type": "object",
-        "properties": {
-          "personTitles": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1
-            },
-            "description": "Filter by job titles. Combined with other filters using AND.",
-            "example": [
-              "CEO",
-              "CTO",
-              "VP Engineering"
-            ]
-          },
-          "qOrganizationKeywordTags": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1
-            },
-            "description": "Filter by organization keyword tags. Combined with other filters using AND.",
-            "example": [
-              "SaaS",
-              "fintech"
-            ]
-          },
-          "organizationLocations": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1
-            },
-            "description": "Filter by organization HQ location. Combined with other filters using AND.",
-            "example": [
-              "United States",
-              "California, US"
-            ]
-          },
-          "organizationNumEmployeesRanges": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "enum": [
-                "1,10",
-                "11,20",
-                "21,50",
-                "51,100",
-                "101,200",
-                "201,500",
-                "501,1000",
-                "1001,2000",
-                "2001,5000",
-                "5001,10000",
-                "10001,"
-              ]
-            },
-            "description": "Filter by employee count ranges. Combined with other filters using AND.",
-            "example": [
-              "11,20",
-              "21,50",
-              "51,100"
-            ]
-          },
-          "qOrganizationIndustryTagIds": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1
-            },
-            "description": "Filter by industry names (use GET /reference/industries for valid values). Combined with other filters using AND.",
-            "example": [
-              "Information Technology and Services",
-              "Computer Software"
-            ]
-          },
-          "qKeywords": {
-            "type": "string",
-            "description": "Free-text keyword search across person and organization fields. Combined with other filters using AND. Keep broad to avoid empty results.",
-            "example": "machine learning"
-          },
-          "personLocations": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1
-            },
-            "description": "Filter by person's location (city, state, country). Different from organizationLocations which filters by company HQ. Combined with other filters using AND.",
-            "example": [
-              "San Francisco, California, US",
-              "New York, US"
-            ]
-          },
-          "personSeniorities": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "enum": [
-                "entry",
-                "senior",
-                "manager",
-                "director",
-                "vp",
-                "c_suite",
-                "owner",
-                "founder",
-                "partner"
-              ]
-            },
-            "description": "Filter by seniority level. Valid values: entry, senior, manager, director, vp, c_suite, owner, founder, partner. Combined with other filters using AND.",
-            "example": [
-              "director",
-              "vp",
-              "c_suite"
-            ]
-          },
-          "contactEmailStatus": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "enum": [
-                "verified",
-                "unverified",
-                "likely to engage",
-                "unavailable"
-              ]
-            },
-            "description": "Filter by email verification status. Valid values: verified, unverified, likely to engage, unavailable. Combined with other filters using AND.",
-            "example": [
-              "verified"
-            ]
-          },
-          "qOrganizationDomains": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1
-            },
-            "description": "Filter by specific company domains. Combined with other filters using AND.",
-            "example": [
-              "google.com",
-              "meta.com"
-            ]
-          },
-          "currentlyUsingAnyOfTechnologyUids": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1
-            },
-            "description": "Filter by technology stack (Apollo technology UIDs). Combined with other filters using AND.",
-            "example": [
-              "salesforce",
-              "hubspot"
-            ]
-          },
-          "revenueRange": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1
-            },
-            "description": "Filter by annual revenue ranges (comma-separated min,max format, similar to employee ranges). Combined with other filters using AND.",
-            "example": [
-              "1000000,10000000",
-              "10000000,50000000"
-            ]
-          },
-          "organizationIds": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1
-            },
-            "description": "Filter by specific Apollo organization IDs. Combined with other filters using AND.",
-            "example": [
-              "5f5e100a01d6b1000169c754"
-            ]
-          },
-          "page": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 500
-          },
-          "perPage": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 100
-          }
-        },
-        "description": "All search filters are combined using AND. Using too many filters simultaneously may return 0 results — start broad and narrow down."
-      },
-      "SearchNextResponse": {
-        "type": "object",
-        "properties": {
-          "people": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Person"
-            },
-            "description": "People returned for this page. Empty array when done=true."
-          },
-          "done": {
-            "type": "boolean",
-            "description": "True when all pages have been exhausted. No more results to fetch."
-          },
-          "totalEntries": {
-            "type": "number",
-            "description": "Total number of people matching the search filters across all pages."
-          }
-        },
-        "required": [
-          "people",
-          "done",
-          "totalEntries"
-        ],
-        "description": "One page of search results with pagination state."
       },
       "SearchNextRequest": {
         "type": "object",
@@ -1718,87 +1674,6 @@
           "value"
         ]
       },
-      "SearchParamsResponse": {
-        "type": "object",
-        "properties": {
-          "searchParams": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/SearchFilters"
-              },
-              {
-                "description": "Validated Apollo search filters that returned results."
-              }
-            ]
-          },
-          "totalResults": {
-            "type": "number",
-            "description": "Apollo total_entries for the final search params."
-          },
-          "attempts": {
-            "type": "number",
-            "description": "Number of LLM iterations (1 = first try worked)."
-          },
-          "attemptHistory": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/SearchParamsAttempt"
-            },
-            "description": "Full history of all attempts for debugging."
-          },
-          "cached": {
-            "type": "boolean",
-            "description": "True if the result was served from the 24h cache (no LLM or Apollo calls made)."
-          }
-        },
-        "required": [
-          "searchParams",
-          "totalResults",
-          "attempts",
-          "attemptHistory",
-          "cached"
-        ]
-      },
-      "SearchParamsAttempt": {
-        "type": "object",
-        "properties": {
-          "searchParams": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/SearchFilters"
-              },
-              {
-                "description": "Apollo search filters. All filters are combined using AND. Start broad and narrow down to avoid empty results."
-              }
-            ]
-          },
-          "totalResults": {
-            "type": "number"
-          },
-          "error": {
-            "type": "string",
-            "description": "Validation or parsing error for this attempt, if any."
-          }
-        },
-        "required": [
-          "searchParams",
-          "totalResults"
-        ]
-      },
-      "SearchParamsRequest": {
-        "type": "object",
-        "properties": {
-          "context": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Unstructured context about the company — website content, target audience description, ICP notes, or any combination. The LLM extracts what it needs.",
-            "example": "We are a B2B SaaS company selling developer tools. Target audience: engineering leaders at mid-size tech companies in the US."
-          }
-        },
-        "required": [
-          "context"
-        ]
-      },
       "TransferBrandResponse": {
         "type": "object",
         "properties": {
@@ -1989,10 +1864,10 @@
         }
       }
     },
-    "/search": {
+    "/search/dry-run": {
       "post": {
-        "summary": "Search for people via Apollo",
-        "description": "Search Apollo's people database. If runId is provided, results are stored in DB and costs tracked via runs-service.",
+        "summary": "Cheap filter test — count matches without consuming credits or writing to the DB",
+        "description": "Validates the supplied filters and calls Apollo with per_page=1 to retrieve totalEntries. Performs zero database writes, zero cost tracking, and never creates a run in runs-service. Designed to be hammered by an LLM in lead-service that is exploring filter variants. Schema-invalid bodies return 400 with validationErrors populated.",
         "parameters": [
           {
             "schema": {
@@ -2009,61 +1884,6 @@
             "required": true,
             "name": "x-user-id",
             "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Caller's run ID — used as parentRunId when creating child runs",
-              "example": "run-abc-123"
-            },
-            "required": true,
-            "description": "Caller's run ID — used as parentRunId when creating child runs",
-            "name": "x-run-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Brand ID(s) — single UUID or comma-separated list",
-              "example": "brand-1,brand-2"
-            },
-            "required": true,
-            "description": "Brand ID(s) — single UUID or comma-separated list",
-            "name": "x-brand-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Campaign ID",
-              "example": "campaign-1"
-            },
-            "required": true,
-            "description": "Campaign ID",
-            "name": "x-campaign-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Feature slug for tracking",
-              "example": "lead-gen"
-            },
-            "required": false,
-            "description": "Feature slug for tracking",
-            "name": "x-feature-slug",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Workflow slug for run tracking",
-              "example": "fetch-lead"
-            },
-            "required": false,
-            "description": "Workflow slug for run tracking",
-            "name": "x-workflow-slug",
-            "in": "header"
           }
         ],
         "requestBody": {
@@ -2071,28 +1891,28 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SearchRequest"
+                "$ref": "#/components/schemas/SearchDryRunRequest"
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Search results",
+            "description": "Match count for the supplied filters",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SearchResponse"
+                  "$ref": "#/components/schemas/SearchDryRunResponse"
                 }
               }
             }
           },
           "400": {
-            "description": "Validation error",
+            "description": "Schema validation failed — see validationErrors",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/SearchDryRunResponse"
                 }
               }
             }
@@ -2113,7 +1933,7 @@
     "/search/next": {
       "post": {
         "summary": "Get next page of search results for a campaign",
-        "description": "Server-managed pagination. First call with searchParams creates a cursor at page 1. Subsequent calls (with or without searchParams) return the next page. Each call returns one page of 25 people and advances the cursor. When done=true, all pages are exhausted. If searchParams differ from the stored cursor, pagination resets to page 1.",
+        "description": "Server-managed pagination. First call with searchParams creates a cursor at page 1. Subsequent calls (with or without searchParams) return the next page. Each call returns one page of 100 people and advances the cursor. done=true is set only when the next page is past Apollo's totalPages — transient mid-stream empty pages do not exhaust the cursor. If searchParams differ from the stored cursor, pagination resets to page 1.",
         "parameters": [
           {
             "schema": {
@@ -2707,127 +2527,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/EmployeeRangesResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/search/params": {
-      "post": {
-        "summary": "Generate Apollo search parameters from context using LLM",
-        "description": "Takes unstructured context (website content, target audience, etc.) and uses Claude to generate Apollo search filters. Validates against Apollo — if 0 results, retries with broadened filters (max 10 attempts). Returns validated search params guaranteed to produce results, or the best-effort params after 10 attempts.",
-        "parameters": [
-          {
-            "schema": {
-              "type": "string"
-            },
-            "required": true,
-            "name": "x-org-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string"
-            },
-            "required": true,
-            "name": "x-user-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Caller's run ID — used as parentRunId when creating child runs",
-              "example": "run-abc-123"
-            },
-            "required": true,
-            "description": "Caller's run ID — used as parentRunId when creating child runs",
-            "name": "x-run-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Brand ID(s) — single UUID or comma-separated list",
-              "example": "brand-1,brand-2"
-            },
-            "required": true,
-            "description": "Brand ID(s) — single UUID or comma-separated list",
-            "name": "x-brand-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Campaign ID",
-              "example": "campaign-1"
-            },
-            "required": true,
-            "description": "Campaign ID",
-            "name": "x-campaign-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Feature slug for tracking",
-              "example": "lead-gen"
-            },
-            "required": false,
-            "description": "Feature slug for tracking",
-            "name": "x-feature-slug",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Workflow slug for run tracking",
-              "example": "fetch-lead"
-            },
-            "required": false,
-            "description": "Workflow slug for run tracking",
-            "name": "x-workflow-slug",
-            "in": "header"
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SearchParamsRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Generated and validated search parameters",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SearchParamsResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Validation error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }

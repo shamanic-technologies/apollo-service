@@ -138,13 +138,13 @@ describe("Billing credit authorization", () => {
     app.use(searchRoutes);
   });
 
-  // ─── POST /search ───────────────────────────────────────────────────────
+  // ─── POST /search/next ──────────────────────────────────────────────────
 
-  it("should NOT call authorizeCredit on POST /search (search is free)", async () => {
+  it("should NOT call authorizeCredit on POST /search/next (search is free)", async () => {
     await request(app)
-      .post("/search")
+      .post("/search/next")
       .set(HEADERS)
-      .send({ personTitles: ["CEO"] })
+      .send({ searchParams: { personTitles: ["CEO"] } })
       .expect(200);
 
     // Search is free — no billing authorization

@@ -60,12 +60,21 @@ let lastInsertValues: Record<string, unknown> | null = null;
 
 vi.mock("../../src/db/index.js", () => ({
   db: {
-    insert: vi.fn().mockReturnValue({
+    insert: vi.fn().mockImplementation((table: unknown) => ({
       values: vi.fn().mockImplementation((vals: unknown) => {
-        lastInsertValues = vals as Record<string, unknown>;
+        // Capture the audit search insert (skip the cursor-create insert).
+        const tableName = (table as { _?: { name?: string } } | undefined)?._?.name;
+        if (tableName !== "apollo_search_cursors") {
+          lastInsertValues = vals as Record<string, unknown>;
+        }
         return {
           returning: vi.fn().mockResolvedValue([{ id: "record-1" }]),
         };
+      }),
+    })),
+    update: vi.fn().mockReturnValue({
+      set: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue(undefined),
       }),
     }),
     select: vi.fn().mockReturnValue({
@@ -134,9 +143,9 @@ describe("tracking headers forwarding", () => {
     app.use(searchRouter);
 
     await request(app)
-      .post("/search")
+      .post("/search/next")
       .set(TRACKING_HEADERS)
-      .send({ personTitles: ["CEO"] })
+      .send({ searchParams: { personTitles: ["CEO"] } })
       .expect(200);
 
     expect(mockDecryptKey).toHaveBeenCalledWith(
@@ -154,9 +163,9 @@ describe("tracking headers forwarding", () => {
     app.use(searchRouter);
 
     await request(app)
-      .post("/search")
+      .post("/search/next")
       .set(TRACKING_HEADERS)
-      .send({ personTitles: ["CEO"] })
+      .send({ searchParams: { personTitles: ["CEO"] } })
       .expect(200);
 
     // Search is free — no addCosts call. Check updateRun gets identity with tracking fields.
@@ -178,9 +187,9 @@ describe("tracking headers forwarding", () => {
     app.use(searchRouter);
 
     await request(app)
-      .post("/search")
+      .post("/search/next")
       .set(TRACKING_HEADERS)
-      .send({ personTitles: ["CEO"] })
+      .send({ searchParams: { personTitles: ["CEO"] } })
       .expect(200);
 
     expect(mockCreateRun).toHaveBeenCalledWith(
@@ -198,9 +207,9 @@ describe("tracking headers forwarding", () => {
     app.use(searchRouter);
 
     await request(app)
-      .post("/search")
+      .post("/search/next")
       .set(TRACKING_HEADERS)
-      .send({ personTitles: ["CEO"] })
+      .send({ searchParams: { personTitles: ["CEO"] } })
       .expect(200);
 
     expect(mockCreateRun).toHaveBeenCalledWith(
@@ -216,9 +225,9 @@ describe("tracking headers forwarding", () => {
     app.use(searchRouter);
 
     await request(app)
-      .post("/search")
+      .post("/search/next")
       .set(TRACKING_HEADERS)
-      .send({ personTitles: ["CEO"] })
+      .send({ searchParams: { personTitles: ["CEO"] } })
       .expect(200);
 
     expect(lastInsertValues).toMatchObject({
@@ -232,9 +241,9 @@ describe("tracking headers forwarding", () => {
     app.use(searchRouter);
 
     await request(app)
-      .post("/search")
+      .post("/search/next")
       .set(TRACKING_HEADERS)
-      .send({ personTitles: ["CEO"] })
+      .send({ searchParams: { personTitles: ["CEO"] } })
       .expect(200);
 
     // The first insert is the search record
@@ -252,9 +261,9 @@ describe("tracking headers forwarding", () => {
     delete (headersWithout as any)["X-Workflow-Slug"];
 
     await request(app)
-      .post("/search")
+      .post("/search/next")
       .set(headersWithout)
-      .send({ personTitles: ["CEO"] })
+      .send({ searchParams: { personTitles: ["CEO"] } })
       .expect(200);
 
     // Should still work — workflowSlug is undefined
