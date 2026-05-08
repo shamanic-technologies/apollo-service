@@ -102,11 +102,23 @@ const TechnologySchema = z.object({
   category: z.string().optional(),
 });
 
-const PersonSchema = z
+const PhoneNumberSchema = z.object({
+  rawNumber: z.string().optional(),
+  sanitizedNumber: z.string().optional(),
+  type: z.string().optional(),
+  position: z.number().optional(),
+  status: z.string().optional(),
+  dncStatus: z.string().optional(),
+  dncOtherInfo: z.string().optional(),
+  dialerFlags: z.record(z.string(), z.unknown()).optional(),
+});
+
+export const PersonSchema = z
   .object({
     id: z.string(),
     firstName: z.string().nullable(),
     lastName: z.string().nullable(),
+    name: z.string().nullable().optional(),
     email: z.string().nullable(),
     emailStatus: EmailStatusSchema,
     title: z.string().nullable(),
@@ -124,8 +136,13 @@ const PersonSchema = z
     twitterUrl: z.string().nullable().optional(),
     githubUrl: z.string().nullable().optional(),
     facebookUrl: z.string().nullable().optional(),
+    // Contact details
+    personalEmails: z.array(z.string()).nullable().optional(),
+    mobilePhone: z.string().nullable().optional(),
+    phoneNumbers: z.array(PhoneNumberSchema).nullable().optional(),
     employmentHistory: z.array(EmploymentHistorySchema).nullable().optional(),
     // Organization (flat fields — Apollo's nested organization object is flattened to camelCase)
+    organizationId: z.string().nullable().optional(),
     organizationName: z.string().nullable().optional(),
     organizationDomain: z.string().nullable().optional(),
     organizationIndustry: z.string().nullable().optional(),
@@ -156,6 +173,7 @@ const PersonSchema = z
     organizationCountry: z.string().nullable().optional(),
     organizationStreetAddress: z.string().nullable().optional(),
     organizationPostalCode: z.string().nullable().optional(),
+    organizationRawAddress: z.string().nullable().optional(),
     organizationTechnologyNames: z.array(z.string()).nullable().optional(),
     organizationCurrentTechnologies: z.array(TechnologySchema).nullable().optional(),
     organizationKeywords: z.array(z.string()).nullable().optional(),
@@ -164,6 +182,10 @@ const PersonSchema = z
     organizationNumSuborganizations: z.number().nullable().optional(),
     organizationRetailLocationCount: z.number().nullable().optional(),
     organizationAlexaRanking: z.number().nullable().optional(),
+    raw: z.record(z.string(), z.unknown()).nullable().optional().openapi({
+      description:
+        "Full Apollo person payload (snake_case, verbatim). Includes any field returned by Apollo not yet mapped to a typed property. Use this for fields not exposed as typed columns.",
+    }),
   })
   .openapi("Person");
 
@@ -236,121 +258,7 @@ registry.registerPath({
   },
 });
 
-// ─── POST /search ────────────────────────────────────────────────────────────
-
-export const SearchRequestSchema = z
-  .object({
-    personTitles: z.array(z.string().min(1)).optional().openapi({
-      description: "Filter by job titles. Combined with other filters using AND.",
-      example: ["CEO", "CTO", "VP Engineering"],
-    }),
-    qOrganizationKeywordTags: z.array(z.string().min(1)).optional().openapi({
-      description: "Filter by organization keyword tags. Combined with other filters using AND.",
-      example: ["SaaS", "fintech"],
-    }),
-    organizationLocations: z.array(z.string().min(1)).optional().openapi({
-      description: "Filter by organization HQ location. Combined with other filters using AND.",
-      example: ["United States", "California, US"],
-    }),
-    organizationNumEmployeesRanges: z
-      .array(z.enum(VALID_EMPLOYEE_RANGES))
-      .optional()
-      .openapi({
-        description: "Filter by employee count ranges. Combined with other filters using AND.",
-        example: ["11,20", "21,50", "51,100"],
-      }),
-    qOrganizationIndustryTagIds: z.array(z.string().min(1)).optional().openapi({
-      description: "Filter by industry names (use GET /reference/industries for valid values). Combined with other filters using AND.",
-      example: ["Information Technology and Services", "Computer Software"],
-    }),
-    qKeywords: z.string().optional().openapi({
-      description: "Free-text keyword search across person and organization fields. Combined with other filters using AND. Keep broad to avoid empty results.",
-      example: "machine learning",
-    }),
-    personLocations: z.array(z.string().min(1)).optional().openapi({
-      description: "Filter by person's location (city, state, country). Different from organizationLocations which filters by company HQ. Combined with other filters using AND.",
-      example: ["San Francisco, California, US", "New York, US"],
-    }),
-    personSeniorities: z.array(z.enum(VALID_SENIORITIES)).optional().openapi({
-      description: "Filter by seniority level. Valid values: entry, senior, manager, director, vp, c_suite, owner, founder, partner. Combined with other filters using AND.",
-      example: ["director", "vp", "c_suite"],
-    }),
-    contactEmailStatus: z.array(z.enum(VALID_EMAIL_STATUSES)).optional().openapi({
-      description: "Filter by email verification status. Valid values: verified, unverified, likely to engage, unavailable. Combined with other filters using AND.",
-      example: ["verified"],
-    }),
-    qOrganizationDomains: z.array(z.string().min(1)).optional().openapi({
-      description: "Filter by specific company domains. Combined with other filters using AND.",
-      example: ["google.com", "meta.com"],
-    }),
-    currentlyUsingAnyOfTechnologyUids: z.array(z.string().min(1)).optional().openapi({
-      description: "Filter by technology stack (Apollo technology UIDs). Combined with other filters using AND.",
-      example: ["salesforce", "hubspot"],
-    }),
-    revenueRange: z.array(z.string().min(1)).optional().openapi({
-      description: "Filter by annual revenue ranges (comma-separated min,max format, similar to employee ranges). Combined with other filters using AND.",
-      example: ["1000000,10000000", "10000000,50000000"],
-    }),
-    organizationIds: z.array(z.string().min(1)).optional().openapi({
-      description: "Filter by specific Apollo organization IDs. Combined with other filters using AND.",
-      example: ["5f5e100a01d6b1000169c754"],
-    }),
-    page: z.number().int().min(1).max(500).optional(),
-    perPage: z.number().int().min(1).max(100).optional(),
-  })
-  .openapi("SearchRequest", {
-    description: "All search filters are combined using AND. Using too many filters simultaneously may return 0 results — start broad and narrow down.",
-  });
-
-const PaginationSchema = z
-  .object({
-    page: z.number(),
-    perPage: z.number(),
-    totalEntries: z.number(),
-    totalPages: z.number(),
-  })
-  .openapi("Pagination");
-
-const SearchResponseSchema = z
-  .object({
-    searchId: z.string().nullable(),
-    peopleCount: z.number(),
-    totalEntries: z.number(),
-    people: z.array(PersonSchema),
-    pagination: PaginationSchema,
-  })
-  .openapi("SearchResponse");
-
-registry.registerPath({
-  method: "post",
-  path: "/search",
-  summary: "Search for people via Apollo",
-  description:
-    "Search Apollo's people database. If runId is provided, results are stored in DB and costs tracked via runs-service.",
-  request: {
-    headers: runContextHeaders,
-    body: {
-      content: { "application/json": { schema: SearchRequestSchema } },
-      required: true,
-    },
-  },
-  responses: {
-    200: {
-      description: "Search results",
-      content: { "application/json": { schema: SearchResponseSchema } },
-    },
-    400: {
-      description: "Validation error",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-    500: {
-      description: "Internal server error",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-  },
-});
-
-// ─── POST /search/next ──────────────────────────────────────────────────────
+// ─── Shared filter schema (used by /search/next + /search/dry-run) ──────────
 
 export const SearchFiltersSchema = z
   .object({
@@ -411,6 +319,56 @@ export const SearchFiltersSchema = z
     description: "Apollo search filters. All filters are combined using AND. Start broad and narrow down to avoid empty results.",
   });
 
+// ─── POST /search/dry-run ───────────────────────────────────────────────────
+
+export const SearchDryRunRequestSchema = SearchFiltersSchema.openapi("SearchDryRunRequest", {
+  description:
+    "Apollo search filters. Used to count matching people without consuming credits, creating runs, or writing to the DB.",
+});
+
+const SearchDryRunResponseSchema = z
+  .object({
+    totalEntries: z.number().openapi({
+      description: "Total number of people matching the filters across all pages.",
+    }),
+    validationErrors: z.array(z.string()).openapi({
+      description:
+        "Empty array on a successful 200. On a 400, lists the schema validation errors that prevented the call.",
+    }),
+  })
+  .openapi("SearchDryRunResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/search/dry-run",
+  summary: "Cheap filter test — count matches without consuming credits or writing to the DB",
+  description:
+    "Validates the supplied filters and calls Apollo with per_page=1 to retrieve totalEntries. Performs zero database writes, zero cost tracking, and never creates a run in runs-service. Designed to be hammered by an LLM in lead-service that is exploring filter variants. Schema-invalid bodies return 400 with validationErrors populated.",
+  request: {
+    headers: basicHeaders,
+    body: {
+      content: { "application/json": { schema: SearchDryRunRequestSchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      description: "Match count for the supplied filters",
+      content: { "application/json": { schema: SearchDryRunResponseSchema } },
+    },
+    400: {
+      description: "Schema validation failed — see validationErrors",
+      content: { "application/json": { schema: SearchDryRunResponseSchema } },
+    },
+    500: {
+      description: "Internal server error",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+// ─── POST /search/next ──────────────────────────────────────────────────────
+
 export const SearchNextRequestSchema = z
   .object({
     searchParams: SearchFiltersSchema.optional().openapi({
@@ -436,7 +394,7 @@ registry.registerPath({
   path: "/search/next",
   summary: "Get next page of search results for a campaign",
   description:
-    "Server-managed pagination. First call with searchParams creates a cursor at page 1. Subsequent calls (with or without searchParams) return the next page. Each call returns one page of 25 people and advances the cursor. When done=true, all pages are exhausted. If searchParams differ from the stored cursor, pagination resets to page 1.",
+    "Server-managed pagination. First call with searchParams creates a cursor at page 1. Subsequent calls (with or without searchParams) return the next page. Each call returns one page of 100 people and advances the cursor. done=true is set only when the next page is past Apollo's totalPages — transient mid-stream empty pages do not exhaust the cursor. If searchParams differ from the stored cursor, pagination resets to page 1.",
   request: {
     headers: runContextHeaders,
     body: {
@@ -608,6 +566,7 @@ const EnrichmentRecordSchema = z
     // Person fields
     firstName: z.string().nullable().optional(),
     lastName: z.string().nullable().optional(),
+    name: z.string().nullable().optional(),
     email: z.string().nullable().optional(),
     emailStatus: EmailStatusSchema.optional(),
     title: z.string().nullable().optional(),
@@ -624,8 +583,12 @@ const EnrichmentRecordSchema = z
     twitterUrl: z.string().nullable().optional(),
     githubUrl: z.string().nullable().optional(),
     facebookUrl: z.string().nullable().optional(),
+    personalEmails: z.array(z.string()).nullable().optional(),
+    mobilePhone: z.string().nullable().optional(),
+    phoneNumbers: z.array(PhoneNumberSchema).nullable().optional(),
     employmentHistory: z.array(EmploymentHistorySchema).nullable().optional(),
     // Organization fields
+    organizationId: z.string().nullable().optional(),
     organizationName: z.string().nullable().optional(),
     organizationDomain: z.string().nullable().optional(),
     organizationIndustry: z.string().nullable().optional(),
@@ -656,6 +619,7 @@ const EnrichmentRecordSchema = z
     organizationCountry: z.string().nullable().optional(),
     organizationStreetAddress: z.string().nullable().optional(),
     organizationPostalCode: z.string().nullable().optional(),
+    organizationRawAddress: z.string().nullable().optional(),
     organizationTechnologyNames: z.array(z.string()).nullable().optional(),
     organizationCurrentTechnologies: z.array(TechnologySchema).nullable().optional(),
     organizationKeywords: z.array(z.string()).nullable().optional(),
@@ -825,76 +789,6 @@ registry.registerPath({
       content: {
         "application/json": { schema: EmployeeRangesResponseSchema },
       },
-    },
-    500: {
-      description: "Internal server error",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-  },
-});
-
-// ─── POST /search/params ────────────────────────────────────────────────────
-
-export const SearchParamsRequestSchema = z
-  .object({
-    context: z.string().min(1).openapi({
-      description:
-        "Unstructured context about the company — website content, target audience description, ICP notes, or any combination. The LLM extracts what it needs.",
-      example:
-        "We are a B2B SaaS company selling developer tools. Target audience: engineering leaders at mid-size tech companies in the US.",
-    }),
-  })
-  .openapi("SearchParamsRequest");
-
-const SearchParamsAttemptSchema = z
-  .object({
-    searchParams: SearchFiltersSchema,
-    totalResults: z.number(),
-    error: z.string().optional().openapi({ description: "Validation or parsing error for this attempt, if any." }),
-  })
-  .openapi("SearchParamsAttempt");
-
-const SearchParamsResponseSchema = z
-  .object({
-    searchParams: SearchFiltersSchema.openapi({
-      description: "Validated Apollo search filters that returned results.",
-    }),
-    totalResults: z.number().openapi({
-      description: "Apollo total_entries for the final search params.",
-    }),
-    attempts: z.number().openapi({
-      description: "Number of LLM iterations (1 = first try worked).",
-    }),
-    attemptHistory: z.array(SearchParamsAttemptSchema).openapi({
-      description: "Full history of all attempts for debugging.",
-    }),
-    cached: z.boolean().openapi({
-      description: "True if the result was served from the 24h cache (no LLM or Apollo calls made).",
-    }),
-  })
-  .openapi("SearchParamsResponse");
-
-registry.registerPath({
-  method: "post",
-  path: "/search/params",
-  summary: "Generate Apollo search parameters from context using LLM",
-  description:
-    "Takes unstructured context (website content, target audience, etc.) and uses Claude to generate Apollo search filters. Validates against Apollo — if 0 results, retries with broadened filters (max 10 attempts). Returns validated search params guaranteed to produce results, or the best-effort params after 10 attempts.",
-  request: {
-    headers: runContextHeaders,
-    body: {
-      content: { "application/json": { schema: SearchParamsRequestSchema } },
-      required: true,
-    },
-  },
-  responses: {
-    200: {
-      description: "Generated and validated search parameters",
-      content: { "application/json": { schema: SearchParamsResponseSchema } },
-    },
-    400: {
-      description: "Validation error",
-      content: { "application/json": { schema: ErrorResponseSchema } },
     },
     500: {
       description: "Internal server error",

@@ -148,7 +148,7 @@ describe("POST /search/next", () => {
 
     mockSearchPeople.mockResolvedValue({
       people: makePeople(["p1", "p2", "p3"]),
-      total_entries: 75,
+      total_entries: 250,
     });
 
     let callCount = 0;
@@ -176,7 +176,7 @@ describe("POST /search/next", () => {
 
     expect(res.body.people).toHaveLength(3);
     expect(res.body.done).toBe(false);
-    expect(res.body.totalEntries).toBe(75);
+    expect(res.body.totalEntries).toBe(250);
     expect(mockSearchPeople).toHaveBeenCalledTimes(1);
     // Cursor insert should have been called
     expect(mockInsertReturning).toHaveBeenCalled();
@@ -191,7 +191,7 @@ describe("POST /search/next", () => {
       campaignId: "campaign-1",
       searchParams: SEARCH_PARAMS,
       currentPage: 3,
-      totalEntries: 75,
+      totalEntries: 250,
       exhausted: false,
     };
 
@@ -208,7 +208,7 @@ describe("POST /search/next", () => {
     // Should call Apollo with page 3
     expect(mockSearchPeople).toHaveBeenCalledWith(
       "fake-apollo-key",
-      expect.objectContaining({ page: 3, per_page: 25 })
+      expect.objectContaining({ page: 3, per_page: 100 })
     );
   });
 
@@ -327,7 +327,7 @@ describe("POST /search/next", () => {
       campaignId: "campaign-1",
       searchParams: SEARCH_PARAMS,
       currentPage: 2,
-      totalEntries: 75,
+      totalEntries: 250,
       exhausted: false,
     };
 
@@ -346,22 +346,26 @@ describe("POST /search/next", () => {
     );
   });
 
-  // ─── Exhaustion when Apollo returns empty ─────────────────────────────────
+  // ─── Mid-stream empty page (regression: must NOT mark exhausted) ───────────
 
-  it("marks exhausted when Apollo returns 0 people", async () => {
+  it("does NOT mark exhausted on a mid-stream empty page (Apollo returns 0 but more pages remain)", async () => {
+    // Regression: Apollo occasionally returns an empty page even though more
+    // matches exist. Marking the cursor exhausted on the first empty response
+    // permanently broke pagination for the campaign. The cursor must be driven
+    // strictly by Apollo's totalPages.
     mockCursor = {
       id: "cursor-1",
       orgId: "org-internal-123",
       campaignId: "campaign-1",
       searchParams: SEARCH_PARAMS,
-      currentPage: 4,
-      totalEntries: 75,
+      currentPage: 1,
+      totalEntries: 250,
       exhausted: false,
     };
 
     mockSearchPeople.mockResolvedValue({
       people: [],
-      total_entries: 75,
+      total_entries: 250,
     });
 
     const res = await request(app)
@@ -374,10 +378,79 @@ describe("POST /search/next", () => {
       .expect(200);
 
     expect(res.body.people).toHaveLength(0);
-    expect(res.body.done).toBe(true);
-    // Cursor should be updated with exhausted=true
+    expect(res.body.done).toBe(false);
+    expect(res.body.totalEntries).toBe(250);
+    // Cursor should advance to the next page but stay non-exhausted
     expect(mockUpdateSet).toHaveBeenCalledWith(
-      expect.objectContaining({ exhausted: true })
+      expect.objectContaining({ currentPage: 2, exhausted: false })
+    );
+  });
+
+  // ─── Exhaustion when nextPage > totalPages ────────────────────────────────
+
+  it("marks exhausted when nextPage > totalPages (Apollo's totalPages is the source of truth)", async () => {
+    // 250 entries / per_page=100 → 3 totalPages. Reading page 3 → nextPage=4 > 3 → exhausted.
+    mockCursor = {
+      id: "cursor-1",
+      orgId: "org-internal-123",
+      campaignId: "campaign-1",
+      searchParams: SEARCH_PARAMS,
+      currentPage: 3,
+      totalEntries: 250,
+      exhausted: false,
+    };
+
+    mockSearchPeople.mockResolvedValue({
+      people: [{ id: "p-tail" }],
+      total_entries: 250,
+    });
+
+    const res = await request(app)
+      .post("/search/next")
+      .set("X-API-Key", "test-key")
+      .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
+      .send({})
+      .expect(200);
+
+    expect(res.body.done).toBe(true);
+    expect(mockUpdateSet).toHaveBeenCalledWith(
+      expect.objectContaining({ currentPage: 4, exhausted: true })
+    );
+  });
+
+  // ─── No artificial page cap ───────────────────────────────────────────────
+
+  it("does NOT enforce a 500-page artificial cap when Apollo's totalPages exceeds 500", async () => {
+    // Reading page 600 of a 1000-page result set must stay non-exhausted.
+    mockCursor = {
+      id: "cursor-1",
+      orgId: "org-internal-123",
+      campaignId: "campaign-1",
+      searchParams: SEARCH_PARAMS,
+      currentPage: 600,
+      totalEntries: 100_000,
+      exhausted: false,
+    };
+
+    mockSearchPeople.mockResolvedValue({
+      people: [{ id: "p-mid" }],
+      total_entries: 100_000,
+    });
+
+    const res = await request(app)
+      .post("/search/next")
+      .set("X-API-Key", "test-key")
+      .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
+      .send({})
+      .expect(200);
+
+    expect(res.body.done).toBe(false);
+    expect(mockUpdateSet).toHaveBeenCalledWith(
+      expect.objectContaining({ currentPage: 601, exhausted: false })
     );
   });
 
@@ -390,7 +463,7 @@ describe("POST /search/next", () => {
       campaignId: "campaign-1",
       searchParams: SEARCH_PARAMS,
       currentPage: 1,
-      totalEntries: 75,
+      totalEntries: 250,
       exhausted: false,
     };
 
@@ -453,7 +526,7 @@ describe("POST /search/next", () => {
       campaignId: "campaign-1",
       searchParams: SEARCH_PARAMS,
       currentPage: 1,
-      totalEntries: 75,
+      totalEntries: 250,
       exhausted: false,
     };
 
@@ -531,5 +604,47 @@ describe("POST /search/next", () => {
     expect(mockCreateRun).toHaveBeenCalledWith(
       expect.objectContaining({ workflowSlug: "fetch-lead" })
     );
+  });
+
+  // ─── Hard failure on runs-service errors ─────────────────────────────────
+
+  it("returns 500 and skips Apollo when createRun fails (createRun runs first)", async () => {
+    mockCreateRun.mockRejectedValueOnce(new Error("runs-service POST /v1/runs failed: 401"));
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await request(app)
+      .post("/search/next")
+      .set("X-API-Key", "test-key")
+      .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
+      .send({ searchParams: SEARCH_PARAMS })
+      .expect(500);
+
+    expect(res.body.error).toContain("runs-service POST /v1/runs failed: 401");
+    // Apollo should never be called when createRun fails — we run createRun first.
+    expect(mockSearchPeople).not.toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+  });
+
+  it("returns 500 when updateRun fails", async () => {
+    mockUpdateRun.mockRejectedValueOnce(new Error("runs-service PATCH failed: 503"));
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await request(app)
+      .post("/search/next")
+      .set("X-API-Key", "test-key")
+      .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
+      .send({ searchParams: SEARCH_PARAMS })
+      .expect(500);
+
+    expect(res.body.error).toContain("runs-service PATCH failed: 503");
+
+    errorSpy.mockRestore();
   });
 });

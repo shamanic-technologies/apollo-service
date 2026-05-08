@@ -9,7 +9,6 @@ import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { getSql } from "./db/index.js";
 import healthRoutes from "./routes/health.js";
 import searchRoutes from "./routes/search.js";
-import searchParamsRoutes from "./routes/search-params.js";
 import referenceRoutes from "./routes/reference.js";
 import validateRoutes from "./routes/validate.js";
 import matchRoutes from "./routes/match.js";
@@ -46,7 +45,6 @@ app.get("/openapi.json", (_req, res) => {
 // Routes
 app.use(healthRoutes);
 app.use(searchRoutes);
-app.use(searchParamsRoutes);
 app.use(referenceRoutes);
 app.use(validateRoutes);
 app.use(matchRoutes);

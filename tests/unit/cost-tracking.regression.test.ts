@@ -63,6 +63,7 @@ vi.mock("../../src/db/index.js", () => ({
           orderBy: vi.fn().mockReturnValue({
             limit: vi.fn().mockResolvedValue([]),
           }),
+          limit: vi.fn().mockResolvedValue([]),
         }),
       }),
     }),
@@ -76,6 +77,11 @@ vi.mock("../../src/db/index.js", () => ({
 vi.mock("../../src/db/schema.js", () => ({
   apolloPeopleSearches: { id: { name: "id" } },
   apolloPeopleEnrichments: { id: { name: "id" } },
+  apolloSearchCursors: {
+    id: { name: "id" },
+    orgId: { name: "org_id" },
+    campaignId: { name: "campaign_id" },
+  },
 }));
 
 vi.mock("../../src/lib/keys-client.js", () => ({
@@ -207,7 +213,7 @@ describe("Apollo service cost tracking", () => {
 
   it("should NOT post enrichment costs for search results (regression: search != enrichment)", async () => {
     await request(app)
-      .post("/search")
+      .post("/search/next")
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
@@ -215,7 +221,7 @@ describe("Apollo service cost tracking", () => {
       .set("X-Brand-Id", "brand-1")
       .set("X-Campaign-Id", "campaign-1")
       .send({
-        personTitles: ["CEO"],
+        searchParams: { personTitles: ["CEO"] },
       })
       .expect(200);
 
@@ -229,7 +235,7 @@ describe("Apollo service cost tracking", () => {
 
   it("should NOT post any cost from POST /search (search is free)", async () => {
     await request(app)
-      .post("/search")
+      .post("/search/next")
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
@@ -237,14 +243,14 @@ describe("Apollo service cost tracking", () => {
       .set("X-Brand-Id", "brand-1")
       .set("X-Campaign-Id", "campaign-1")
       .send({
-        personTitles: ["CEO"],
+        searchParams: { personTitles: ["CEO"] },
       })
       .expect(200);
 
     expect(mockAddCosts).not.toHaveBeenCalled();
   });
 
-  // ─── Hard failure on runs-service errors (POST /search) ──────────────────────
+  // ─── Hard failure on runs-service errors (POST /search/next) ──────────────────────
 
   it("should return 500 when createRun fails", async () => {
     mockCreateRun.mockRejectedValue(new Error("runs-service POST /v1/runs failed: 401"));
@@ -252,7 +258,7 @@ describe("Apollo service cost tracking", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const res = await request(app)
-      .post("/search")
+      .post("/search/next")
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
@@ -260,7 +266,7 @@ describe("Apollo service cost tracking", () => {
       .set("X-Brand-Id", "brand-1")
       .set("X-Campaign-Id", "campaign-1")
       .send({
-        personTitles: ["CEO"],
+        searchParams: { personTitles: ["CEO"] },
       })
       .expect(500);
 
@@ -276,7 +282,7 @@ describe("Apollo service cost tracking", () => {
     mockAddCosts.mockRejectedValue(new Error("Cost name not registered"));
 
     await request(app)
-      .post("/search")
+      .post("/search/next")
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
@@ -284,7 +290,7 @@ describe("Apollo service cost tracking", () => {
       .set("X-Brand-Id", "brand-1")
       .set("X-Campaign-Id", "campaign-1")
       .send({
-        personTitles: ["CEO"],
+        searchParams: { personTitles: ["CEO"] },
       })
       .expect(200);
 
@@ -297,7 +303,7 @@ describe("Apollo service cost tracking", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const res = await request(app)
-      .post("/search")
+      .post("/search/next")
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
@@ -305,7 +311,7 @@ describe("Apollo service cost tracking", () => {
       .set("X-Brand-Id", "brand-1")
       .set("X-Campaign-Id", "campaign-1")
       .send({
-        personTitles: ["CEO"],
+        searchParams: { personTitles: ["CEO"] },
       })
       .expect(500);
 
@@ -316,7 +322,7 @@ describe("Apollo service cost tracking", () => {
 
   it("should NOT create enrichment runs in search (only 1 createRun for search itself)", async () => {
     await request(app)
-      .post("/search")
+      .post("/search/next")
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
@@ -324,27 +330,27 @@ describe("Apollo service cost tracking", () => {
       .set("X-Brand-Id", "brand-1")
       .set("X-Campaign-Id", "campaign-1")
       .send({
-        personTitles: ["CEO"],
+        searchParams: { personTitles: ["CEO"] },
       })
       .expect(200);
 
     // Only 1 createRun call for the search run, NOT N+1 (search + one per person)
     expect(mockCreateRun).toHaveBeenCalledTimes(1);
     expect(mockCreateRun).toHaveBeenCalledWith(
-      expect.objectContaining({ taskName: "people-search" })
+      expect.objectContaining({ taskName: "people-search-next" })
     );
   });
 
   it("should return 400 when no x-run-id header provided", async () => {
     const res = await request(app)
-      .post("/search")
+      .post("/search/next")
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
       .set("X-Brand-Id", "brand-1")
       .set("X-Campaign-Id", "campaign-1")
       .send({
-        personTitles: ["CEO"],
+        searchParams: { personTitles: ["CEO"] },
       })
       .expect(400);
 
@@ -547,9 +553,9 @@ describe("Apollo service cost tracking", () => {
 
   // ─── workflowSlug propagation ─────────────────────────────────────────────
 
-  it("should pass workflowSlug to createRun on POST /search", async () => {
+  it("should pass workflowSlug to createRun on POST /search/next", async () => {
     await request(app)
-      .post("/search")
+      .post("/search/next")
       .set("X-API-Key", "test-service-secret")
       .set("X-Org-Id", "org_test")
       .set("X-User-Id", "user_test")
@@ -558,7 +564,7 @@ describe("Apollo service cost tracking", () => {
       .set("X-Campaign-Id", "campaign-1")
       .set("X-Workflow-Slug", "fetch-lead")
       .send({
-        personTitles: ["CEO"],
+        searchParams: { personTitles: ["CEO"] },
       })
       .expect(200);
 

@@ -57,6 +57,7 @@ export const apolloPeopleEnrichments = pgTable(
     // Person fields
     firstName: text("first_name"),
     lastName: text("last_name"),
+    name: text("name"),
     email: text("email"),
     emailStatus: text("email_status"),
     title: text("title"),
@@ -73,9 +74,13 @@ export const apolloPeopleEnrichments = pgTable(
     twitterUrl: text("twitter_url"),
     githubUrl: text("github_url"),
     facebookUrl: text("facebook_url"),
+    personalEmails: jsonb("personal_emails"),
+    mobilePhone: text("mobile_phone"),
+    phoneNumbers: jsonb("phone_numbers"),
     employmentHistory: jsonb("employment_history"),
 
     // Organization fields
+    organizationId: text("organization_id"),
     organizationName: text("organization_name"),
     organizationDomain: text("organization_domain"),
     organizationIndustry: text("organization_industry"),
@@ -106,6 +111,7 @@ export const apolloPeopleEnrichments = pgTable(
     organizationCountry: text("organization_country"),
     organizationStreetAddress: text("organization_street_address"),
     organizationPostalCode: text("organization_postal_code"),
+    organizationRawAddress: text("organization_raw_address"),
     organizationTechnologyNames: jsonb("organization_technology_names"),
     organizationCurrentTechnologies: jsonb("organization_current_technologies"),
     organizationKeywords: jsonb("organization_keywords"),
@@ -162,26 +168,6 @@ export const apolloSearchCursors = pgTable(
   (table) => [
     uniqueIndex("idx_cursors_org_campaign").on(table.orgId, table.campaignId),
     index("idx_cursors_campaign").on(table.campaignId),
-  ]
-);
-
-// Cache for LLM-generated search params (24h TTL, keyed by orgId + brandId + context hash)
-export const apolloSearchParamsCache = pgTable(
-  "apollo_search_params_cache",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    orgId: uuid("org_id").notNull(),
-    brandIds: text("brand_ids").array().notNull(),
-    brandIdsKey: text("brand_ids_key").notNull(), // sorted CSV for unique index
-    contextHash: text("context_hash").notNull(),
-    searchParams: jsonb("search_params").notNull(),
-    totalResults: integer("total_results").notNull().default(0),
-    attempts: integer("attempts").notNull().default(1),
-    attemptHistory: jsonb("attempt_history"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [
-    uniqueIndex("idx_params_cache_lookup").on(table.orgId, table.brandIdsKey, table.contextHash),
   ]
 );
 
