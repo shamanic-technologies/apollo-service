@@ -171,26 +171,6 @@ export const apolloSearchCursors = pgTable(
   ]
 );
 
-// Cache for LLM-generated search params (24h TTL, keyed by orgId + brandId + context hash)
-export const apolloSearchParamsCache = pgTable(
-  "apollo_search_params_cache",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    orgId: uuid("org_id").notNull(),
-    brandIds: text("brand_ids").array().notNull(),
-    brandIdsKey: text("brand_ids_key").notNull(), // sorted CSV for unique index
-    contextHash: text("context_hash").notNull(),
-    searchParams: jsonb("search_params").notNull(),
-    totalResults: integer("total_results").notNull().default(0),
-    attempts: integer("attempts").notNull().default(1),
-    attemptHistory: jsonb("attempt_history"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [
-    uniqueIndex("idx_params_cache_lookup").on(table.orgId, table.brandIdsKey, table.contextHash),
-  ]
-);
-
 export type ApolloPeopleSearch = typeof apolloPeopleSearches.$inferSelect;
 export type NewApolloPeopleSearch = typeof apolloPeopleSearches.$inferInsert;
 export type ApolloPeopleEnrichment = typeof apolloPeopleEnrichments.$inferSelect;

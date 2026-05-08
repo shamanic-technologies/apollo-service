@@ -9,7 +9,7 @@ import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/run
 import { authorizeCredit } from "../lib/billing-client.js";
 import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment, toApolloSearchParams } from "../lib/transform.js";
 import { assertKeySource } from "../lib/validators.js";
-import { SearchRequestSchema, SearchNextRequestSchema, EnrichRequestSchema, StatsRequestSchema, type EmailStatus } from "../schemas.js";
+import { SearchNextRequestSchema, SearchDryRunRequestSchema, EnrichRequestSchema, StatsRequestSchema } from "../schemas.js";
 import { deepEqual } from "../lib/deep-equal.js";
 import { traceEvent } from "../lib/trace-event.js";
 import {
@@ -22,163 +22,48 @@ import {
 
 const router = Router();
 
+const DEFAULT_PER_PAGE = 100;
+
 /**
- * POST /search - Search for people via Apollo
+ * POST /search/dry-run — cheap filter test. No DB writes, no cost tracking, no run creation.
+ * Validates filters via SearchFiltersSchema, calls Apollo with per_page=1, returns totalEntries.
+ * Designed to be hammered by an LLM testing many filter variants.
  */
-router.post("/search", serviceAuth, async (req: AuthenticatedRequest, res) => {
+router.post("/search/dry-run", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const { runId, brandId, brandIds, campaignId, featureSlug, workflowSlug } = req;
-    if (!runId || !brandIds?.length || !campaignId) {
-      return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
+    if (!req.orgId || !req.userId) {
+      return res.status(400).json({ totalEntries: 0, validationErrors: ["x-org-id and x-user-id headers required"] });
     }
-    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, featureSlug, workflowSlug };
-    const tracking = { brandId, campaignId, featureSlug, workflowSlug };
 
-    const parsed = SearchRequestSchema.safeParse(req.body);
+    const parsed = SearchDryRunRequestSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
+      const flat = parsed.error.flatten();
+      const validationErrors = [
+        ...flat.formErrors,
+        ...Object.entries(flat.fieldErrors).flatMap(([k, v]) => (v ?? []).map((m) => `${k}: ${m}`)),
+      ];
+      return res.status(400).json({ totalEntries: 0, validationErrors });
     }
-    const searchParams = parsed.data;
 
-    traceEvent(runId, { service: "apollo-service", event: "search-start", detail: `page=${searchParams.page ?? 1}, perPage=${searchParams.perPage ?? 25}, campaignId=${campaignId}` }, req.headers).catch(() => {});
+    const { key: apolloApiKey } = await decryptKey(
+      req.orgId,
+      req.userId,
+      "apollo",
+      { callerMethod: "POST", callerPath: "/search/dry-run" },
+      { brandId: req.brandId, campaignId: req.campaignId, featureSlug: req.featureSlug, workflowSlug: req.workflowSlug }
+    );
 
-    // Get Apollo API key from key-service
-    const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/search" }, tracking);
-
-    // Call Apollo API (search is free — no credits consumed)
     const apolloParams = {
-      ...toApolloSearchParams(searchParams),
-      page: searchParams.page || 1,
-      per_page: searchParams.perPage || 25,
+      ...toApolloSearchParams(parsed.data),
+      page: 1,
+      per_page: 1,
     };
-
-    // Create a child run in runs-service for this search
-    const searchRun = await createRun({
-      orgId: req.orgId!,
-      userId: req.userId,
-      brandId,
-      campaignId,
-      featureSlug,
-      serviceName: "apollo-service",
-      taskName: "people-search",
-      parentRunId: runId,
-      workflowSlug,
-    });
-
     const result = await searchPeople(apolloApiKey, apolloParams);
-
-    // Get total entries (new API format has it at root level)
     const totalEntries = result.total_entries ?? result.pagination?.total_entries ?? 0;
 
-    if (!result.people || result.people.length === 0) {
-      console.warn("[Apollo Service][POST /search] ⚠ Apollo returned 0 people", {
-        orgId: req.orgId,
-        runId,
-        apolloParams,
-        totalEntries,
-        rawResponseKeys: Object.keys(result),
-      });
-    } else {
-      console.log(`[Apollo Service][POST /search] Found ${result.people.length} people (${totalEntries} total) runId=${runId} campaignId=${campaignId}`);
-    }
-
-    // Store search record
-    const [search] = await db
-      .insert(apolloPeopleSearches)
-      .values({
-        orgId: req.orgId!,
-        runId,
-        brandIds,
-        campaignId,
-        featureSlug,
-        workflowSlug,
-        requestParams: apolloParams,
-        peopleCount: result.people.length,
-        totalEntries,
-        responseRaw: result,
-      })
-      .returning();
-
-    // Store search result records (no enrichment costs — those are tracked when POST /enrich is called)
-    assertKeySource(keySource);
-    for (const person of result.people as ApolloPerson[]) {
-      await db.insert(apolloPeopleEnrichments).values({
-        orgId: req.orgId!,
-        runId,
-        searchId: search.id,
-        brandIds,
-        campaignId,
-        featureSlug,
-        workflowSlug,
-        keySource,
-        ...toEnrichmentDbValues(person),
-      });
-    }
-
-    // Search is free — no Apollo credits consumed. Just mark run as completed.
-    await updateRun(searchRun.id, "completed", identity);
-
-    // Fill in cached emails for people without email
-    const personIdsWithoutEmail = result.people
-      .filter((p: ApolloPerson) => !p.email && p.id)
-      .map((p: ApolloPerson) => p.id);
-
-    const emailCache = new Map<string, { email: string; emailStatus: EmailStatus | null }>();
-    if (personIdsWithoutEmail.length > 0) {
-      const twelveMonthsAgo = new Date();
-      twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
-
-      const cachedEnrichments = await db
-        .select({
-          apolloPersonId: apolloPeopleEnrichments.apolloPersonId,
-          email: apolloPeopleEnrichments.email,
-          emailStatus: apolloPeopleEnrichments.emailStatus,
-        })
-        .from(apolloPeopleEnrichments)
-        .where(
-          and(
-            inArray(apolloPeopleEnrichments.apolloPersonId, personIdsWithoutEmail),
-            isNotNull(apolloPeopleEnrichments.email),
-            gt(apolloPeopleEnrichments.createdAt, twelveMonthsAgo)
-          )
-        );
-
-      for (const row of cachedEnrichments) {
-        if (row.apolloPersonId && row.email) {
-          emailCache.set(row.apolloPersonId, { email: row.email, emailStatus: row.emailStatus as EmailStatus | null });
-        }
-      }
-    }
-
-    // Transform to camelCase for worker consumption
-    const transformedPeople = result.people.map((person: ApolloPerson) => {
-      const cached = !person.email && person.id ? emailCache.get(person.id) : undefined;
-      const transformed = transformApolloPerson(person);
-      if (cached) {
-        return { ...transformed, email: cached.email, emailStatus: cached.emailStatus };
-      }
-      return transformed;
-    });
-
-    traceEvent(runId, { service: "apollo-service", event: "search-done", detail: `peopleCount=${result.people.length}, totalEntries=${totalEntries}, searchId=${search.id}`, data: { searchId: search.id, peopleCount: result.people.length, totalEntries } }, req.headers).catch(() => {});
-
-    res.json({
-      searchId: search.id,
-      peopleCount: result.people.length,
-      totalEntries,
-      people: transformedPeople,
-      pagination: {
-        page: apolloParams.page ?? 1,
-        perPage: apolloParams.per_page ?? 25,
-        totalEntries,
-        totalPages: Math.ceil(totalEntries / (apolloParams.per_page ?? 25)),
-      },
-    });
+    res.json({ totalEntries, validationErrors: [] });
   } catch (error) {
-    console.error("[Apollo Service][POST /search] ERROR:", error);
-    if (req.runId) {
-      traceEvent(req.runId, { service: "apollo-service", event: "search-error", detail: error instanceof Error ? error.message : "Unknown error", level: "error" }, req.headers).catch(() => {});
-    }
+    console.error("[Apollo Service][POST /search/dry-run] ERROR:", error);
     res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
   }
 });
@@ -345,10 +230,20 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
 
     traceEvent(runId, { service: "apollo-service", event: "search-next-start", detail: `campaignId=${campaignId}, hasSearchParams=${!!searchParams}` }, req.headers).catch(() => {});
 
-    // Get Apollo API key
-    const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/search/next" }, tracking);
+    // Create child run BEFORE external Apollo call so a runs-service outage fails loud and skips the API call.
+    const searchRun = await createRun({
+      orgId: req.orgId!,
+      userId: req.userId,
+      brandId,
+      campaignId,
+      featureSlug,
+      serviceName: "apollo-service",
+      taskName: "people-search-next",
+      parentRunId: runId,
+      workflowSlug,
+    });
 
-    // Search is free — no Apollo credits consumed.
+    const { key: apolloApiKey } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/search/next" }, tracking);
 
     // Look up existing cursor for this campaign
     const [existingCursor] = await db
@@ -408,6 +303,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     } else {
       // No searchParams — must have existing cursor
       if (!existingCursor) {
+        await updateRun(searchRun.id, "completed", identity);
         return res.status(400).json({
           error: "No search cursor found for this campaign. Provide searchParams to start a new search.",
         });
@@ -419,6 +315,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
 
     // If already exhausted, return immediately
     if (isExhausted) {
+      await updateRun(searchRun.id, "completed", identity);
       return res.json({
         people: [],
         done: true,
@@ -430,22 +327,24 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     const apolloParams = {
       ...toApolloSearchParams(cursorSearchParams),
       page: currentPage,
-      per_page: 25,
+      per_page: DEFAULT_PER_PAGE,
     };
     const result = await searchPeople(apolloApiKey, apolloParams);
     const totalEntries = result.total_entries ?? result.pagination?.total_entries ?? 0;
     const people = result.people ?? [];
 
-    if (people.length === 0) {
-      console.warn(`[Apollo Service][POST /search/next] ⚠ Apollo returned 0 people page=${currentPage} campaignId=${campaignId} runId=${runId}`);
+    if (people.length < 1) {
+      console.warn(`[Apollo Service][POST /search/next] ⚠ Apollo returned 0 people page=${currentPage} campaignId=${campaignId} runId=${runId} (cursor stays open — totalPages drives exhaustion)`);
     } else {
       console.log(`[Apollo Service][POST /search/next] Found ${people.length} people page=${currentPage} (${totalEntries} total) campaignId=${campaignId} runId=${runId}`);
     }
 
-    // Advance cursor
+    // Advance cursor. Apollo's totalPages is the source of truth — only
+    // mark exhausted when we've read past the last page. Mid-stream empty
+    // pages are transient and must not poison the cursor.
     const nextPage = currentPage + 1;
-    const totalPages = Math.ceil(totalEntries / 25);
-    const done = people.length === 0 || nextPage > totalPages || nextPage > 500;
+    const totalPages = Math.ceil(totalEntries / DEFAULT_PER_PAGE);
+    const done = nextPage > totalPages;
 
     if (cursorId) {
       await db
@@ -459,19 +358,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
         .where(eq(apolloSearchCursors.id, cursorId));
     }
 
-    // Store search record (audit trail) and track costs
-    const searchRun = await createRun({
-      orgId: req.orgId!,
-      userId: req.userId,
-      brandId,
-      campaignId,
-      featureSlug,
-      serviceName: "apollo-service",
-      taskName: "people-search-next",
-      parentRunId: runId,
-      workflowSlug,
-    });
-
+    // Store search record (audit trail). Costs not tracked — search is free.
     await db.insert(apolloPeopleSearches).values({
       orgId: req.orgId!,
       runId,
@@ -549,7 +436,7 @@ router.get("/enrichments/:runId", serviceAuth, async (req: AuthenticatedRequest,
       console.warn("[Apollo Service][GET /enrichments] ⚠ returned 0 enrichments", {
         runId,
         orgId: req.orgId,
-        hint: "Check: was POST /search called with this runId? Was x-org-id the same?",
+        hint: "Check: was POST /search/next called with this runId? Was x-org-id the same?",
       });
     }
 
