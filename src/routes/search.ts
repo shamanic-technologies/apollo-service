@@ -5,7 +5,7 @@ import { apolloPeopleSearches, apolloPeopleEnrichments, apolloSearchCursors } fr
 import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
 import { searchPeople, enrichPerson, ApolloPerson, buildWaterfallWebhookUrl } from "../lib/apollo-client.js";
 import { decryptKey } from "../lib/keys-client.js";
-import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/runs-client.js";
+import { createRun, updateRun, addCosts, updateCostStatus, type IdentityHeaders } from "../lib/runs-client.js";
 import { authorizeCredit } from "../lib/billing-client.js";
 import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment, toApolloSearchParams } from "../lib/transform.js";
 import { assertKeySource } from "../lib/validators.js";
@@ -13,6 +13,12 @@ import { SearchNextRequestSchema, SearchDryRunRequestSchema, EnrichRequestSchema
 import { buildFiltersPrompt, computeFiltersPromptVersion } from "../lib/filters-prompt.js";
 import { deepEqual } from "../lib/deep-equal.js";
 import { traceEvent } from "../lib/trace-event.js";
+import {
+  WATERFALL_MAX_CREDITS,
+  pollForWaterfallEmail,
+  provisionWaterfallCost,
+  expireStalePendingWaterfall,
+} from "../lib/waterfall.js";
 import {
   resolveWorkflowDynastySlugs,
   resolveFeatureDynastySlugs,
@@ -85,6 +91,70 @@ router.post("/search/dry-run", serviceAuth, async (req: AuthenticatedRequest, re
 });
 
 /**
+ * Look up a cached enrichment by Apollo person id.
+ * - Positive cache (has email): 12-month TTL
+ * - Negative cache (no email, waterfall not pending): 24h TTL
+ * - Lazy cleanup: pending > 24h → cancel provisioned cost, add worst-case actual, mark expired
+ *
+ * Mirrors `findCachedMatch` in src/routes/match.ts. See CLAUDE.md
+ * "Waterfall enrichment — canonical pattern" for the full flow.
+ */
+async function findCachedEnrichmentByPersonId(
+  apolloPersonId: string,
+): Promise<{ record: typeof apolloPeopleEnrichments.$inferSelect; negative: boolean } | null> {
+  const twelveMonthsAgo = new Date();
+  twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
+
+  const [positive] = await db
+    .select()
+    .from(apolloPeopleEnrichments)
+    .where(
+      and(
+        eq(apolloPeopleEnrichments.apolloPersonId, apolloPersonId),
+        isNotNull(apolloPeopleEnrichments.email),
+        gt(apolloPeopleEnrichments.createdAt, twelveMonthsAgo),
+      ),
+    )
+    .orderBy(desc(apolloPeopleEnrichments.createdAt))
+    .limit(1);
+
+  if (positive) return { record: positive, negative: false };
+
+  // Negative cache:
+  // Case A: not pending + < 24h old → we tried, no email
+  // Case B: pending + > 24h old → webhook never arrived, give up
+  const twentyFourHoursAgo = new Date();
+  twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
+  const twentyFourHoursAgoISO = twentyFourHoursAgo.toISOString();
+
+  const [negative] = await db
+    .select()
+    .from(apolloPeopleEnrichments)
+    .where(
+      and(
+        eq(apolloPeopleEnrichments.apolloPersonId, apolloPersonId),
+        sql`${apolloPeopleEnrichments.email} IS NULL`,
+        sql`(
+          (COALESCE(${apolloPeopleEnrichments.waterfallStatus}, '') NOT IN ('pending') AND ${apolloPeopleEnrichments.createdAt} > ${twentyFourHoursAgoISO})
+          OR
+          (${apolloPeopleEnrichments.waterfallStatus} = 'pending' AND ${apolloPeopleEnrichments.createdAt} <= ${twentyFourHoursAgoISO})
+        )`,
+      ),
+    )
+    .orderBy(desc(apolloPeopleEnrichments.createdAt))
+    .limit(1);
+
+  if (negative) {
+    if (negative.waterfallStatus === "pending") {
+      await expireStalePendingWaterfall(negative);
+    }
+    return { record: negative, negative: true };
+  }
+
+  return null;
+}
+
+/**
  * POST /enrich - Enrich a single person via Apollo to reveal their email
  */
 router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
@@ -104,25 +174,10 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
     traceEvent(runId, { service: "apollo-service", event: "enrich-start", detail: `apolloPersonId=${apolloPersonId}` }, req.headers).catch(() => {});
 
-    // Check cache: existing enrichment for this personId within 12 months
-    const twelveMonthsAgo = new Date();
-    twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
+    const cacheHit = await findCachedEnrichmentByPersonId(apolloPersonId);
 
-    const [cached] = await db
-      .select()
-      .from(apolloPeopleEnrichments)
-      .where(
-        and(
-          eq(apolloPeopleEnrichments.apolloPersonId, apolloPersonId),
-          isNotNull(apolloPeopleEnrichments.email),
-          gt(apolloPeopleEnrichments.createdAt, twelveMonthsAgo)
-        )
-      )
-      .orderBy(desc(apolloPeopleEnrichments.createdAt))
-      .limit(1);
-
-    if (cached) {
-      traceEvent(runId, { service: "apollo-service", event: "enrich-cache-hit", detail: `apolloPersonId=${apolloPersonId}` }, req.headers).catch(() => {});
+    if (cacheHit) {
+      traceEvent(runId, { service: "apollo-service", event: "enrich-cache-hit", detail: `apolloPersonId=${apolloPersonId}, negative=${cacheHit.negative}` }, req.headers).catch(() => {});
       const cachedRun = await createRun({
         orgId: req.orgId!,
         userId: req.userId,
@@ -137,17 +192,20 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
       return res.json({
         enrichmentId: null,
-        person: transformCachedEnrichment(apolloPersonId, cached),
+        person: cacheHit.negative ? null : transformCachedEnrichment(apolloPersonId, cacheHit.record),
         cached: true,
       });
     }
 
     const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/enrich" }, tracking);
+    assertKeySource(keySource);
 
-    // Authorize credit before executing paid operation (platform keys only)
+    // Authorize the worst-case waterfall cost. Authorize quantity must match the
+    // ceiling we may bill via the webhook reconciliation, not the immediate
+    // (no-waterfall) cost of 1 credit.
     if (keySource === "platform") {
       const auth = await authorizeCredit({
-        items: [{ costName: "apollo-credit", quantity: 1 }],
+        items: [{ costName: "apollo-credit", quantity: WATERFALL_MAX_CREDITS }],
         description: "apollo-credit",
         orgId: req.orgId!,
         userId: req.userId!,
@@ -173,8 +231,9 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
     const waterfallAccepted = result.waterfall?.status === "accepted";
     const waterfallRequestId = result.request_id ? String(result.request_id) : null;
 
-    // Store enrichment record and track costs
     let enrichmentId: string | null = null;
+    let provisionedCostId: string | null = null;
+
     if (person) {
       const enrichRun = await createRun({
         orgId: req.orgId!,
@@ -187,7 +246,10 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
         workflowSlug,
       });
 
-      assertKeySource(keySource);
+      if (!person.email && waterfallAccepted) {
+        provisionedCostId = await provisionWaterfallCost(enrichRun.id, keySource, identity);
+      }
+
       const [enrichment] = await db.insert(apolloPeopleEnrichments).values({
         orgId: req.orgId!,
         runId,
@@ -200,13 +262,59 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
         keySource,
         waterfallRequestId,
         waterfallStatus: !person.email && waterfallAccepted ? "pending" : null,
+        provisionedCostId,
       }).returning();
 
       enrichmentId = enrichment.id;
 
       if (person.email) {
         await addCosts(enrichRun.id, [{ costName: "apollo-credit", costSource: keySource, quantity: 1 }], identity);
+      } else if (waterfallAccepted && enrichmentId) {
+        traceEvent(runId, { service: "apollo-service", event: "waterfall-poll-start", detail: `enrichmentId=${enrichmentId}, waterfallRequestId=${waterfallRequestId}` }, req.headers).catch(() => {});
+
+        const pollResult = await pollForWaterfallEmail(enrichmentId);
+
+        if (pollResult.resolved) {
+          if (pollResult.record?.email) {
+            traceEvent(runId, { service: "apollo-service", event: "waterfall-poll-success", detail: `email found via waterfall` }, req.headers).catch(() => {});
+
+            if (provisionedCostId) {
+              await updateCostStatus(enrichRun.id, provisionedCostId, "cancelled", identity);
+            }
+
+            await updateRun(enrichRun.id, "completed", identity);
+
+            const transformed = transformCachedEnrichment(pollResult.record.apolloPersonId ?? person.id, pollResult.record);
+            return res.json({ enrichmentId, person: transformed, cached: false });
+          }
+
+          if (provisionedCostId) {
+            await updateCostStatus(enrichRun.id, provisionedCostId, "cancelled", identity);
+          }
+          await updateRun(enrichRun.id, "completed", identity);
+
+          traceEvent(runId, { service: "apollo-service", event: "enrich-done", detail: `enrichmentId=${enrichmentId}, hasEmail=false, waterfallResolved=true` }, req.headers).catch(() => {});
+
+          return res.json({ enrichmentId, person: null, cached: false });
+        }
+
+        // Timeout — webhook will reconcile when it eventually arrives.
+        await db.update(apolloPeopleEnrichments)
+          .set({ waterfallStatus: "timeout" })
+          .where(eq(apolloPeopleEnrichments.id, enrichmentId));
+
+        console.error(`[apollo-service] Waterfall polling timeout: enrichment ${enrichmentId} (waterfallRequestId=${waterfallRequestId})`);
+        traceEvent(runId, { service: "apollo-service", event: "waterfall-poll-timeout", detail: `enrichmentId=${enrichmentId}, waterfallRequestId=${waterfallRequestId}`, level: "error" }, req.headers).catch(() => {});
+
+        await updateRun(enrichRun.id, "failed", identity);
+
+        return res.status(504).json({
+          type: "waterfall_timeout",
+          error: "Waterfall email enrichment timeout — webhook did not arrive within poll window",
+          enrichmentId,
+        });
       }
+
       await updateRun(enrichRun.id, "completed", identity);
     }
 

@@ -11,18 +11,14 @@ import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment 
 import { MatchRequestSchema } from "../schemas.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { assertKeySource } from "../lib/validators.js";
+import {
+  WATERFALL_MAX_CREDITS,
+  pollForWaterfallEmail,
+  provisionWaterfallCost,
+  expireStalePendingWaterfall,
+} from "../lib/waterfall.js";
 
 const router = Router();
-
-const WATERFALL_MAX_CREDITS = 20;
-
-function getWaterfallPollIntervalMs(): number {
-  return Number(process.env.WATERFALL_POLL_INTERVAL_MS) || 3_000;
-}
-
-function getWaterfallPollTimeoutMs(): number {
-  return Number(process.env.WATERFALL_POLL_TIMEOUT_MS) || 60_000;
-}
 
 /**
  * Look up a cached enrichment by firstName + lastName + organizationDomain.
@@ -86,75 +82,13 @@ async function findCachedMatch(
     .limit(1);
 
   if (negative) {
-    // Lazy cleanup: pending > 24h → cancel provisioned cost, add worst-case actual, mark expired.
-    // Fail loud — if runs-service is down, the request fails so the caller retries when it is back up.
     if (negative.waterfallStatus === "pending") {
-      console.error(`[Apollo Service] Waterfall TTL expired: enrichment ${negative.id} still pending after 24h (waterfallRequestId=${negative.waterfallRequestId})`);
-
-      const cleanupIdentity: IdentityHeaders = {
-        orgId: negative.orgId,
-        brandIds: negative.brandIds ?? undefined,
-        campaignId: negative.campaignId,
-      };
-
-      if (negative.provisionedCostId && negative.enrichmentRunId) {
-        await updateCostStatus(negative.enrichmentRunId, negative.provisionedCostId, "cancelled", cleanupIdentity);
-        await addCosts(
-          negative.enrichmentRunId,
-          [{ costName: "apollo-credit", costSource: (negative.keySource as "platform" | "org") ?? "platform", quantity: WATERFALL_MAX_CREDITS, status: "actual" }],
-          cleanupIdentity,
-        );
-      }
-
-      // Emit trace event
-      if (negative.enrichmentRunId) {
-        traceEvent(negative.enrichmentRunId, { service: "apollo-service", event: "waterfall-expired", detail: `enrichmentId=${negative.id}, waterfallRequestId=${negative.waterfallRequestId}, worstCaseCredits=${WATERFALL_MAX_CREDITS}`, level: "error", data: { enrichmentId: negative.id, waterfallRequestId: negative.waterfallRequestId, worstCaseCredits: WATERFALL_MAX_CREDITS } }, { "x-org-id": negative.orgId }).catch(() => {});
-      }
-
-      // Mark as expired in DB — only after cost reconciliation succeeds.
-      await db.update(apolloPeopleEnrichments)
-        .set({ waterfallStatus: "expired" })
-        .where(eq(apolloPeopleEnrichments.id, negative.id));
+      await expireStalePendingWaterfall(negative);
     }
     return { record: negative, negative: true };
   }
 
   return null;
-}
-
-/**
- * Poll the DB for a waterfall email result.
- * Returns:
- * - { record, resolved: true } if webhook arrived (with or without email)
- * - { record: null, resolved: false } if poll timed out
- */
-async function pollForWaterfallEmail(
-  enrichmentId: string,
-  timeoutMs: number = getWaterfallPollTimeoutMs(),
-  intervalMs: number = getWaterfallPollIntervalMs(),
-): Promise<{ record: typeof apolloPeopleEnrichments.$inferSelect | null; resolved: boolean }> {
-  const deadline = Date.now() + timeoutMs;
-
-  while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
-
-    const [record] = await db
-      .select()
-      .from(apolloPeopleEnrichments)
-      .where(eq(apolloPeopleEnrichments.id, enrichmentId))
-      .limit(1);
-
-    if (!record) return { record: null, resolved: false };
-
-    // Webhook arrived with email
-    if (record.email) return { record, resolved: true };
-
-    // Webhook arrived but found nothing
-    if (record.waterfallStatus === "failed" || record.waterfallStatus === "completed") return { record: null, resolved: true };
-  }
-
-  // Timed out
-  return { record: null, resolved: false };
 }
 
 /**
@@ -207,7 +141,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
     if (keySource === "platform") {
       const auth = await authorizeCredit({
-        items: [{ costName: "apollo-credit", quantity: 1 }],
+        items: [{ costName: "apollo-credit", quantity: WATERFALL_MAX_CREDITS }],
         description: "apollo-credit",
         orgId: req.orgId!,
         userId: req.userId!,
@@ -249,10 +183,8 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
     let provisionedCostId: string | null = null;
 
     if (person) {
-      // If waterfall will be used, provision max credits upfront
       if (!person.email && waterfallAccepted) {
-        const { costs } = await addCosts(matchRun.id, [{ costName: "apollo-credit", costSource: keySource, quantity: WATERFALL_MAX_CREDITS, status: "provisioned" }], identity);
-        provisionedCostId = costs[0]?.id ?? null;
+        provisionedCostId = await provisionWaterfallCost(matchRun.id, keySource, identity);
       }
 
       const [enrichment] = await db.insert(apolloPeopleEnrichments).values({
