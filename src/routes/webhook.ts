@@ -1,5 +1,5 @@
 import { Router, Request, Response } from "express";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloPeopleEnrichments } from "../db/schema.js";
 import { addCosts, updateCostStatus, type IdentityHeaders } from "../lib/runs-client.js";
@@ -52,18 +52,18 @@ function safeRequestId(req: Request): string {
 }
 
 /**
- * POST /webhook/waterfall - Apollo waterfall enrichment callback
- * Public endpoint authenticated via secret query param.
+ * POST /webhook/waterfall - Apollo waterfall enrichment callback.
  *
- * Cost reconciliation: cancels the provisioned cost on the original match run,
- * then adds the actual cost (credits_consumed) on the same run.
- * No child run is created — costs stay on the original person-match run.
+ * Cost reconciliation is mandatory: cancel provisioned cost + add actual cost on the
+ * original match run. If reconciliation fails (runs-service down), respond 5xx so
+ * Apollo retries the webhook — the lookup matches on waterfallStatus IN ('pending','timeout')
+ * and idempotently skips already-completed rows.
  */
 router.post("/webhook/waterfall", async (req: Request, res: Response) => {
   try {
     const secret = req.query.secret as string;
     if (!APOLLO_WATERFALL_WEBHOOK_SECRET || secret !== APOLLO_WATERFALL_WEBHOOK_SECRET) {
-      return res.status(401).json({ error: "Invalid webhook secret" });
+      return res.status(401).json({ type: "validation", error: "Invalid webhook secret" });
     }
 
     const payload = req.body as WaterfallWebhookPayload;
@@ -84,19 +84,19 @@ router.post("/webhook/waterfall", async (req: Request, res: Response) => {
       emailRecordsEnriched: payload.email_records_enriched,
     });
 
-    // Find all pending enrichments for this request
+    // Find pending OR timeout enrichments for this request — both need cost reconciliation.
     const pendingEnrichments = await db
       .select()
       .from(apolloPeopleEnrichments)
       .where(
         and(
           eq(apolloPeopleEnrichments.waterfallRequestId, requestId),
-          eq(apolloPeopleEnrichments.waterfallStatus, "pending")
+          inArray(apolloPeopleEnrichments.waterfallStatus, ["pending", "timeout"])
         )
       );
 
     if (pendingEnrichments.length === 0) {
-      console.warn("[Apollo Service][webhook/waterfall] No pending enrichments for request_id", requestId);
+      console.warn("[Apollo Service][webhook/waterfall] No pending/timeout enrichments for request_id", requestId);
       return res.status(200).json({ received: true, updated: 0 });
     }
 
@@ -156,32 +156,27 @@ router.post("/webhook/waterfall", async (req: Request, res: Response) => {
       updated++;
     }
 
-    // Cost reconciliation: cancel provisioned + add actual on the ORIGINAL match run
-    // No child run created — costs stay on the person-match run
+    // Cost reconciliation: cancel provisioned + add actual on the ORIGINAL match run.
+    // No child run created — costs stay on the person-match run.
+    // Failure here propagates to a 5xx response so Apollo retries the webhook (idempotent lookup).
     if (firstEnrichment.enrichmentRunId) {
       const identity: IdentityHeaders = {
         orgId: firstEnrichment.orgId,
-        brandId: firstEnrichment.brandIds.join(","),
+        brandIds: firstEnrichment.brandIds ?? undefined,
         campaignId: firstEnrichment.campaignId,
       };
       const costSource = (firstEnrichment.keySource as "platform" | "org") ?? "platform";
 
-      try {
-        // Cancel the provisioned cost
-        if (firstEnrichment.provisionedCostId) {
-          await updateCostStatus(firstEnrichment.enrichmentRunId, firstEnrichment.provisionedCostId, "cancelled", identity);
-        }
+      if (firstEnrichment.provisionedCostId) {
+        await updateCostStatus(firstEnrichment.enrichmentRunId, firstEnrichment.provisionedCostId, "cancelled", identity);
+      }
 
-        // Add actual cost with real credits_consumed
-        if (creditsConsumed > 0) {
-          await addCosts(
-            firstEnrichment.enrichmentRunId,
-            [{ costName: "apollo-credit", costSource, quantity: creditsConsumed, status: "actual" }],
-            identity
-          );
-        }
-      } catch (err) {
-        console.error("[Apollo Service][webhook/waterfall] Failed to reconcile waterfall cost", err);
+      if (creditsConsumed > 0) {
+        await addCosts(
+          firstEnrichment.enrichmentRunId,
+          [{ costName: "apollo-credit", costSource, quantity: creditsConsumed, status: "actual" }],
+          identity
+        );
       }
     }
 
@@ -194,7 +189,7 @@ router.post("/webhook/waterfall", async (req: Request, res: Response) => {
     res.status(200).json({ received: true, updated });
   } catch (error) {
     console.error("[Apollo Service][webhook/waterfall] ERROR:", error);
-    res.status(500).json({ error: "Internal server error" });
+    res.status(500).json({ type: "internal", error: "Internal server error" });
   }
 });
 

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and, gt, isNotNull, desc, inArray, count, sum, sql } from "drizzle-orm";
+import { eq, and, gt, isNotNull, desc, inArray, count, sum, sql, arrayOverlaps } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloPeopleSearches, apolloPeopleEnrichments, apolloSearchCursors } from "../db/schema.js";
 import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
@@ -50,7 +50,7 @@ router.post("/search/dry-run", serviceAuth, async (req: AuthenticatedRequest, re
       req.userId,
       "apollo",
       { callerMethod: "POST", callerPath: "/search/dry-run" },
-      { brandId: req.brandId, campaignId: req.campaignId, featureSlug: req.featureSlug, workflowSlug: req.workflowSlug }
+      { brandIds: req.brandIds, campaignId: req.campaignId, featureSlug: req.featureSlug, workflowSlug: req.workflowSlug }
     );
 
     const apolloParams = {
@@ -64,7 +64,7 @@ router.post("/search/dry-run", serviceAuth, async (req: AuthenticatedRequest, re
     res.json({ totalEntries, validationErrors: [] });
   } catch (error) {
     console.error("[Apollo Service][POST /search/dry-run] ERROR:", error);
-    res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error" });
   }
 });
 
@@ -73,16 +73,16 @@ router.post("/search/dry-run", serviceAuth, async (req: AuthenticatedRequest, re
  */
 router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const { runId, brandId, brandIds, campaignId, featureSlug, workflowSlug } = req;
+    const { runId, brandIds, campaignId, featureSlug, workflowSlug } = req;
     if (!runId || !brandIds?.length || !campaignId) {
-      return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
+      return res.status(400).json({ type: "validation", error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
-    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, featureSlug, workflowSlug };
-    const tracking = { brandId, campaignId, featureSlug, workflowSlug };
+    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandIds, campaignId, featureSlug, workflowSlug };
+    const tracking = { brandIds, campaignId, featureSlug, workflowSlug };
 
     const parsed = EnrichRequestSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
+      return res.status(400).json({ type: "validation", error: "Invalid request", details: parsed.error.flatten() });
     }
     const { apolloPersonId } = parsed.data;
 
@@ -107,11 +107,10 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
     if (cached) {
       traceEvent(runId, { service: "apollo-service", event: "enrich-cache-hit", detail: `apolloPersonId=${apolloPersonId}` }, req.headers).catch(() => {});
-      // Create a run for traceability but no costs (cache hit)
       const cachedRun = await createRun({
         orgId: req.orgId!,
         userId: req.userId,
-        brandId,
+        brandIds,
         campaignId,
         serviceName: "apollo-service",
         taskName: "enrichment",
@@ -123,6 +122,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       return res.json({
         enrichmentId: null,
         person: transformCachedEnrichment(apolloPersonId, cached),
+        cached: true,
       });
     }
 
@@ -136,13 +136,14 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
         orgId: req.orgId!,
         userId: req.userId!,
         runId,
-        brandId,
+        brandIds,
         campaignId,
         featureSlug,
         workflowSlug,
       });
       if (!auth.sufficient) {
         return res.status(402).json({
+          type: "credit_insufficient",
           error: "Insufficient credits",
           balance_cents: auth.balance_cents,
           required_cents: auth.required_cents,
@@ -159,11 +160,10 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
     // Store enrichment record and track costs
     let enrichmentId: string | null = null;
     if (person) {
-      // Track cost in runs-service
       const enrichRun = await createRun({
         orgId: req.orgId!,
         userId: req.userId,
-        brandId,
+        brandIds,
         campaignId,
         serviceName: "apollo-service",
         taskName: "enrichment",
@@ -198,13 +198,13 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
     traceEvent(runId, { service: "apollo-service", event: "enrich-done", detail: `enrichmentId=${enrichmentId}, hasEmail=${!!person?.email}, waterfallAccepted=${waterfallAccepted}`, data: { enrichmentId, hasEmail: !!person?.email } }, req.headers).catch(() => {});
 
-    res.json({ enrichmentId, person: transformed });
+    res.json({ enrichmentId, person: transformed, cached: false });
   } catch (error) {
     console.error("[Apollo Service][POST /enrich] ERROR:", error);
     if (req.runId) {
       traceEvent(req.runId, { service: "apollo-service", event: "enrich-error", detail: error instanceof Error ? error.message : "Unknown error", level: "error" }, req.headers).catch(() => {});
     }
-    res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error" });
   }
 });
 
@@ -215,16 +215,16 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
  */
 router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const { runId, brandId, brandIds, campaignId, featureSlug, workflowSlug } = req;
+    const { runId, brandIds, campaignId, featureSlug, workflowSlug } = req;
     if (!runId || !brandIds?.length || !campaignId) {
-      return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
+      return res.status(400).json({ type: "validation", error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
-    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, featureSlug, workflowSlug };
-    const tracking = { brandId, campaignId, featureSlug, workflowSlug };
+    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandIds, campaignId, featureSlug, workflowSlug };
+    const tracking = { brandIds, campaignId, featureSlug, workflowSlug };
 
     const parsed = SearchNextRequestSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
+      return res.status(400).json({ type: "validation", error: "Invalid request", details: parsed.error.flatten() });
     }
     const { searchParams } = parsed.data;
 
@@ -234,7 +234,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     const searchRun = await createRun({
       orgId: req.orgId!,
       userId: req.userId,
-      brandId,
+      brandIds,
       campaignId,
       featureSlug,
       serviceName: "apollo-service",
@@ -305,6 +305,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
       if (!existingCursor) {
         await updateRun(searchRun.id, "completed", identity);
         return res.status(400).json({
+          type: "validation",
           error: "No search cursor found for this campaign. Provide searchParams to start a new search.",
         });
       }
@@ -391,7 +392,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     if (req.runId) {
       traceEvent(req.runId, { service: "apollo-service", event: "search-next-error", detail: error instanceof Error ? error.message : "Unknown error", level: "error" }, req.headers).catch(() => {});
     }
-    res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error" });
   }
 });
 
@@ -413,7 +414,7 @@ router.get("/searches/:runId", serviceAuth, async (req: AuthenticatedRequest, re
     res.json({ searches });
   } catch (error) {
     console.error("[Apollo Service][GET /searches] ERROR:", error);
-    res.status(500).json({ error: "Internal server error" });
+    res.status(500).json({ type: "internal", error: "Internal server error" });
   }
 });
 
@@ -443,13 +444,13 @@ router.get("/enrichments/:runId", serviceAuth, async (req: AuthenticatedRequest,
     res.json({ enrichments });
   } catch (error) {
     console.error("[Apollo Service][GET /enrichments] ERROR:", error);
-    res.status(500).json({ error: "Internal server error" });
+    res.status(500).json({ type: "internal", error: "Internal server error" });
   }
 });
 
 /**
  * POST /stats - Get aggregated stats with optional filters and groupBy
- * Body: { runIds?, brandId?, campaignId?, workflowSlug?, featureSlug?,
+ * Body: { runIds?, brandIds?, campaignId?, workflowSlug?, featureSlug?,
  *         workflowDynastySlug?, featureDynastySlug?, groupBy? }
  * orgId is always applied from auth. All body filters are optional.
  */
@@ -457,10 +458,10 @@ router.post("/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
     const parsed = StatsRequestSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
+      return res.status(400).json({ type: "validation", error: "Invalid request", details: parsed.error.flatten() });
     }
     const {
-      runIds, brandId, campaignId,
+      runIds, brandIds, campaignId,
       workflowSlug, featureSlug,
       workflowDynastySlug, featureDynastySlug,
       groupBy,
@@ -491,7 +492,7 @@ router.post("/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
     const buildConditions = (table: typeof apolloPeopleEnrichments | typeof apolloPeopleSearches) => {
       const conditions = [eq(table.orgId, req.orgId!)];
       if (runIds?.length) conditions.push(inArray(table.runId, runIds));
-      if (brandId) conditions.push(sql`${brandId} = ANY(${table.brandIds})`);
+      if (brandIds?.length) conditions.push(arrayOverlaps(table.brandIds, brandIds));
       if (campaignId) conditions.push(eq(table.campaignId, campaignId));
       // Dynasty slug takes priority over exact slug
       if (resolvedWorkflowSlugs && resolvedWorkflowSlugs.length > 0) {
@@ -511,7 +512,6 @@ router.post("/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
     if (groupBy) {
       const isWorkflowGroup = groupBy === "workflowSlug" || groupBy === "workflowDynastySlug";
       const isDynastyGroup = groupBy === "workflowDynastySlug" || groupBy === "featureDynastySlug";
-      const slugCol = isWorkflowGroup ? "workflowSlug" : "featureSlug";
 
       // Query enrichments grouped by slug
       const enrichRows = await db
@@ -609,7 +609,7 @@ router.post("/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
     res.json({ stats });
   } catch (error) {
     console.error("[Apollo Service][POST /stats] ERROR:", error);
-    res.status(500).json({ error: "Internal server error" });
+    res.status(500).json({ type: "internal", error: "Internal server error" });
   }
 });
 

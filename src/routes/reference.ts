@@ -13,7 +13,7 @@ router.get("/reference/industries", serviceAuth, async (req: AuthenticatedReques
     res.json({ industries });
   } catch (error) {
     console.error("[Apollo Service] Get industries error:", error);
-    res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error" });
   }
 });
 
@@ -26,7 +26,7 @@ router.get("/reference/employee-ranges", serviceAuth, async (req: AuthenticatedR
     res.json({ ranges });
   } catch (error) {
     console.error("[Apollo Service] Get employee ranges error:", error);
-    res.status(500).json({ error: "Internal server error" });
+    res.status(500).json({ type: "internal", error: "Internal server error" });
   }
 });
 

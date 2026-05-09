@@ -18,7 +18,7 @@ router.post("/internal/transfer-brand", async (req, res) => {
   try {
     const parsed = TransferBrandRequestSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ error: parsed.error.message });
+      return res.status(400).json({ type: "validation", error: parsed.error.message });
     }
 
     const { sourceBrandId, sourceOrgId, targetOrgId, targetBrandId } = parsed.data;
@@ -72,7 +72,7 @@ router.post("/internal/transfer-brand", async (req, res) => {
     return res.json({ updatedTables });
   } catch (error) {
     console.error("[apollo-service] transfer-brand error:", error);
-    return res.status(500).json({ error: "Internal server error" });
+    return res.status(500).json({ type: "internal", error: "Internal server error" });
   }
 });
 
