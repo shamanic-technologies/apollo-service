@@ -9,7 +9,8 @@ import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/run
 import { authorizeCredit } from "../lib/billing-client.js";
 import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment, toApolloSearchParams } from "../lib/transform.js";
 import { assertKeySource } from "../lib/validators.js";
-import { SearchNextRequestSchema, SearchDryRunRequestSchema, EnrichRequestSchema, StatsRequestSchema } from "../schemas.js";
+import { SearchNextRequestSchema, SearchDryRunRequestSchema, EnrichRequestSchema, StatsRequestSchema, SearchFiltersSchema } from "../schemas.js";
+import { buildFiltersPrompt, computeFiltersPromptVersion } from "../lib/filters-prompt.js";
 import { deepEqual } from "../lib/deep-equal.js";
 import { traceEvent } from "../lib/trace-event.js";
 import {
@@ -23,6 +24,21 @@ import {
 const router = Router();
 
 const DEFAULT_PER_PAGE = 100;
+
+// Compute the filters prompt once at module load. SearchFiltersSchema is
+// static, so the prompt + hash never change between calls — fail-loud at
+// startup if any field is missing description/example metadata.
+const FILTERS_PROMPT = buildFiltersPrompt(SearchFiltersSchema);
+const FILTERS_PROMPT_VERSION = computeFiltersPromptVersion(FILTERS_PROMPT);
+
+/**
+ * GET /search/filters-prompt — returns a markdown prompt fragment generated
+ * from SearchFiltersSchema. Single source of truth for caller LLMs that
+ * generate search filters (e.g. lead-service). Cache by schemaVersion.
+ */
+router.get("/search/filters-prompt", serviceAuth, async (_req: AuthenticatedRequest, res) => {
+  res.json({ prompt: FILTERS_PROMPT, schemaVersion: FILTERS_PROMPT_VERSION });
+});
 
 /**
  * POST /search/dry-run — cheap filter test. No DB writes, no cost tracking, no run creation.
