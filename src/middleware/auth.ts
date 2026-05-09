@@ -4,7 +4,6 @@ export interface AuthenticatedRequest extends Request {
   orgId?: string;
   userId?: string;
   runId?: string;
-  brandId?: string;
   brandIds?: string[];
   campaignId?: string;
   featureSlug?: string;
@@ -31,17 +30,16 @@ export async function serviceAuth(
     const userId = req.headers["x-user-id"] as string;
 
     if (!orgId) {
-      return res.status(400).json({ error: "x-org-id header required" });
+      return res.status(400).json({ type: "validation", error: "x-org-id header required" });
     }
 
     if (!userId) {
-      return res.status(400).json({ error: "x-user-id header required" });
+      return res.status(400).json({ type: "validation", error: "x-user-id header required" });
     }
 
     req.orgId = orgId;
     req.userId = userId;
 
-    // Run context headers (optional at middleware level — routes validate as needed)
     const runId = req.headers["x-run-id"] as string | undefined;
     const brandIdRaw = req.headers["x-brand-id"] as string | undefined;
     const brandIds = parseBrandIds(brandIdRaw);
@@ -50,7 +48,6 @@ export async function serviceAuth(
     const workflowSlug = req.headers["x-workflow-slug"] as string | undefined;
 
     if (runId) req.runId = runId;
-    if (brandIdRaw) req.brandId = brandIdRaw;
     if (brandIds.length > 0) req.brandIds = brandIds;
     if (campaignId) req.campaignId = campaignId;
     if (featureSlug) req.featureSlug = featureSlug;
@@ -59,6 +56,6 @@ export async function serviceAuth(
     next();
   } catch (error) {
     console.error("[Apollo Service] Auth error:", error);
-    return res.status(401).json({ error: "Authentication failed" });
+    return res.status(401).json({ type: "internal", error: "Authentication failed" });
   }
 }

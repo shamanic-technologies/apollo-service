@@ -86,24 +86,24 @@ async function findCachedMatch(
     .limit(1);
 
   if (negative) {
-    // Lazy cleanup: pending > 24h → cancel provisioned cost, add worst-case actual, mark expired
+    // Lazy cleanup: pending > 24h → cancel provisioned cost, add worst-case actual, mark expired.
+    // Fail loud — if runs-service is down, the request fails so the caller retries when it is back up.
     if (negative.waterfallStatus === "pending") {
       console.error(`[Apollo Service] Waterfall TTL expired: enrichment ${negative.id} still pending after 24h (waterfallRequestId=${negative.waterfallRequestId})`);
 
       const cleanupIdentity: IdentityHeaders = {
         orgId: negative.orgId,
-        brandId: negative.brandIds?.join(","),
+        brandIds: negative.brandIds ?? undefined,
         campaignId: negative.campaignId,
       };
 
-      // Cancel provisioned cost + add worst-case actual
       if (negative.provisionedCostId && negative.enrichmentRunId) {
-        updateCostStatus(negative.enrichmentRunId, negative.provisionedCostId, "cancelled", cleanupIdentity).catch((err) => {
-          console.error("[Apollo Service] Failed to cancel expired provisioned cost:", err);
-        });
-        addCosts(negative.enrichmentRunId, [{ costName: "apollo-credit", costSource: (negative.keySource as "platform" | "org") ?? "platform", quantity: WATERFALL_MAX_CREDITS, status: "actual" }], cleanupIdentity).catch((err) => {
-          console.error("[Apollo Service] Failed to add worst-case actual cost:", err);
-        });
+        await updateCostStatus(negative.enrichmentRunId, negative.provisionedCostId, "cancelled", cleanupIdentity);
+        await addCosts(
+          negative.enrichmentRunId,
+          [{ costName: "apollo-credit", costSource: (negative.keySource as "platform" | "org") ?? "platform", quantity: WATERFALL_MAX_CREDITS, status: "actual" }],
+          cleanupIdentity,
+        );
       }
 
       // Emit trace event
@@ -111,13 +111,10 @@ async function findCachedMatch(
         traceEvent(negative.enrichmentRunId, { service: "apollo-service", event: "waterfall-expired", detail: `enrichmentId=${negative.id}, waterfallRequestId=${negative.waterfallRequestId}, worstCaseCredits=${WATERFALL_MAX_CREDITS}`, level: "error", data: { enrichmentId: negative.id, waterfallRequestId: negative.waterfallRequestId, worstCaseCredits: WATERFALL_MAX_CREDITS } }, { "x-org-id": negative.orgId }).catch(() => {});
       }
 
-      // Mark as expired in DB
-      db.update(apolloPeopleEnrichments)
+      // Mark as expired in DB — only after cost reconciliation succeeds.
+      await db.update(apolloPeopleEnrichments)
         .set({ waterfallStatus: "expired" })
-        .where(eq(apolloPeopleEnrichments.id, negative.id))
-        .catch((err) => {
-          console.error("[Apollo Service] Failed to mark waterfall as expired:", err);
-        });
+        .where(eq(apolloPeopleEnrichments.id, negative.id));
     }
     return { record: negative, negative: true };
   }
@@ -165,16 +162,16 @@ async function pollForWaterfallEmail(
  */
 router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const { runId, brandId, brandIds, campaignId, featureSlug, workflowSlug } = req;
+    const { runId, brandIds, campaignId, featureSlug, workflowSlug } = req;
     if (!runId || !brandIds?.length || !campaignId) {
-      return res.status(400).json({ error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
+      return res.status(400).json({ type: "validation", error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
-    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandId, campaignId, featureSlug, workflowSlug };
-    const tracking = { brandId, campaignId, featureSlug, workflowSlug };
+    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandIds, campaignId, featureSlug, workflowSlug };
+    const tracking = { brandIds, campaignId, featureSlug, workflowSlug };
 
     const parsed = MatchRequestSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
+      return res.status(400).json({ type: "validation", error: "Invalid request", details: parsed.error.flatten() });
     }
     const { firstName, lastName, organizationDomain } = parsed.data;
 
@@ -188,7 +185,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
       const cachedRun = await createRun({
         orgId: req.orgId!,
         userId: req.userId,
-        brandId,
+        brandIds,
         campaignId,
         serviceName: "apollo-service",
         taskName: "person-match",
@@ -215,13 +212,14 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
         orgId: req.orgId!,
         userId: req.userId!,
         runId,
-        brandId,
+        brandIds,
         campaignId,
         featureSlug,
         workflowSlug,
       });
       if (!auth.sufficient) {
         return res.status(402).json({
+          type: "credit_insufficient",
           error: "Insufficient credits",
           balance_cents: auth.balance_cents,
           required_cents: auth.required_cents,
@@ -238,7 +236,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
     const matchRun = await createRun({
       orgId: req.orgId!,
       userId: req.userId,
-      brandId,
+      brandIds,
       campaignId,
       featureSlug,
       serviceName: "apollo-service",
@@ -310,14 +308,22 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
           return res.json({ enrichmentId, person: null, cached: false });
         }
 
-        // Timeout — waterfall didn't resolve in time
+        // Timeout — waterfall didn't resolve in time. Mark the enrichment as 'timeout'
+        // BEFORE returning so the webhook can still reconcile costs idempotently when it
+        // eventually arrives (Apollo retries 5xx). The webhook treats 'timeout' rows the
+        // same as 'pending' for reconciliation.
+        await db.update(apolloPeopleEnrichments)
+          .set({ waterfallStatus: "timeout" })
+          .where(eq(apolloPeopleEnrichments.id, enrichmentId));
+
         console.error(`[Apollo Service] Waterfall polling timeout: enrichment ${enrichmentId} (waterfallRequestId=${waterfallRequestId})`);
         traceEvent(runId, { service: "apollo-service", event: "waterfall-poll-timeout", detail: `enrichmentId=${enrichmentId}, waterfallRequestId=${waterfallRequestId}`, level: "error" }, req.headers).catch(() => {});
 
-        // Mark run as FAILED — cost stays provisioned (webhook may still arrive)
+        // Mark run as FAILED — cost stays provisioned (webhook will reconcile when it arrives)
         await updateRun(matchRun.id, "failed", identity);
 
         return res.status(504).json({
+          type: "waterfall_timeout",
           error: "Waterfall email enrichment timeout — webhook did not arrive within 60s",
           enrichmentId,
         });
@@ -351,7 +357,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
     if (req.runId) {
       traceEvent(req.runId, { service: "apollo-service", event: "match-error", detail: error instanceof Error ? error.message : "Unknown error", level: "error" }, req.headers).catch(() => {});
     }
-    res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error" });
   }
 });
 

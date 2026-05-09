@@ -5,8 +5,27 @@
 
 const RUNS_SERVICE_URL = process.env.RUNS_SERVICE_URL || "https://runs.mcpfactory.org";
 const RUNS_SERVICE_API_KEY = process.env.RUNS_SERVICE_API_KEY || "";
+const RUNS_SERVICE_TIMEOUT_MS = Number(process.env.RUNS_SERVICE_TIMEOUT_MS) || 10_000;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
+
+/** Typed error thrown by runs-client. Distinguishes timeout/network/HTTP failures from generic errors. */
+export class RunsServiceError extends Error {
+  readonly kind: "timeout" | "network" | "http";
+  readonly status?: number;
+  readonly path: string;
+  readonly method: string;
+  readonly body?: string;
+  constructor(args: { kind: "timeout" | "network" | "http"; path: string; method: string; status?: number; body?: string; message: string }) {
+    super(args.message);
+    this.name = "RunsServiceError";
+    this.kind = args.kind;
+    this.status = args.status;
+    this.path = args.path;
+    this.method = args.method;
+    this.body = args.body;
+  }
+}
 
 export interface Run {
   id: string;
@@ -63,7 +82,7 @@ export interface RunWithCosts extends Run {
 export interface CreateRunParams {
   orgId: string;
   userId?: string;
-  brandId?: string;
+  brandIds?: string[];
   campaignId?: string;
   featureSlug?: string;
   serviceName: string;
@@ -82,7 +101,7 @@ export interface CostItem {
 export interface ListRunsParams {
   orgId: string;
   userId?: string;
-  brandId?: string;
+  brandIds?: string[];
   campaignId?: string;
   featureSlug?: string;
   serviceName?: string;
@@ -101,7 +120,7 @@ export interface IdentityHeaders {
   orgId: string;
   userId?: string;
   runId?: string;
-  brandId?: string;
+  brandIds?: string[];
   campaignId?: string;
   featureSlug?: string;
   workflowSlug?: string;
@@ -123,20 +142,51 @@ async function runsRequest<T>(
   if (identity?.orgId) headers["x-org-id"] = identity.orgId;
   if (identity?.userId) headers["x-user-id"] = identity.userId;
   if (identity?.runId) headers["x-run-id"] = identity.runId;
-  if (identity?.brandId) headers["x-brand-id"] = identity.brandId;
+  if (identity?.brandIds?.length) headers["x-brand-id"] = identity.brandIds.join(",");
   if (identity?.campaignId) headers["x-campaign-id"] = identity.campaignId;
   if (identity?.featureSlug) headers["x-feature-slug"] = identity.featureSlug;
   if (identity?.workflowSlug) headers["x-workflow-slug"] = identity.workflowSlug;
 
-  const response = await fetch(`${RUNS_SERVICE_URL}${path}`, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), RUNS_SERVICE_TIMEOUT_MS);
+
+  let response: Response;
+  try {
+    response = await fetch(`${RUNS_SERVICE_URL}${path}`, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if ((err as Error).name === "AbortError") {
+      throw new RunsServiceError({
+        kind: "timeout",
+        path,
+        method,
+        message: `runs-service ${method} ${path} timed out after ${RUNS_SERVICE_TIMEOUT_MS}ms`,
+      });
+    }
+    throw new RunsServiceError({
+      kind: "network",
+      path,
+      method,
+      message: `runs-service ${method} ${path} network error: ${(err as Error).message}`,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`runs-service ${method} ${path} failed: ${response.status} - ${errorText}`);
+    throw new RunsServiceError({
+      kind: "http",
+      path,
+      method,
+      status: response.status,
+      body: errorText,
+      message: `runs-service ${method} ${path} failed: ${response.status} - ${errorText}`,
+    });
   }
 
   return response.json() as Promise<T>;
@@ -158,7 +208,7 @@ export async function createRun(params: CreateRunParams): Promise<Run> {
       runId: params.parentRunId,
     },
     body: {
-      brandId: params.brandId,
+      brandIds: params.brandIds,
       campaignId: params.campaignId,
       featureSlug: params.featureSlug,
       serviceName: params.serviceName,
@@ -234,7 +284,7 @@ export async function listRuns(
 ): Promise<{ runs: RunWithOwnCost[]; limit: number; offset: number }> {
   const searchParams = new URLSearchParams();
   if (params.userId) searchParams.set("userId", params.userId);
-  if (params.brandId) searchParams.set("brandId", params.brandId);
+  if (params.brandIds?.length) searchParams.set("brandIds", params.brandIds.join(","));
   if (params.campaignId) searchParams.set("campaignId", params.campaignId);
   if (params.serviceName) searchParams.set("serviceName", params.serviceName);
   if (params.taskName) searchParams.set("taskName", params.taskName);

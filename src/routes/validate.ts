@@ -12,7 +12,7 @@ router.post("/validate", serviceAuth, async (req: AuthenticatedRequest, res) => 
   try {
     const parsed = ValidateRequestSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
+      return res.status(400).json({ type: "validation", error: "Invalid request", details: parsed.error.flatten() });
     }
     const { endpoint, items } = parsed.data;
 
@@ -22,6 +22,7 @@ router.post("/validate", serviceAuth, async (req: AuthenticatedRequest, res) => 
   } catch (error) {
     console.error("[Apollo Service] Validation error:", error);
     res.status(500).json({
+      type: "internal",
       error: error instanceof Error ? error.message : "Internal server error",
     });
   }

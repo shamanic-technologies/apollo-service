@@ -76,13 +76,136 @@
         ]
       },
       "ErrorResponse": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ValidationError"
+          },
+          {
+            "$ref": "#/components/schemas/CreditInsufficientError"
+          },
+          {
+            "$ref": "#/components/schemas/WaterfallTimeoutError"
+          },
+          {
+            "$ref": "#/components/schemas/NotFoundError"
+          },
+          {
+            "$ref": "#/components/schemas/InternalError"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "type",
+          "mapping": {
+            "validation": "#/components/schemas/ValidationError",
+            "credit_insufficient": "#/components/schemas/CreditInsufficientError",
+            "waterfall_timeout": "#/components/schemas/WaterfallTimeoutError",
+            "not_found": "#/components/schemas/NotFoundError",
+            "internal": "#/components/schemas/InternalError"
+          }
+        }
+      },
+      "ValidationError": {
         "type": "object",
         "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "validation"
+            ]
+          },
+          "error": {
+            "type": "string"
+          },
+          "details": {
+            "nullable": true
+          }
+        },
+        "required": [
+          "type",
+          "error"
+        ]
+      },
+      "CreditInsufficientError": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "credit_insufficient"
+            ]
+          },
+          "error": {
+            "type": "string"
+          },
+          "balance_cents": {
+            "type": "integer"
+          },
+          "required_cents": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "type",
+          "error",
+          "balance_cents",
+          "required_cents"
+        ]
+      },
+      "WaterfallTimeoutError": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "waterfall_timeout"
+            ]
+          },
+          "error": {
+            "type": "string"
+          },
+          "enrichmentId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "error",
+          "enrichmentId"
+        ]
+      },
+      "NotFoundError": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "not_found"
+            ]
+          },
           "error": {
             "type": "string"
           }
         },
         "required": [
+          "type",
+          "error"
+        ]
+      },
+      "InternalError": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "internal"
+            ]
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
           "error"
         ]
       },
@@ -908,11 +1031,16 @@
                 "nullable": true
               }
             ]
+          },
+          "cached": {
+            "type": "boolean",
+            "description": "True if the result was served from the 12-month cache (no Apollo API call, no cost)."
           }
         },
         "required": [
           "enrichmentId",
-          "person"
+          "person",
+          "cached"
         ]
       },
       "EnrichRequest": {
@@ -1583,8 +1711,16 @@
               "type": "string"
             }
           },
-          "brandId": {
-            "type": "string"
+          "brandIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Filter by one or more brand IDs (rows whose brand_ids array overlaps with this list).",
+            "example": [
+              "brand-1",
+              "brand-2"
+            ]
           },
           "campaignId": {
             "type": "string"
@@ -1772,24 +1908,6 @@
           "valid",
           "endpoint",
           "errors"
-        ]
-      },
-      "ValidationError": {
-        "type": "object",
-        "properties": {
-          "field": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "value": {
-            "nullable": true
-          }
-        },
-        "required": [
-          "field",
-          "message"
         ]
       },
       "ValidateRequest": {

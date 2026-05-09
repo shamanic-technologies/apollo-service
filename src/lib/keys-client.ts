@@ -26,7 +26,7 @@ export interface DecryptKeyResult {
  * orgId/userId sent as x-org-id/x-user-id headers per key-service spec.
  */
 export interface TrackingContext {
-  brandId?: string;
+  brandIds?: string[];
   campaignId?: string;
   featureSlug?: string;
   workflowSlug?: string;
@@ -40,7 +40,7 @@ export async function decryptKey(
   tracking?: TrackingContext
 ): Promise<DecryptKeyResult> {
   const trackingHeaders: Record<string, string> = {};
-  if (tracking?.brandId) trackingHeaders["x-brand-id"] = tracking.brandId;
+  if (tracking?.brandIds?.length) trackingHeaders["x-brand-id"] = tracking.brandIds.join(",");
   if (tracking?.campaignId) trackingHeaders["x-campaign-id"] = tracking.campaignId;
   if (tracking?.featureSlug) trackingHeaders["x-feature-slug"] = tracking.featureSlug;
   if (tracking?.workflowSlug) trackingHeaders["x-workflow-slug"] = tracking.workflowSlug;
