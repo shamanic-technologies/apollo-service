@@ -55,24 +55,21 @@
           "keyServiceStatus"
         ]
       },
-      "SearchDryRunResponse": {
+      "FiltersPromptResponse": {
         "type": "object",
         "properties": {
-          "totalEntries": {
-            "type": "number",
-            "description": "Total number of people matching the filters across all pages."
+          "prompt": {
+            "type": "string",
+            "description": "Markdown-formatted prompt fragment describing every field of SearchFiltersSchema. One block per field with type, optional enum values, an example, and a one-line description. Designed to be embedded in a caller's LLM system prompt."
           },
-          "validationErrors": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Empty array on a successful 200. On a 400, lists the schema validation errors that prevented the call."
+          "schemaVersion": {
+            "type": "string",
+            "description": "Stable 12-char hex hash of the prompt content. Use as a cache key — same content always produces the same hash, so callers can safely cache by this value."
           }
         },
         "required": [
-          "totalEntries",
-          "validationErrors"
+          "prompt",
+          "schemaVersion"
         ]
       },
       "ErrorResponse": {
@@ -209,6 +206,26 @@
           "error"
         ]
       },
+      "SearchDryRunResponse": {
+        "type": "object",
+        "properties": {
+          "totalEntries": {
+            "type": "number",
+            "description": "Total number of people matching the filters across all pages."
+          },
+          "validationErrors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Empty array on a successful 200. On a 400, lists the schema validation errors that prevented the call."
+          }
+        },
+        "required": [
+          "totalEntries",
+          "validationErrors"
+        ]
+      },
       "SearchDryRunRequest": {
         "type": "object",
         "properties": {
@@ -288,8 +305,8 @@
           },
           "qKeywords": {
             "type": "string",
-            "description": "Free-text keyword search across person and organization fields.",
-            "example": "machine learning"
+            "description": "Free-text keyword search across person and organization fields. Use OR to widen, AND to narrow.",
+            "example": "machine learning OR data science OR AI"
           },
           "personLocations": {
             "type": "array",
@@ -911,8 +928,8 @@
           },
           "qKeywords": {
             "type": "string",
-            "description": "Free-text keyword search across person and organization fields.",
-            "example": "machine learning"
+            "description": "Free-text keyword search across person and organization fields. Use OR to widen, AND to narrow.",
+            "example": "machine learning OR data science OR AI"
           },
           "personLocations": {
             "type": "array",
@@ -1975,6 +1992,52 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HealthDebugResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/search/filters-prompt": {
+      "get": {
+        "summary": "Get the filter-shape prompt fragment for caller LLMs",
+        "description": "Returns a markdown block documenting every filter accepted by /search/next and /search/dry-run, generated from SearchFiltersSchema. Single source of truth for callers (e.g. lead-service) that need to instruct an LLM how to build search filters. The schemaVersion is a stable hash of the prompt — cache by this value.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Filter-shape prompt and version hash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FiltersPromptResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }

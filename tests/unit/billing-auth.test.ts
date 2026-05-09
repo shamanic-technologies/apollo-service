@@ -168,16 +168,19 @@ describe("Billing credit authorization", () => {
     expect(mockEnrichPerson).not.toHaveBeenCalled();
   });
 
-  it("should send items with costName for POST /enrich authorization", async () => {
+  it("should authorize the worst-case waterfall cost (WATERFALL_MAX_CREDITS) on POST /enrich", async () => {
     await request(app)
       .post("/enrich")
       .set(HEADERS)
       .send({ apolloPersonId: "p-1" })
       .expect(200);
 
+    // /enrich must authorize the ceiling we may bill via the webhook
+    // reconciliation (up to WATERFALL_MAX_CREDITS=20), not the immediate
+    // no-waterfall cost of 1 credit. See CLAUDE.md > "Waterfall enrichment".
     expect(mockAuthorizeCredit).toHaveBeenCalledWith(
       expect.objectContaining({
-        items: [{ costName: "apollo-credit", quantity: 1 }],
+        items: [{ costName: "apollo-credit", quantity: 20 }],
       })
     );
   });

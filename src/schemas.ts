@@ -322,8 +322,8 @@ export const SearchFiltersSchema = z
       example: ["Information Technology and Services", "Computer Software"],
     }),
     qKeywords: z.string().optional().openapi({
-      description: "Free-text keyword search across person and organization fields.",
-      example: "machine learning",
+      description: "Free-text keyword search across person and organization fields. Use OR to widen, AND to narrow.",
+      example: "machine learning OR data science OR AI",
     }),
     personLocations: z.array(z.string().min(1)).optional().openapi({
       description: "Filter by person's location (city, state, country). Different from organizationLocations which filters by company HQ.",
@@ -357,6 +357,42 @@ export const SearchFiltersSchema = z
   .openapi("SearchFilters", {
     description: "Apollo search filters. All filters are combined using AND. Start broad and narrow down to avoid empty results.",
   });
+
+// ─── GET /search/filters-prompt ─────────────────────────────────────────────
+
+const FiltersPromptResponseSchema = z
+  .object({
+    prompt: z.string().openapi({
+      description:
+        "Markdown-formatted prompt fragment describing every field of SearchFiltersSchema. One block per field with type, optional enum values, an example, and a one-line description. Designed to be embedded in a caller's LLM system prompt.",
+    }),
+    schemaVersion: z.string().openapi({
+      description:
+        "Stable 12-char hex hash of the prompt content. Use as a cache key — same content always produces the same hash, so callers can safely cache by this value.",
+    }),
+  })
+  .openapi("FiltersPromptResponse");
+
+registry.registerPath({
+  method: "get",
+  path: "/search/filters-prompt",
+  summary: "Get the filter-shape prompt fragment for caller LLMs",
+  description:
+    "Returns a markdown block documenting every filter accepted by /search/next and /search/dry-run, generated from SearchFiltersSchema. Single source of truth for callers (e.g. lead-service) that need to instruct an LLM how to build search filters. The schemaVersion is a stable hash of the prompt — cache by this value.",
+  request: {
+    headers: basicHeaders,
+  },
+  responses: {
+    200: {
+      description: "Filter-shape prompt and version hash",
+      content: { "application/json": { schema: FiltersPromptResponseSchema } },
+    },
+    500: {
+      description: "Internal server error",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
 
 // ─── POST /search/dry-run ───────────────────────────────────────────────────
 
