@@ -37,6 +37,7 @@ app.get("/openapi.json", (_req, res) => {
     res.json(JSON.parse(readFileSync(openapiPath, "utf-8")));
   } else {
     res.status(404).json({
+      type: "not_found",
       error: "OpenAPI spec not generated. Run: pnpm generate:openapi",
     });
   }
@@ -53,7 +54,7 @@ app.use(webhookRoutes);
 
 // 404 handler
 app.use((req, res) => {
-  res.status(404).json({ error: "Not found" });
+  res.status(404).json({ type: "not_found", error: "Not found" });
 });
 
 // Sentry error handler must be before any other error middleware
@@ -62,7 +63,7 @@ Sentry.setupExpressErrorHandler(app);
 // Fallback error handler
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error("[Apollo Service] Unhandled error:", err);
-  res.status(500).json({ error: "Internal server error" });
+  res.status(500).json({ type: "internal", error: "Internal server error" });
 });
 
 // Only start server if not in test environment

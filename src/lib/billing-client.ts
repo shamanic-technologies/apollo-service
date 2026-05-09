@@ -12,7 +12,7 @@ export interface AuthorizeCreditParams {
   orgId: string;
   userId: string;
   runId?: string;
-  brandId?: string;
+  brandIds?: string[];
   campaignId?: string;
   featureSlug?: string;
   workflowSlug?: string;
@@ -35,7 +35,7 @@ export async function authorizeCredit(
   };
 
   if (params.runId) headers["x-run-id"] = params.runId;
-  if (params.brandId) headers["x-brand-id"] = params.brandId;
+  if (params.brandIds?.length) headers["x-brand-id"] = params.brandIds.join(",");
   if (params.campaignId) headers["x-campaign-id"] = params.campaignId;
   if (params.featureSlug) headers["x-feature-slug"] = params.featureSlug;
   if (params.workflowSlug) headers["x-workflow-slug"] = params.workflowSlug;

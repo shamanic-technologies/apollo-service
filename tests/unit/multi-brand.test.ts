@@ -66,7 +66,6 @@ vi.mock("../../src/middleware/auth.js", () => ({
     req.userId = req.headers["x-user-id"] || "user-1";
     if (req.headers["x-run-id"]) req.runId = req.headers["x-run-id"];
     if (req.headers["x-brand-id"]) {
-      req.brandId = req.headers["x-brand-id"] as string;
       req.brandIds = String(req.headers["x-brand-id"]).split(",").map((s: string) => s.trim()).filter(Boolean);
     }
     if (req.headers["x-campaign-id"]) req.campaignId = req.headers["x-campaign-id"];
@@ -176,7 +175,7 @@ describe("multi-brand DB inserts", () => {
     });
   });
 
-  it("forwards raw CSV brandId to downstream services via identity/tracking", async () => {
+  it("forwards brandIds array to downstream services via identity/tracking", async () => {
     const { default: searchRouter } = await import("../../src/routes/search.js");
     const app = express();
     app.use(express.json());
@@ -188,12 +187,12 @@ describe("multi-brand DB inserts", () => {
       .send({ searchParams: { personTitles: ["CEO"] } })
       .expect(200);
 
-    // identity passed to updateRun should contain raw CSV brandId
+    // identity passed to updateRun must contain the brandIds array (joined to CSV at the HTTP boundary).
     expect(mockUpdateRun).toHaveBeenCalledWith(
       expect.any(String),
       "completed",
       expect.objectContaining({
-        brandId: "brand-aaa,brand-bbb,brand-ccc",
+        brandIds: ["brand-aaa", "brand-bbb", "brand-ccc"],
       })
     );
   });

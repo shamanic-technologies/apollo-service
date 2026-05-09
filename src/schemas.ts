@@ -74,8 +74,47 @@ const VALID_EMAIL_STATUSES = [
   "unavailable",
 ] as const;
 
-const ErrorResponseSchema = z
-  .object({ error: z.string() })
+/**
+ * Discriminated union of error responses. Every 4xx/5xx body has a `type` field
+ * so clients can switch on the failure mode without parsing strings.
+ */
+export const ErrorResponseSchema = z
+  .discriminatedUnion("type", [
+    z
+      .object({
+        type: z.literal("validation"),
+        error: z.string(),
+        details: z.unknown().optional(),
+      })
+      .openapi("ValidationError"),
+    z
+      .object({
+        type: z.literal("credit_insufficient"),
+        error: z.string(),
+        balance_cents: z.number().int(),
+        required_cents: z.number().int(),
+      })
+      .openapi("CreditInsufficientError"),
+    z
+      .object({
+        type: z.literal("waterfall_timeout"),
+        error: z.string(),
+        enrichmentId: z.string(),
+      })
+      .openapi("WaterfallTimeoutError"),
+    z
+      .object({
+        type: z.literal("not_found"),
+        error: z.string(),
+      })
+      .openapi("NotFoundError"),
+    z
+      .object({
+        type: z.literal("internal"),
+        error: z.string(),
+      })
+      .openapi("InternalError"),
+  ])
   .openapi("ErrorResponse");
 
 const EmploymentHistorySchema = z.object({
@@ -429,6 +468,9 @@ const EnrichResponseSchema = z
   .object({
     enrichmentId: z.string().nullable(),
     person: PersonSchema.nullable(),
+    cached: z.boolean().openapi({
+      description: "True if the result was served from the 12-month cache (no Apollo API call, no cost).",
+    }),
   })
   .openapi("EnrichResponse");
 
@@ -673,7 +715,10 @@ const StatsGroupByEnum = z
 export const StatsRequestSchema = z
   .object({
     runIds: z.array(z.string()).optional(),
-    brandId: z.string().optional(),
+    brandIds: z.array(z.string()).optional().openapi({
+      description: "Filter by one or more brand IDs (rows whose brand_ids array overlaps with this list).",
+      example: ["brand-1", "brand-2"],
+    }),
     campaignId: z.string().optional(),
     workflowSlug: z.string().optional().openapi({ description: "Filter by exact workflow slug" }),
     featureSlug: z.string().optional().openapi({ description: "Filter by exact feature slug" }),

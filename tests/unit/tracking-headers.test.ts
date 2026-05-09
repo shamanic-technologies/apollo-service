@@ -33,7 +33,7 @@ vi.mock("../../src/middleware/auth.js", () => ({
     req.orgId = req.headers["x-org-id"] || "org-1";
     req.userId = req.headers["x-user-id"] || "user-1";
     if (req.headers["x-run-id"]) req.runId = req.headers["x-run-id"];
-    if (req.headers["x-brand-id"]) { req.brandId = req.headers["x-brand-id"] as string; req.brandIds = String(req.headers["x-brand-id"]).split(",").map((s: string) => s.trim()).filter(Boolean); }
+    if (req.headers["x-brand-id"]) { req.brandIds = String(req.headers["x-brand-id"]).split(",").map((s: string) => s.trim()).filter(Boolean); }
     if (req.headers["x-campaign-id"]) req.campaignId = req.headers["x-campaign-id"];
     if (req.headers["x-feature-slug"]) req.featureSlug = req.headers["x-feature-slug"];
     if (req.headers["x-workflow-slug"]) req.workflowSlug = req.headers["x-workflow-slug"];
@@ -153,7 +153,7 @@ describe("tracking headers forwarding", () => {
       "user-1",
       "apollo",
       expect.any(Object),
-      { brandId: "brand-abc", campaignId: "campaign-xyz", featureSlug: "lead-gen", workflowSlug: "lead-search-workflow" }
+      { brandIds: ["brand-abc"], campaignId: "campaign-xyz", featureSlug: "lead-gen", workflowSlug: "lead-search-workflow" }
     );
   });
 
@@ -173,7 +173,7 @@ describe("tracking headers forwarding", () => {
       "child-run-1",
       "completed",
       expect.objectContaining({
-        brandId: "brand-abc",
+        brandIds: ["brand-abc"],
         campaignId: "campaign-xyz",
         featureSlug: "lead-gen",
         workflowSlug: "lead-search-workflow",
@@ -195,7 +195,7 @@ describe("tracking headers forwarding", () => {
     expect(mockCreateRun).toHaveBeenCalledWith(
       expect.objectContaining({
         workflowSlug: "lead-search-workflow",
-        brandId: "brand-abc",
+        brandIds: ["brand-abc"],
         campaignId: "campaign-xyz",
       })
     );
