@@ -76,14 +76,6 @@ router.post("/webhook/waterfall", async (req: Request, res: Response) => {
 
     const creditsConsumed = payload.credits_consumed ?? 0;
 
-    console.log("[Apollo Service][webhook/waterfall] Received", {
-      requestId,
-      status: payload.status,
-      peopleCount: payload.people.length,
-      creditsConsumed,
-      emailRecordsEnriched: payload.email_records_enriched,
-    });
-
     // Find pending OR timeout enrichments for this request — both need cost reconciliation.
     const pendingEnrichments = await db
       .select()
@@ -179,8 +171,6 @@ router.post("/webhook/waterfall", async (req: Request, res: Response) => {
         );
       }
     }
-
-    console.log("[Apollo Service][webhook/waterfall] Processed", { requestId, updated, total: payload.people.length, creditsConsumed });
 
     if (firstEnrichment.enrichmentRunId) {
       traceEvent(firstEnrichment.enrichmentRunId, { service: "apollo-service", event: "waterfall-webhook-done", detail: `requestId=${requestId}, updated=${updated}/${payload.people.length}, creditsConsumed=${creditsConsumed}`, data: { requestId, updated, total: payload.people.length, creditsConsumed } }, webhookTraceHeaders).catch(() => {});
