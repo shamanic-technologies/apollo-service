@@ -5,18 +5,19 @@ import { apolloPeopleEnrichments } from "../db/schema.js";
 import { serviceAuth, type AuthenticatedRequest } from "../middleware/auth.js";
 import { matchPersonByName, buildWaterfallWebhookUrl } from "../lib/apollo-client.js";
 import { decryptKey } from "../lib/keys-client.js";
-import { createRun, updateRun, addCosts, updateCostStatus, type IdentityHeaders } from "../lib/runs-client.js";
+import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/runs-client.js";
 import { authorizeCredit } from "../lib/billing-client.js";
 import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment } from "../lib/transform.js";
 import { MatchRequestSchema } from "../schemas.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { assertKeySource } from "../lib/validators.js";
-import {
-  WATERFALL_MAX_CREDITS,
-  pollForWaterfallEmail,
-  provisionWaterfallCost,
-  expireStalePendingWaterfall,
-} from "../lib/waterfall.js";
+// Waterfall disabled 2026-05-28 — see src/lib/waterfall.ts header for revive.
+// import {
+//   WATERFALL_MAX_CREDITS,
+//   pollForWaterfallEmail,
+//   provisionWaterfallCost,
+//   expireStalePendingWaterfall,
+// } from "../lib/waterfall.js";
 
 const router = Router();
 
@@ -82,9 +83,10 @@ async function findCachedMatch(
     .limit(1);
 
   if (negative) {
-    if (negative.waterfallStatus === "pending") {
-      await expireStalePendingWaterfall(negative);
-    }
+    // Waterfall disabled 2026-05-28 — no more lazy cleanup of pending rows.
+    // if (negative.waterfallStatus === "pending") {
+    //   await expireStalePendingWaterfall(negative);
+    // }
     return { record: negative, negative: true };
   }
 
@@ -139,9 +141,11 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
     const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/match" }, tracking);
     assertKeySource(keySource);
 
+    // Waterfall disabled 2026-05-28 — authorize the direct Apollo cost (1
+    // credit per email). Previously authorized WATERFALL_MAX_CREDITS=20.
     if (keySource === "platform") {
       const auth = await authorizeCredit({
-        items: [{ costName: "apollo-credit", quantity: WATERFALL_MAX_CREDITS }],
+        items: [{ costName: "apollo-credit", quantity: 1 }],
         description: "apollo-credit",
         orgId: req.orgId!,
         userId: req.userId!,
@@ -164,8 +168,6 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
     const webhookUrl = buildWaterfallWebhookUrl();
     const result = await matchPersonByName(apolloApiKey, firstName, lastName, organizationDomain, webhookUrl);
     const person = result.person;
-    const waterfallAccepted = result.waterfall?.status === "accepted";
-    const waterfallRequestId = result.request_id ? String(result.request_id) : null;
 
     const matchRun = await createRun({
       orgId: req.orgId!,
@@ -180,13 +182,8 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
     });
 
     let enrichmentId: string | null = null;
-    let provisionedCostId: string | null = null;
 
     if (person) {
-      if (!person.email && waterfallAccepted) {
-        provisionedCostId = await provisionWaterfallCost(matchRun.id, keySource, identity);
-      }
-
       const [enrichment] = await db.insert(apolloPeopleEnrichments).values({
         orgId: req.orgId!,
         runId,
@@ -197,9 +194,6 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
         ...toEnrichmentDbValues(person),
         enrichmentRunId: matchRun.id,
         keySource,
-        waterfallRequestId,
-        waterfallStatus: !person.email && waterfallAccepted ? "pending" : null,
-        provisionedCostId,
       }).returning();
 
       enrichmentId = enrichment.id;
@@ -207,59 +201,13 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
       if (person.email) {
         // Email found immediately — charge 1 credit actual
         await addCosts(matchRun.id, [{ costName: "apollo-credit", costSource: keySource, quantity: 1 }], identity);
-      } else if (waterfallAccepted && enrichmentId) {
-        // Waterfall accepted — poll for email synchronously
-        traceEvent(runId, { service: "apollo-service", event: "waterfall-poll-start", detail: `enrichmentId=${enrichmentId}, waterfallRequestId=${waterfallRequestId}` }, req.headers).catch(() => {});
-
-        const pollResult = await pollForWaterfallEmail(enrichmentId);
-
-        if (pollResult.resolved) {
-          if (pollResult.record?.email) {
-            // Waterfall found email during poll
-            traceEvent(runId, { service: "apollo-service", event: "waterfall-poll-success", detail: `email found via waterfall` }, req.headers).catch(() => {});
-
-            // Cancel provisioned, actual cost will be added by webhook handler
-            if (provisionedCostId) {
-              await updateCostStatus(matchRun.id, provisionedCostId, "cancelled", identity);
-            }
-
-            await updateRun(matchRun.id, "completed", identity);
-
-            const transformed = transformCachedEnrichment(pollResult.record.apolloPersonId ?? person.id, pollResult.record);
-            return res.json({ enrichmentId, person: transformed, cached: false });
-          }
-
-          // Waterfall completed but found nothing — this is a valid result, not a timeout
-          if (provisionedCostId) {
-            await updateCostStatus(matchRun.id, provisionedCostId, "cancelled", identity);
-          }
-          await updateRun(matchRun.id, "completed", identity);
-
-          traceEvent(runId, { service: "apollo-service", event: "match-done", detail: `enrichmentId=${enrichmentId}, hasEmail=false, waterfallResolved=true` }, req.headers).catch(() => {});
-
-          return res.json({ enrichmentId, person: null, cached: false });
-        }
-
-        // Timeout — waterfall didn't resolve in time. Mark the enrichment as 'timeout'
-        // BEFORE returning so the webhook can still reconcile costs idempotently when it
-        // eventually arrives (Apollo retries 5xx). The webhook treats 'timeout' rows the
-        // same as 'pending' for reconciliation.
-        await db.update(apolloPeopleEnrichments)
-          .set({ waterfallStatus: "timeout" })
-          .where(eq(apolloPeopleEnrichments.id, enrichmentId));
-
-        console.error(`[Apollo Service] Waterfall polling timeout: enrichment ${enrichmentId} (waterfallRequestId=${waterfallRequestId})`);
-        traceEvent(runId, { service: "apollo-service", event: "waterfall-poll-timeout", detail: `enrichmentId=${enrichmentId}, waterfallRequestId=${waterfallRequestId}`, level: "error" }, req.headers).catch(() => {});
-
-        // Mark run as FAILED — cost stays provisioned (webhook will reconcile when it arrives)
-        await updateRun(matchRun.id, "failed", identity);
-
-        return res.status(504).json({
-          type: "waterfall_timeout",
-          error: "Waterfall email enrichment timeout — webhook did not arrive within 60s",
-          enrichmentId,
-        });
       }
+
+      // Waterfall disabled 2026-05-28 — see src/lib/waterfall.ts revive notes.
+      // Previously: if !person.email && waterfall.status==="accepted",
+      // provision WATERFALL_MAX_CREDITS, poll up to 60s, return person on
+      // resolved or 504 on timeout. Now no-op: callers see person:null when
+      // Apollo returns no email.
     } else {
       // Store negative cache record so we don't re-query Apollo for 24h
       await db.insert(apolloPeopleEnrichments).values({
@@ -281,7 +229,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
     const transformed = person ? transformApolloPerson(person) : null;
 
-    traceEvent(runId, { service: "apollo-service", event: "match-done", detail: `enrichmentId=${enrichmentId}, hasEmail=${!!person?.email}, waterfallAccepted=${waterfallAccepted}`, data: { enrichmentId, hasEmail: !!person?.email } }, req.headers).catch(() => {});
+    traceEvent(runId, { service: "apollo-service", event: "match-done", detail: `enrichmentId=${enrichmentId}, hasEmail=${!!person?.email}`, data: { enrichmentId, hasEmail: !!person?.email } }, req.headers).catch(() => {});
 
     res.json({ enrichmentId, person: transformed, cached: false });
   } catch (error) {

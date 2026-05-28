@@ -236,7 +236,7 @@ describe("POST /match — negative cache", () => {
     expect(mockMatchPersonByName).not.toHaveBeenCalled();
   });
 
-  it("should return negative cache when waterfall is pending > 24h (webhook never arrived)", async () => {
+  it.skip("should return negative cache when waterfall is pending > 24h (webhook never arrived)", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const stalePendingRecord = {
       ...NEGATIVE_CACHE_RECORD,

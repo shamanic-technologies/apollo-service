@@ -1,11 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 /**
- * Regression test: all Apollo enrichment/match calls MUST include
- * run_waterfall_email: true so that Apollo cascades through third-party
- * email providers when its own database has no email.
+ * Regression test: all Apollo enrichment/match calls MUST send
+ * run_waterfall_email: false. Waterfall (third-party email vendor) was
+ * disabled 2026-05-28 — vendor email quality was unreliable and not worth
+ * the up-to-20-credit cost. Direct Apollo /people/match only.
  *
- * Without this flag, ~70% of enrichments return no email.
+ * If this test fails, someone re-enabled waterfall. Confirm intent before
+ * flipping the flag back to true — also requires reviving the surfaces
+ * commented out in waterfall.ts, search.ts, match.ts, webhook.ts, schemas.ts.
  */
 
 const fetchSpy = vi.fn();
@@ -36,34 +39,34 @@ function parsedBody(callIndex: number): Record<string, unknown> {
   return JSON.parse(call[1].body);
 }
 
-describe("run_waterfall_email flag", () => {
-  it("enrichPerson sends run_waterfall_email: true", async () => {
+describe("run_waterfall_email flag (disabled)", () => {
+  it("enrichPerson sends run_waterfall_email: false", async () => {
     const { enrichPerson } = await importClient();
     await enrichPerson("key", "person-123");
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const body = parsedBody(0);
-    expect(body.run_waterfall_email).toBe(true);
+    expect(body.run_waterfall_email).toBe(false);
     expect(body.id).toBe("person-123");
   });
 
-  it("matchPersonByName sends run_waterfall_email: true", async () => {
+  it("matchPersonByName sends run_waterfall_email: false", async () => {
     const { matchPersonByName } = await importClient();
     await matchPersonByName("key", "John", "Doe", "acme.com");
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const body = parsedBody(0);
-    expect(body.run_waterfall_email).toBe(true);
+    expect(body.run_waterfall_email).toBe(false);
     expect(body.first_name).toBe("John");
   });
 
-  it("bulkEnrichPeople sends run_waterfall_email: true", async () => {
+  it("bulkEnrichPeople sends run_waterfall_email: false", async () => {
     const { bulkEnrichPeople } = await importClient();
     await bulkEnrichPeople("key", ["person-1", "person-2"]);
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const body = parsedBody(0);
-    expect(body.run_waterfall_email).toBe(true);
+    expect(body.run_waterfall_email).toBe(false);
     expect(body.details).toHaveLength(2);
   });
 });

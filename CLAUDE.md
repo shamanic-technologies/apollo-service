@@ -37,6 +37,11 @@ Apollo.io integration service for lead search, enrichment, and validation with c
 
 ## Waterfall enrichment — canonical pattern
 
+> **DISABLED 2026-05-28** — Apollo waterfall vendor email quality was unreliable.
+> Direct Apollo `/people/match` only (1 credit per email). Revive checklist
+> in `src/lib/waterfall.ts` header. The pattern below is preserved for that
+> revive; current code paths bypass it entirely.
+
 Apollo's waterfall (third-party email lookup vendors) is async on Apollo's side but **synchronous from the caller's perspective in this service**. Both `/match` and `/enrich` MUST follow this pattern when the immediate Apollo response has no email and `waterfall.status === "accepted"`:
 
 1. **Authorize** `WATERFALL_MAX_CREDITS` upfront (platform key only). Cost can be up to 20 credits, not 1.

@@ -3,16 +3,9 @@ import express from "express";
 import request from "supertest";
 
 /**
- * Tests for waterfall cost tracking overhaul.
- *
- * Covers:
- * - Provisioned cost (20 credits) created when waterfall accepted
- * - Cancel provisioned + add actual on webhook arrival
- * - Match run marked "failed" on poll timeout
- * - Match returns 200 person:null when waterfall fails (not 504)
- * - Lazy cleanup: pending > 24h → cancel prov + add 20 actual worst case
- * - updateCostStatus helper in runs-client
- * - No duplicate waterfall-enrichment child run at webhook
+ * SKIPPED 2026-05-28 — waterfall disabled. Direct Apollo /people/match only.
+ * Restore by flipping `describe.skip` → `describe` below + reviving surfaces
+ * commented out in waterfall.ts, search.ts, match.ts, webhook.ts, schemas.ts.
  */
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
@@ -198,7 +191,7 @@ function setBaseHeaders(req: request.Test): request.Test {
 
 // ─── POST /match — Waterfall cost tracking ──────────────────────────────────
 
-describe("POST /match — waterfall provisioned cost", () => {
+describe.skip("POST /match — waterfall provisioned cost", () => {
   let app: express.Express;
 
   beforeEach(async () => {
@@ -388,7 +381,7 @@ describe("POST /match — waterfall provisioned cost", () => {
 
 // ─── POST /webhook/waterfall — Cancel provisioned + add actual ──────────────
 
-describe("POST /webhook/waterfall — cost reconciliation", () => {
+describe.skip("POST /webhook/waterfall — cost reconciliation", () => {
   let app: express.Express;
 
   const PENDING_ENRICHMENT = {
@@ -510,7 +503,7 @@ describe("POST /webhook/waterfall — cost reconciliation", () => {
 
 // ─── Lazy cleanup: pending > 24h ────────────────────────────────────────────
 
-describe("findCachedMatch — lazy cleanup of expired waterfall", () => {
+describe.skip("findCachedMatch — lazy cleanup of expired waterfall", () => {
   let app: express.Express;
 
   beforeEach(async () => {
@@ -597,7 +590,7 @@ describe("findCachedMatch — lazy cleanup of expired waterfall", () => {
 
 // ─── runs-client: updateCostStatus is callable ─────────────────────────────
 
-describe("updateCostStatus integration", () => {
+describe.skip("updateCostStatus integration", () => {
   it("is exported and callable via mock", async () => {
     // The mock at the top of this file already validates that updateCostStatus
     // is imported and callable. This test verifies the mock wiring works.

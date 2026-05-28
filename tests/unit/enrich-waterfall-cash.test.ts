@@ -3,15 +3,9 @@ import express from "express";
 import request from "supertest";
 
 /**
- * Tests for /enrich waterfall cash management.
- *
- * /enrich must follow the same pattern as /match for waterfall billing:
- *  1. authorize WATERFALL_MAX_CREDITS upfront (platform key)
- *  2. provision WATERFALL_MAX_CREDITS cost when waterfall accepted, store provisionedCostId
- *  3. poll synchronously for webhook resolution
- *  4. cancel provisioned on resolution (email or no email), or leave on timeout
- *  5. negative cache (24h) for failed waterfalls; cleanup on stale pending (>24h)
- *  6. webhook reconciliation works on /enrich rows the same as /match rows
+ * SKIPPED 2026-05-28 — waterfall disabled. Direct Apollo /people/match only.
+ * Restore by flipping `describe.skip` → `describe` below + reviving surfaces
+ * commented out in waterfall.ts, search.ts, match.ts, webhook.ts, schemas.ts.
  */
 
 const TEST_INTERVAL_MS = "5";
@@ -209,7 +203,7 @@ async function bootEnrich(s: MockState) {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
-describe("/enrich — waterfall provisioning", () => {
+describe.skip("/enrich — waterfall provisioning", () => {
   it("AC2: provisions WATERFALL_MAX_CREDITS when no email + waterfall accepted; insert row carries provisionedCostId", async () => {
     const s = defaultState({
       // Pre-populate the polling row so 'email' eventually appears (simulate webhook fired during poll)
@@ -249,7 +243,7 @@ describe("/enrich — waterfall provisioning", () => {
   });
 });
 
-describe("/enrich — polling resolution paths", () => {
+describe.skip("/enrich — polling resolution paths", () => {
   it("AC3a: poll resolves with email → cancel provisioned, return person with email", async () => {
     const s = defaultState({
       pollEmailRow: { id: "enr-1", email: "found@x.com", waterfallStatus: "completed", apolloPersonId: "ap-1" },
@@ -320,7 +314,7 @@ describe("/enrich — polling resolution paths", () => {
   });
 });
 
-describe("/enrich — credit authorization", () => {
+describe.skip("/enrich — credit authorization", () => {
   it("AC1: authorize uses WATERFALL_MAX_CREDITS quantity (not 1)", async () => {
     const s = defaultState({
       pollEmailRow: { id: "enr-1", email: "x@y.com", waterfallStatus: "completed", apolloPersonId: "ap-1" },
@@ -378,7 +372,7 @@ describe("/enrich — credit authorization", () => {
   });
 });
 
-describe("/enrich — negative cache + lazy cleanup", () => {
+describe.skip("/enrich — negative cache + lazy cleanup", () => {
   it("AC4: cache hit on negative recent (email null, status=failed, <24h) → no Apollo call, returns null person", async () => {
     const recentDate = new Date(Date.now() - 60 * 60 * 1000); // 1h ago
     const s = defaultState({

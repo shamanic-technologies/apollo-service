@@ -1,24 +1,30 @@
 /**
- * Shared waterfall enrichment helpers used by /match and /enrich.
+ * DISABLED 2026-05-28 — Apollo waterfall (third-party vendor email lookup)
+ * was disabled because vendor email quality was unreliable and not worth the
+ * up-to-20-credit cost. Direct Apollo /people/match only (1 credit per email).
  *
- * Apollo's waterfall (third-party email vendors) is async on Apollo's side but
- * synchronous from this service's perspective: callers expect a single response
- * with the email present, definitively absent, or a 504 timeout.
+ * To revive:
+ * 1. Uncomment the block below.
+ * 2. Set `run_waterfall_email: true` in src/lib/apollo-client.ts (3 fns).
+ * 3. Uncomment waterfall imports + branches in src/routes/search.ts,
+ *    src/routes/match.ts, and the webhook handler in src/routes/webhook.ts.
+ * 4. Uncomment `WaterfallTimeoutError` Zod export in src/schemas.ts.
+ * 5. Bump the authorize quantity in search.ts + match.ts from `1` back to
+ *    `WATERFALL_MAX_CREDITS`.
+ * 6. Un-skip the waterfall test suites (describe.skip → describe).
+ * 7. Update CLAUDE.md banner above "Waterfall enrichment — canonical pattern".
  *
- * See `CLAUDE.md > Waterfall enrichment — canonical pattern` for the full flow.
+ * See CLAUDE.md > "Waterfall enrichment — canonical pattern" for the full
+ * flow that was in place before disabling.
  */
 
+/*
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloPeopleEnrichments } from "../db/schema.js";
 import { addCosts, updateCostStatus, type IdentityHeaders } from "./runs-client.js";
 import { traceEvent } from "./trace-event.js";
 
-/**
- * Maximum number of Apollo credits a single waterfall request can consume.
- * Used both to authorize/provision upfront and to bill the worst case when a
- * webhook never arrives within the cleanup TTL.
- */
 export const WATERFALL_MAX_CREDITS = 20;
 
 export function getWaterfallPollIntervalMs(): number {
@@ -29,12 +35,6 @@ export function getWaterfallPollTimeoutMs(): number {
   return Number(process.env.WATERFALL_POLL_TIMEOUT_MS) || 60_000;
 }
 
-/**
- * Poll the DB for a waterfall email result.
- * Returns:
- * - { record, resolved: true } if webhook arrived (with or without email)
- * - { record: null, resolved: false } if poll timed out
- */
 export async function pollForWaterfallEmail(
   enrichmentId: string,
   timeoutMs: number = getWaterfallPollTimeoutMs(),
@@ -63,13 +63,6 @@ export async function pollForWaterfallEmail(
   return { record: null, resolved: false };
 }
 
-/**
- * Provision the worst-case waterfall cost upfront on the enrichment run.
- * Returns the provisioned cost id (or null if `addCosts` returned nothing).
- *
- * Fail-loud: errors propagate so the caller's request fails and no row is
- * inserted with a missing provisionedCostId.
- */
 export async function provisionWaterfallCost(
   runId: string,
   keySource: "platform" | "org",
@@ -83,16 +76,6 @@ export async function provisionWaterfallCost(
   return costs[0]?.id ?? null;
 }
 
-/**
- * Lazy cleanup for a stale `pending` waterfall row whose webhook never
- * arrived within 24h. Cancels the provisioned cost, adds the worst-case
- * actual cost (Apollo charged us, so the org pays), marks the row `expired`,
- * and emits a trace event.
- *
- * Fail-loud: cost reconciliation throws if runs-service is down so the caller
- * retries when it comes back up — the row is only marked `expired` after
- * costs reconcile.
- */
 export async function expireStalePendingWaterfall(
   record: typeof apolloPeopleEnrichments.$inferSelect,
 ): Promise<void> {
@@ -132,3 +115,4 @@ export async function expireStalePendingWaterfall(
     .set({ waterfallStatus: "expired" })
     .where(eq(apolloPeopleEnrichments.id, record.id));
 }
+*/
