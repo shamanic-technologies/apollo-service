@@ -243,7 +243,10 @@ export async function enrichPerson(
     body: JSON.stringify({
       id: personId,
       reveal_personal_emails: false,
-      run_waterfall_email: true,
+      // Waterfall disabled 2026-05-28 — vendor email quality unreliable.
+      // Revive by flipping to `true` + uncommenting surfaces in
+      // waterfall.ts, search.ts, match.ts, webhook.ts, schemas.ts.
+      run_waterfall_email: false,
       ...(webhookUrl && { webhook_url: webhookUrl }),
     }),
   });
@@ -278,7 +281,8 @@ export async function matchPersonByName(
       last_name: lastName,
       domain,
       reveal_personal_emails: false,
-      run_waterfall_email: true,
+      // Waterfall disabled 2026-05-28 — see enrichPerson note.
+      run_waterfall_email: false,
       ...(webhookUrl && { webhook_url: webhookUrl }),
     }),
   });
@@ -309,7 +313,8 @@ export async function bulkEnrichPeople(
     body: JSON.stringify({
       details: personIds.map((id) => ({ id })),
       reveal_personal_emails: false,
-      run_waterfall_email: true,
+      // Waterfall disabled 2026-05-28 — see enrichPerson note.
+      run_waterfall_email: false,
       ...(webhookUrl && { webhook_url: webhookUrl }),
     }),
   });

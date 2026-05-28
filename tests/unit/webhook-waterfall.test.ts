@@ -3,14 +3,9 @@ import express from "express";
 import request from "supertest";
 
 /**
- * Tests for POST /webhook/waterfall — Apollo waterfall enrichment callback.
- *
- * Covers: secret validation, enrichment update, cost tracking, edge cases.
- *
- * Key invariants:
- * - credits_consumed is tracked ONCE per webhook (not per person)
- * - A single waterfall run is created per webhook batch
- * - request_id precision is preserved via rawBody parsing
+ * SKIPPED 2026-05-28 — waterfall disabled; webhook now a 200 no-op.
+ * Restore by flipping `describe.skip` → `describe` below + reviving the
+ * webhook handler body in src/routes/webhook.ts.
  */
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
@@ -109,7 +104,7 @@ function createTestApp() {
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
-describe("POST /webhook/waterfall", () => {
+describe.skip("POST /webhook/waterfall", () => {
   let app: express.Express;
 
   beforeEach(async () => {

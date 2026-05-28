@@ -95,13 +95,15 @@ export const ErrorResponseSchema = z
         required_cents: z.number().int(),
       })
       .openapi("CreditInsufficientError"),
-    z
-      .object({
-        type: z.literal("waterfall_timeout"),
-        error: z.string(),
-        enrichmentId: z.string(),
-      })
-      .openapi("WaterfallTimeoutError"),
+    // Waterfall disabled 2026-05-28 — 504 waterfall_timeout no longer
+    // emitted by /enrich or /match. Revive when re-enabling waterfall.
+    // z
+    //   .object({
+    //     type: z.literal("waterfall_timeout"),
+    //     error: z.string(),
+    //     enrichmentId: z.string(),
+    //   })
+    //   .openapi("WaterfallTimeoutError"),
     z
       .object({
         type: z.literal("not_found"),

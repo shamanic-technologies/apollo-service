@@ -77,7 +77,7 @@ describe("T1 — RunsServiceError", () => {
 
 // ─── T2 + T3: webhook 5xx on reconciliation fail + timeout rows reconciled ────
 
-describe("T2/T3 — webhook reconciliation + timeout handling", () => {
+describe.skip("T2/T3 — webhook reconciliation + timeout handling (waterfall disabled)", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
@@ -222,7 +222,7 @@ describe("T2/T3 — webhook reconciliation + timeout handling", () => {
 
 // ─── T3: /match polling timeout sets waterfallStatus='timeout' ────────────────
 
-describe("T3 — /match poll timeout marks waterfallStatus='timeout'", () => {
+describe.skip("T3 — /match poll timeout marks waterfallStatus='timeout' (waterfall disabled)", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
