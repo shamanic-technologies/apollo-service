@@ -129,7 +129,8 @@ const MOCK_PERSON_WITH_EMAIL = {
 
 const mockMatchPersonByName = vi.fn();
 
-vi.mock("../../src/lib/apollo-client.js", () => ({
+vi.mock("../../src/lib/apollo-client.js", async (importOriginal) => ({
+  ...((await importOriginal()) as Record<string, unknown>),
   matchPersonByName: (...args: unknown[]) => mockMatchPersonByName(...args),
   buildWaterfallWebhookUrl: () => "https://apollo.test/webhook/waterfall?secret=s",
 }));

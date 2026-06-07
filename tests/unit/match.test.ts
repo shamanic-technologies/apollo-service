@@ -112,7 +112,8 @@ const MOCK_PERSON = {
 
 const mockMatchPersonByName = vi.fn().mockResolvedValue({ person: MOCK_PERSON });
 
-vi.mock("../../src/lib/apollo-client.js", () => ({
+vi.mock("../../src/lib/apollo-client.js", async (importOriginal) => ({
+  ...((await importOriginal()) as Record<string, unknown>),
   matchPersonByName: (...args: unknown[]) => mockMatchPersonByName(...args),
   buildWaterfallWebhookUrl: () => undefined,
 }));
@@ -261,6 +262,36 @@ describe("POST /match", () => {
       .expect(200);
 
     expect(mockAddCosts).not.toHaveBeenCalled();
+  });
+
+  it("should NOT charge and should null the email when status is non-verified (extrapolated)", async () => {
+    mockMatchPersonByName.mockResolvedValueOnce({
+      person: { ...MOCK_PERSON, email: "guess@acme.com", email_status: "extrapolated" },
+    });
+
+    const res = await setBaseHeaders(request(app).post("/match"))
+      .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" })
+      .expect(200);
+
+    // Apollo does not bill non-verified emails — neither do we.
+    expect(mockAddCosts).not.toHaveBeenCalled();
+    // Person metadata is still returned, but the guessed email is hidden.
+    expect(res.body.person).not.toBeNull();
+    expect(res.body.person.email).toBeNull();
+    expect(res.body.person.emailStatus).toBe("extrapolated");
+  });
+
+  it("should NOT charge and should null the email for the email_not_unlocked placeholder", async () => {
+    mockMatchPersonByName.mockResolvedValueOnce({
+      person: { ...MOCK_PERSON, email: "email_not_unlocked@domain.com", email_status: "verified" },
+    });
+
+    const res = await setBaseHeaders(request(app).post("/match"))
+      .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" })
+      .expect(200);
+
+    expect(mockAddCosts).not.toHaveBeenCalled();
+    expect(res.body.person.email).toBeNull();
   });
 
   it("should NOT charge when Apollo returns no match", async () => {

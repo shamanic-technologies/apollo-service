@@ -90,7 +90,8 @@ vi.mock("../../src/db/schema.js", () => ({
 // Mock Apollo client
 const mockSearchPeople = vi.fn();
 const mockEnrichPerson = vi.fn();
-vi.mock("../../src/lib/apollo-client.js", () => ({
+vi.mock("../../src/lib/apollo-client.js", async (importOriginal) => ({
+  ...((await importOriginal()) as Record<string, unknown>),
   searchPeople: (...args: unknown[]) => mockSearchPeople(...args),
   enrichPerson: (...args: unknown[]) => mockEnrichPerson(...args),
   buildWaterfallWebhookUrl: () => undefined,

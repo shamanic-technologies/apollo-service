@@ -133,7 +133,7 @@ export interface ApolloPerson {
   first_name: string;
   last_name: string;
   name: string;
-  email: string;
+  email: string | null;
   email_status: EmailStatus | null;
   title: string;
   linkedin_url: string;
@@ -190,6 +190,41 @@ export interface ApolloMatchResponse {
   person: ApolloPerson | null;
   waterfall?: ApolloWaterfallStatus;
   request_id?: string | number;
+}
+
+/**
+ * Sentinel Apollo returns in `email` when an email exists but the plan/credits
+ * cannot reveal it. It is NOT a real address — never charge, cache, or return it.
+ */
+export const APOLLO_PLACEHOLDER_EMAIL = "email_not_unlocked@domain.com";
+
+/**
+ * True only when Apollo SMTP-confirmed the email (`email_status === "verified"`).
+ * Apollo bills 1 credit ONLY for verified emails; every other status it returns —
+ * extrapolated (UI "Guessed"), unverified, catch_all, update_required, user_managed,
+ * unknown — is NOT billed and NOT deliverable-guaranteed, and the placeholder above
+ * is not an address at all. We treat all of those as "no email": not billed, not
+ * positive-cached, not returned to callers.
+ */
+export function hasVerifiedEmail(
+  person: Pick<ApolloPerson, "email" | "email_status">
+): boolean {
+  return (
+    !!person.email &&
+    person.email !== APOLLO_PLACEHOLDER_EMAIL &&
+    person.email_status === "verified"
+  );
+}
+
+/**
+ * Normalize an Apollo person so a non-verified email is treated as absent: nulls
+ * `email` while keeping `email_status` for audit. Downstream code (charge gate,
+ * DB row, response transform, cache key) then uniformly sees `email === null` for
+ * anything Apollo did not verify. Returns the person unchanged when verified.
+ */
+export function withVerifiedEmailOnly(person: ApolloPerson): ApolloPerson {
+  if (hasVerifiedEmail(person)) return person;
+  return { ...person, email: null };
 }
 
 
