@@ -45,6 +45,11 @@ const mockSelectLimit = vi.fn().mockResolvedValue([]);
 
 vi.mock("../../src/db/index.js", () => ({
   db: {
+    transaction: async (cb: (tx: unknown) => unknown) =>
+      cb({
+        insert: vi.fn().mockReturnValue({ values: (...args: unknown[]) => mockInsertValues(...args) }),
+        execute: vi.fn().mockResolvedValue([]),
+      }),
     insert: vi.fn().mockReturnValue({
       values: (...args: unknown[]) => mockInsertValues(...args),
     }),

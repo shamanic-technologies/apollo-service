@@ -3,6 +3,24 @@ import type { EmailStatus } from "../schemas.js";
 const APOLLO_API_BASE = "https://api.apollo.io/api/v1";
 
 /**
+ * Hard cap on how long a single Apollo people/match request may run. /match and
+ * /enrich run inside a DB transaction holding an advisory lock, so a hung Apollo
+ * call would pin a connection + lock; aborting bounds that hold time.
+ */
+const APOLLO_FETCH_TIMEOUT_MS = 30_000;
+
+/** `fetch` with an AbortController timeout. Throws on timeout so callers fail loud. */
+async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), APOLLO_FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Parse a JSON response body while preserving large integer request_id values.
  * Apollo returns request_id as a JSON number that exceeds Number.MAX_SAFE_INTEGER,
  * causing precision loss with standard JSON.parse. This converts the numeric
@@ -269,7 +287,7 @@ export async function enrichPerson(
   personId: string,
   webhookUrl?: string
 ): Promise<ApolloEnrichResponse> {
-  const response = await fetch(`${APOLLO_API_BASE}/people/match`, {
+  const response = await fetchWithTimeout(`${APOLLO_API_BASE}/people/match`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -305,7 +323,7 @@ export async function matchPersonByName(
   domain: string,
   webhookUrl?: string
 ): Promise<ApolloMatchResponse> {
-  const response = await fetch(`${APOLLO_API_BASE}/people/match`, {
+  const response = await fetchWithTimeout(`${APOLLO_API_BASE}/people/match`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
