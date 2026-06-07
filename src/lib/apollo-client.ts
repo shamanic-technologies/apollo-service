@@ -3,6 +3,24 @@ import type { EmailStatus } from "../schemas.js";
 const APOLLO_API_BASE = "https://api.apollo.io/api/v1";
 
 /**
+ * Hard cap on how long a single Apollo people/match request may run. /match and
+ * /enrich run inside a DB transaction holding an advisory lock, so a hung Apollo
+ * call would pin a connection + lock; aborting bounds that hold time.
+ */
+const APOLLO_FETCH_TIMEOUT_MS = 30_000;
+
+/** `fetch` with an AbortController timeout. Throws on timeout so callers fail loud. */
+async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), APOLLO_FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Parse a JSON response body while preserving large integer request_id values.
  * Apollo returns request_id as a JSON number that exceeds Number.MAX_SAFE_INTEGER,
  * causing precision loss with standard JSON.parse. This converts the numeric
@@ -133,7 +151,7 @@ export interface ApolloPerson {
   first_name: string;
   last_name: string;
   name: string;
-  email: string;
+  email: string | null;
   email_status: EmailStatus | null;
   title: string;
   linkedin_url: string;
@@ -192,6 +210,41 @@ export interface ApolloMatchResponse {
   request_id?: string | number;
 }
 
+/**
+ * Sentinel Apollo returns in `email` when an email exists but the plan/credits
+ * cannot reveal it. It is NOT a real address — never charge, cache, or return it.
+ */
+export const APOLLO_PLACEHOLDER_EMAIL = "email_not_unlocked@domain.com";
+
+/**
+ * True only when Apollo SMTP-confirmed the email (`email_status === "verified"`).
+ * Apollo bills 1 credit ONLY for verified emails; every other status it returns —
+ * extrapolated (UI "Guessed"), unverified, catch_all, update_required, user_managed,
+ * unknown — is NOT billed and NOT deliverable-guaranteed, and the placeholder above
+ * is not an address at all. We treat all of those as "no email": not billed, not
+ * positive-cached, not returned to callers.
+ */
+export function hasVerifiedEmail(
+  person: Pick<ApolloPerson, "email" | "email_status">
+): boolean {
+  return (
+    !!person.email &&
+    person.email !== APOLLO_PLACEHOLDER_EMAIL &&
+    person.email_status === "verified"
+  );
+}
+
+/**
+ * Normalize an Apollo person so a non-verified email is treated as absent: nulls
+ * `email` while keeping `email_status` for audit. Downstream code (charge gate,
+ * DB row, response transform, cache key) then uniformly sees `email === null` for
+ * anything Apollo did not verify. Returns the person unchanged when verified.
+ */
+export function withVerifiedEmailOnly(person: ApolloPerson): ApolloPerson {
+  if (hasVerifiedEmail(person)) return person;
+  return { ...person, email: null };
+}
+
 
 /**
  * Search for people using Apollo API
@@ -234,7 +287,7 @@ export async function enrichPerson(
   personId: string,
   webhookUrl?: string
 ): Promise<ApolloEnrichResponse> {
-  const response = await fetch(`${APOLLO_API_BASE}/people/match`, {
+  const response = await fetchWithTimeout(`${APOLLO_API_BASE}/people/match`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -270,7 +323,7 @@ export async function matchPersonByName(
   domain: string,
   webhookUrl?: string
 ): Promise<ApolloMatchResponse> {
-  const response = await fetch(`${APOLLO_API_BASE}/people/match`, {
+  const response = await fetchWithTimeout(`${APOLLO_API_BASE}/people/match`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

@@ -42,6 +42,11 @@ const mockSelectLimit = vi.fn().mockResolvedValue([]);
 
 vi.mock("../../src/db/index.js", () => ({
   db: {
+    transaction: async (cb: (tx: unknown) => unknown) =>
+      cb({
+        insert: vi.fn().mockReturnValue({ values: (...args: unknown[]) => mockInsertValues(...args) }),
+        execute: vi.fn().mockResolvedValue([]),
+      }),
     insert: vi.fn().mockReturnValue({
       values: (...args: unknown[]) => mockInsertValues(...args),
     }),
@@ -112,7 +117,8 @@ const MOCK_PERSON = {
 
 const mockMatchPersonByName = vi.fn().mockResolvedValue({ person: MOCK_PERSON });
 
-vi.mock("../../src/lib/apollo-client.js", () => ({
+vi.mock("../../src/lib/apollo-client.js", async (importOriginal) => ({
+  ...((await importOriginal()) as Record<string, unknown>),
   matchPersonByName: (...args: unknown[]) => mockMatchPersonByName(...args),
   buildWaterfallWebhookUrl: () => undefined,
 }));
@@ -263,6 +269,36 @@ describe("POST /match", () => {
     expect(mockAddCosts).not.toHaveBeenCalled();
   });
 
+  it("should NOT charge and should null the email when status is non-verified (extrapolated)", async () => {
+    mockMatchPersonByName.mockResolvedValueOnce({
+      person: { ...MOCK_PERSON, email: "guess@acme.com", email_status: "extrapolated" },
+    });
+
+    const res = await setBaseHeaders(request(app).post("/match"))
+      .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" })
+      .expect(200);
+
+    // Apollo does not bill non-verified emails — neither do we.
+    expect(mockAddCosts).not.toHaveBeenCalled();
+    // Person metadata is still returned, but the guessed email is hidden.
+    expect(res.body.person).not.toBeNull();
+    expect(res.body.person.email).toBeNull();
+    expect(res.body.person.emailStatus).toBe("extrapolated");
+  });
+
+  it("should NOT charge and should null the email for the email_not_unlocked placeholder", async () => {
+    mockMatchPersonByName.mockResolvedValueOnce({
+      person: { ...MOCK_PERSON, email: "email_not_unlocked@domain.com", email_status: "verified" },
+    });
+
+    const res = await setBaseHeaders(request(app).post("/match"))
+      .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" })
+      .expect(200);
+
+    expect(mockAddCosts).not.toHaveBeenCalled();
+    expect(res.body.person.email).toBeNull();
+  });
+
   it("should NOT charge when Apollo returns no match", async () => {
     mockMatchPersonByName.mockResolvedValueOnce({ person: null });
 
@@ -288,6 +324,26 @@ describe("POST /match", () => {
 
     expect(res.body.cached).toBe(true);
     expect(res.body.enrichmentId).toBeNull();
+    expect(res.body.person.email).toBe("john@acme.com");
+    expect(mockMatchPersonByName).not.toHaveBeenCalled();
+    expect(mockAddCosts).not.toHaveBeenCalled();
+  });
+
+  // ─── Locked re-check (stampede collapse) ────────────────────────────────────
+
+  it("should serve the locked re-check cache hit without calling Apollo", async () => {
+    // Fast cache check misses (positive + negative both empty)...
+    mockSelectLimit.mockResolvedValueOnce([]);
+    mockSelectLimit.mockResolvedValueOnce([]);
+    // ...but the re-check under the advisory lock finds a row a concurrent
+    // request just committed → serve it, no Apollo call, no charge.
+    mockSelectLimit.mockResolvedValueOnce([POSITIVE_CACHE_RECORD]);
+
+    const res = await setBaseHeaders(request(app).post("/match"))
+      .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" })
+      .expect(200);
+
+    expect(res.body.cached).toBe(true);
     expect(res.body.person.email).toBe("john@acme.com");
     expect(mockMatchPersonByName).not.toHaveBeenCalled();
     expect(mockAddCosts).not.toHaveBeenCalled();

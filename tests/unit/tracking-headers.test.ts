@@ -47,7 +47,8 @@ const mockSearchPeople = vi.fn().mockResolvedValue({
   pagination: { total_entries: 1 },
 });
 
-vi.mock("../../src/lib/apollo-client.js", () => ({
+vi.mock("../../src/lib/apollo-client.js", async (importOriginal) => ({
+  ...((await importOriginal()) as Record<string, unknown>),
   searchPeople: (...args: unknown[]) => mockSearchPeople(...args),
   enrichPerson: vi.fn(),
   matchPersonByName: vi.fn(),

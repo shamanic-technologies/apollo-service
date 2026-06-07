@@ -89,7 +89,8 @@ vi.mock("../../src/lib/billing-client.js", () => ({
   authorizeCredit: vi.fn().mockResolvedValue({ sufficient: true, balance_cents: 99999 }),
 }));
 
-vi.mock("../../src/lib/apollo-client.js", () => ({
+vi.mock("../../src/lib/apollo-client.js", async (importOriginal) => ({
+  ...((await importOriginal()) as Record<string, unknown>),
   searchPeople: vi.fn().mockResolvedValue({ people: [], total_entries: 0 }),
   enrichPerson: vi.fn().mockResolvedValue({ person: null }),
   buildWaterfallWebhookUrl: () => undefined,

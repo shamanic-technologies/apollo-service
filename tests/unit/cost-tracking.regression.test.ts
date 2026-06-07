@@ -46,6 +46,11 @@ const mockInsertReturning = vi.fn().mockResolvedValue([{ id: "record-1" }]);
 const mockDbSetCalls: Array<Record<string, unknown>> = [];
 vi.mock("../../src/db/index.js", () => ({
   db: {
+    transaction: async (cb: (tx: unknown) => unknown) =>
+      cb({
+        insert: vi.fn().mockReturnValue({ values: vi.fn().mockReturnValue({ returning: (...args: unknown[]) => mockInsertReturning(...args) }) }),
+        execute: vi.fn().mockResolvedValue([]),
+      }),
     insert: vi.fn().mockReturnValue({
       values: vi.fn().mockReturnValue({
         returning: (...args: unknown[]) => mockInsertReturning(...args),
@@ -144,7 +149,8 @@ const mockEnrichPerson = vi.fn().mockResolvedValue({
   },
 });
 
-vi.mock("../../src/lib/apollo-client.js", () => ({
+vi.mock("../../src/lib/apollo-client.js", async (importOriginal) => ({
+  ...((await importOriginal()) as Record<string, unknown>),
   searchPeople: (...args: unknown[]) => mockSearchPeople(...args),
   enrichPerson: (...args: unknown[]) => mockEnrichPerson(...args),
   buildWaterfallWebhookUrl: () => undefined,
@@ -444,6 +450,47 @@ describe("Apollo service cost tracking", () => {
       expect.any(String),
       expect.objectContaining({ orgId: "org_test" })
     );
+  });
+
+  it("should NOT post enrichment cost when Apollo returns a non-verified email (extrapolated = not billed)", async () => {
+    mockEnrichPerson.mockResolvedValueOnce({
+      person: {
+        id: "person-0",
+        first_name: "First0",
+        last_name: "Last0",
+        name: "First0 Last0",
+        email: "guess@company0.com",
+        email_status: "extrapolated",
+        title: "CEO",
+        linkedin_url: null,
+        organization: {
+          id: "org-0",
+          name: "Company0",
+          website_url: "https://company0.com",
+          primary_domain: "company0.com",
+          industry: "tech",
+          estimated_num_employees: 50,
+          annual_revenue: null,
+        },
+      },
+    });
+
+    const res = await request(app)
+      .post("/enrich")
+      .set("X-API-Key", "test-service-secret")
+      .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
+      .set("X-Run-Id", "campaign-run-abc")
+      .set("X-Brand-Id", "brand-1")
+      .set("X-Campaign-Id", "campaign-1")
+      .send({ apolloPersonId: "person-0" })
+      .expect(200);
+
+    // Apollo does not bill non-verified emails — neither do we.
+    expect(mockAddCosts).not.toHaveBeenCalled();
+    // The guessed email is hidden from the caller.
+    expect(res.body.person.email).toBeNull();
+    expect(res.body.person.emailStatus).toBe("extrapolated");
   });
 
   // ─── Hard failure on runs-service errors (POST /enrich) ──────────────────────

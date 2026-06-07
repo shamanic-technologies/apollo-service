@@ -45,6 +45,11 @@ const mockSelectLimit = vi.fn().mockResolvedValue([]);
 
 vi.mock("../../src/db/index.js", () => ({
   db: {
+    transaction: async (cb: (tx: unknown) => unknown) =>
+      cb({
+        insert: vi.fn().mockReturnValue({ values: (...args: unknown[]) => mockInsertValues(...args) }),
+        execute: vi.fn().mockResolvedValue([]),
+      }),
     insert: vi.fn().mockReturnValue({
       values: (...args: unknown[]) => mockInsertValues(...args),
     }),
@@ -115,7 +120,8 @@ const MOCK_PERSON = {
 
 const mockMatchPersonByName = vi.fn().mockResolvedValue({ person: MOCK_PERSON });
 
-vi.mock("../../src/lib/apollo-client.js", () => ({
+vi.mock("../../src/lib/apollo-client.js", async (importOriginal) => ({
+  ...((await importOriginal()) as Record<string, unknown>),
   matchPersonByName: (...args: unknown[]) => mockMatchPersonByName(...args),
   buildWaterfallWebhookUrl: () => undefined,
 }));

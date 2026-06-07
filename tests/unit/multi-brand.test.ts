@@ -75,7 +75,8 @@ vi.mock("../../src/middleware/auth.js", () => ({
   },
 }));
 
-vi.mock("../../src/lib/apollo-client.js", () => ({
+vi.mock("../../src/lib/apollo-client.js", async (importOriginal) => ({
+  ...((await importOriginal()) as Record<string, unknown>),
   searchPeople: vi.fn().mockResolvedValue({
     people: [{ id: "p1", first_name: "Jane", last_name: "Doe", email: "jane@test.com", email_status: "verified", title: "CEO", linkedin_url: null }],
     total_entries: 1,

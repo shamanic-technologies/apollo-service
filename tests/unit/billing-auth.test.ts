@@ -54,6 +54,11 @@ vi.mock("../../src/lib/keys-client.js", () => ({
 const mockInsertReturning = vi.fn().mockResolvedValue([{ id: "record-1" }]);
 vi.mock("../../src/db/index.js", () => ({
   db: {
+    transaction: async (cb: (tx: unknown) => unknown) =>
+      cb({
+        insert: vi.fn().mockReturnValue({ values: vi.fn().mockReturnValue({ returning: (...args: unknown[]) => mockInsertReturning(...args) }) }),
+        execute: vi.fn().mockResolvedValue([]),
+      }),
     insert: vi.fn().mockReturnValue({
       values: vi.fn().mockReturnValue({
         returning: (...args: unknown[]) => mockInsertReturning(...args),
@@ -90,7 +95,8 @@ vi.mock("../../src/db/schema.js", () => ({
 // Mock Apollo client
 const mockSearchPeople = vi.fn();
 const mockEnrichPerson = vi.fn();
-vi.mock("../../src/lib/apollo-client.js", () => ({
+vi.mock("../../src/lib/apollo-client.js", async (importOriginal) => ({
+  ...((await importOriginal()) as Record<string, unknown>),
   searchPeople: (...args: unknown[]) => mockSearchPeople(...args),
   enrichPerson: (...args: unknown[]) => mockEnrichPerson(...args),
   buildWaterfallWebhookUrl: () => undefined,
