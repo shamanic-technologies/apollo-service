@@ -41,7 +41,8 @@ vi.mock("../../src/lib/billing-client.js", () => ({ authorizeCredit: vi.fn() }))
 vi.mock("../../src/lib/runs-client.js", () => ({
   createRun: vi.fn(), updateRun: vi.fn(), addCosts: vi.fn(),
 }));
-vi.mock("../../src/lib/apollo-client.js", () => ({
+vi.mock("../../src/lib/apollo-client.js", async (importOriginal) => ({
+  ...((await importOriginal()) as Record<string, unknown>),
   searchPeople: vi.fn(), enrichPerson: vi.fn(), buildWaterfallWebhookUrl: vi.fn(),
 }));
 

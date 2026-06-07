@@ -249,7 +249,8 @@ describe.skip("T3 — /match poll timeout marks waterfallStatus='timeout' (water
       authorizeCredit: vi.fn().mockResolvedValue({ sufficient: true, balance_cents: 99999 }),
     }));
 
-    vi.doMock("../../src/lib/apollo-client.js", () => ({
+    vi.doMock("../../src/lib/apollo-client.js", async (importOriginal) => ({
+      ...((await importOriginal()) as Record<string, unknown>),
       matchPersonByName: vi.fn().mockResolvedValue({
         person: { id: "p-1", first_name: "John", last_name: "Doe", email: null, email_status: null, organization: { id: "o", primary_domain: "acme.com" } },
         waterfall: { status: "accepted" },
@@ -348,7 +349,8 @@ describe("T4 — /enrich cached flag", () => {
     vi.doMock("../../src/lib/billing-client.js", () => ({
       authorizeCredit: vi.fn().mockResolvedValue({ sufficient: true, balance_cents: 99999 }),
     }));
-    vi.doMock("../../src/lib/apollo-client.js", () => ({
+    vi.doMock("../../src/lib/apollo-client.js", async (importOriginal) => ({
+      ...((await importOriginal()) as Record<string, unknown>),
       enrichPerson: vi.fn(),
       searchPeople: vi.fn(),
       buildWaterfallWebhookUrl: () => undefined,
@@ -417,7 +419,8 @@ describe("T4 — /enrich cached flag", () => {
     vi.doMock("../../src/lib/billing-client.js", () => ({
       authorizeCredit: vi.fn().mockResolvedValue({ sufficient: true, balance_cents: 99999 }),
     }));
-    vi.doMock("../../src/lib/apollo-client.js", () => ({
+    vi.doMock("../../src/lib/apollo-client.js", async (importOriginal) => ({
+      ...((await importOriginal()) as Record<string, unknown>),
       enrichPerson: vi.fn().mockResolvedValue({
         person: { id: "ap-1", first_name: "Jane", last_name: "Doe", email: "jane@x.com", email_status: "verified" },
       }),
@@ -498,7 +501,8 @@ describe("T5 — error responses include `type` discriminator", () => {
     }));
     vi.doMock("../../src/lib/keys-client.js", () => ({ decryptKey: vi.fn() }));
     vi.doMock("../../src/lib/billing-client.js", () => ({ authorizeCredit: vi.fn() }));
-    vi.doMock("../../src/lib/apollo-client.js", () => ({
+    vi.doMock("../../src/lib/apollo-client.js", async (importOriginal) => ({
+      ...((await importOriginal()) as Record<string, unknown>),
       matchPersonByName: vi.fn(), buildWaterfallWebhookUrl: () => undefined,
     }));
     vi.doMock("../../src/middleware/auth.js", () => ({
@@ -534,7 +538,8 @@ describe("T5 — error responses include `type` discriminator", () => {
     vi.doMock("../../src/lib/billing-client.js", () => ({
       authorizeCredit: vi.fn().mockResolvedValue({ sufficient: false, balance_cents: 5, required_cents: 100 }),
     }));
-    vi.doMock("../../src/lib/apollo-client.js", () => ({
+    vi.doMock("../../src/lib/apollo-client.js", async (importOriginal) => ({
+      ...((await importOriginal()) as Record<string, unknown>),
       matchPersonByName: vi.fn(), buildWaterfallWebhookUrl: () => undefined,
     }));
     vi.doMock("../../src/middleware/auth.js", () => ({

@@ -115,7 +115,8 @@ const MOCK_PERSON = {
 
 const mockMatchPersonByName = vi.fn().mockResolvedValue({ person: MOCK_PERSON });
 
-vi.mock("../../src/lib/apollo-client.js", () => ({
+vi.mock("../../src/lib/apollo-client.js", async (importOriginal) => ({
+  ...((await importOriginal()) as Record<string, unknown>),
   matchPersonByName: (...args: unknown[]) => mockMatchPersonByName(...args),
   buildWaterfallWebhookUrl: () => undefined,
 }));

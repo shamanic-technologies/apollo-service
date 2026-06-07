@@ -3,7 +3,7 @@ import { and, gt, eq, isNotNull, desc, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloPeopleEnrichments } from "../db/schema.js";
 import { serviceAuth, type AuthenticatedRequest } from "../middleware/auth.js";
-import { matchPersonByName, buildWaterfallWebhookUrl } from "../lib/apollo-client.js";
+import { matchPersonByName, buildWaterfallWebhookUrl, withVerifiedEmailOnly } from "../lib/apollo-client.js";
 import { decryptKey } from "../lib/keys-client.js";
 import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/runs-client.js";
 import { authorizeCredit } from "../lib/billing-client.js";
@@ -24,7 +24,7 @@ const router = Router();
 /**
  * Look up a cached enrichment by firstName + lastName + organizationDomain.
  * Case-insensitive.
- * - Positive cache (has email): 12-month TTL
+ * - Positive cache (has a verified email): 12-month TTL
  * - Negative cache (no email, waterfall not pending): 24h TTL
  * - Lazy cleanup: pending > 24h → cancel provisioned cost, add worst-case actual, mark expired
  */
@@ -42,7 +42,10 @@ async function findCachedMatch(
     sql`LOWER(${apolloPeopleEnrichments.organizationDomain}) = LOWER(${organizationDomain})`,
   );
 
-  // Positive cache: has email, 12-month TTL
+  // Positive cache: has a VERIFIED email, 12-month TTL. Only verified emails are
+  // billable + deliverable-trusted, so only they are served from positive cache —
+  // this also excludes legacy rows that stored a non-verified (e.g. extrapolated)
+  // email before the verified-only gate landed.
   const [positive] = await db
     .select()
     .from(apolloPeopleEnrichments)
@@ -50,6 +53,7 @@ async function findCachedMatch(
       and(
         nameFilter,
         isNotNull(apolloPeopleEnrichments.email),
+        eq(apolloPeopleEnrichments.emailStatus, "verified"),
         gt(apolloPeopleEnrichments.createdAt, twelveMonthsAgo)
       )
     )
@@ -167,7 +171,8 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
     const webhookUrl = buildWaterfallWebhookUrl();
     const result = await matchPersonByName(apolloApiKey, firstName, lastName, organizationDomain, webhookUrl);
-    const person = result.person;
+    // Treat any non-verified email as no email (not billed, not cached, not returned).
+    const person = result.person ? withVerifiedEmailOnly(result.person) : null;
 
     const matchRun = await createRun({
       orgId: req.orgId!,
