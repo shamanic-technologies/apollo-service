@@ -42,6 +42,11 @@ const mockSelectLimit = vi.fn().mockResolvedValue([]);
 
 vi.mock("../../src/db/index.js", () => ({
   db: {
+    transaction: async (cb: (tx: unknown) => unknown) =>
+      cb({
+        insert: vi.fn().mockReturnValue({ values: (...args: unknown[]) => mockInsertValues(...args) }),
+        execute: vi.fn().mockResolvedValue([]),
+      }),
     insert: vi.fn().mockReturnValue({
       values: (...args: unknown[]) => mockInsertValues(...args),
     }),
@@ -319,6 +324,26 @@ describe("POST /match", () => {
 
     expect(res.body.cached).toBe(true);
     expect(res.body.enrichmentId).toBeNull();
+    expect(res.body.person.email).toBe("john@acme.com");
+    expect(mockMatchPersonByName).not.toHaveBeenCalled();
+    expect(mockAddCosts).not.toHaveBeenCalled();
+  });
+
+  // ─── Locked re-check (stampede collapse) ────────────────────────────────────
+
+  it("should serve the locked re-check cache hit without calling Apollo", async () => {
+    // Fast cache check misses (positive + negative both empty)...
+    mockSelectLimit.mockResolvedValueOnce([]);
+    mockSelectLimit.mockResolvedValueOnce([]);
+    // ...but the re-check under the advisory lock finds a row a concurrent
+    // request just committed → serve it, no Apollo call, no charge.
+    mockSelectLimit.mockResolvedValueOnce([POSITIVE_CACHE_RECORD]);
+
+    const res = await setBaseHeaders(request(app).post("/match"))
+      .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" })
+      .expect(200);
+
+    expect(res.body.cached).toBe(true);
     expect(res.body.person.email).toBe("john@acme.com");
     expect(mockMatchPersonByName).not.toHaveBeenCalled();
     expect(mockAddCosts).not.toHaveBeenCalled();

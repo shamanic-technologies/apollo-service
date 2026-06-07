@@ -452,6 +452,11 @@ describe("T4 — /enrich cached flag", () => {
     }));
     vi.doMock("../../src/db/index.js", () => ({
       db: {
+        transaction: async (cb: (tx: unknown) => unknown) =>
+          cb({
+            insert: vi.fn().mockReturnValue({ values: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([{ id: "enr-1" }]) }) }),
+            execute: vi.fn().mockResolvedValue([]),
+          }),
         select: vi.fn().mockReturnValue({
           from: vi.fn().mockReturnValue({
             where: vi.fn().mockReturnValue({

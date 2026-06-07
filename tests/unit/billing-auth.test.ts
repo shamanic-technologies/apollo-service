@@ -54,6 +54,11 @@ vi.mock("../../src/lib/keys-client.js", () => ({
 const mockInsertReturning = vi.fn().mockResolvedValue([{ id: "record-1" }]);
 vi.mock("../../src/db/index.js", () => ({
   db: {
+    transaction: async (cb: (tx: unknown) => unknown) =>
+      cb({
+        insert: vi.fn().mockReturnValue({ values: vi.fn().mockReturnValue({ returning: (...args: unknown[]) => mockInsertReturning(...args) }) }),
+        execute: vi.fn().mockResolvedValue([]),
+      }),
     insert: vi.fn().mockReturnValue({
       values: vi.fn().mockReturnValue({
         returning: (...args: unknown[]) => mockInsertReturning(...args),
