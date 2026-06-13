@@ -16,6 +16,17 @@ Apollo.io integration service for lead search, enrichment, and validation with c
 - `pnpm run db:migrate` — run Drizzle migrations
 - `pnpm run db:push` — push schema directly (dev only)
 
+## Apollo pagination hard cap (DO NOT remove the cursor clamp)
+
+Apollo People Search serves at most **50,000 records** via pagination
+(100/page × 500 pages). Requesting a page beyond that window returns
+`422 "Page * per page number is over threshold."`, NOT an empty page. The
+`/search/next` cursor MUST clamp `totalPages` to `min(ceil(total/per_page), 500)`
+(`APOLLO_MAX_SEARCH_RESULTS` in `src/routes/search.ts`) so a >50k search exhausts
+cleanly. The 500-page cap is Apollo's documented ceiling — it is NOT an artificial
+limit to be removed (a prior "no artificial cap" test made that mistake and caused
+prod 422→500s, #129).
+
 ## Architecture
 
 - `src/schemas.ts` — Zod schemas + OpenAPI registry (source of truth for validation + OpenAPI)
