@@ -33,6 +33,14 @@ const router = Router();
 
 const DEFAULT_PER_PAGE = 100;
 
+// Apollo People Search exposes at most 50,000 records via pagination
+// (100/page × 500 pages). Requesting a page beyond that window returns
+// HTTP 422 "Page * per page number is over threshold." Clamp the cursor to
+// the reachable window so a search with >50k total entries stops cleanly
+// instead of crashing once it pages past the limit.
+const APOLLO_MAX_SEARCH_RESULTS = 50_000;
+const APOLLO_MAX_REACHABLE_PAGE = Math.floor(APOLLO_MAX_SEARCH_RESULTS / DEFAULT_PER_PAGE);
+
 // Compute the filters prompt once at module load. SearchFiltersSchema is
 // static, so the prompt + hash never change between calls — fail-loud at
 // startup if any field is missing description/example metadata.
@@ -437,8 +445,16 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
       isExhausted = existingCursor.exhausted;
     }
 
-    // If already exhausted, return immediately
-    if (isExhausted) {
+    // If already exhausted — or the cursor has advanced past Apollo's reachable
+    // page window (would 422) — return done immediately. Persist exhaustion for
+    // page-cap cursors so they self-heal instead of re-fetching a doomed page.
+    if (isExhausted || currentPage > APOLLO_MAX_REACHABLE_PAGE) {
+      if (!isExhausted && cursorId) {
+        await db
+          .update(apolloSearchCursors)
+          .set({ exhausted: true, updatedAt: new Date() })
+          .where(eq(apolloSearchCursors.id, cursorId));
+      }
       await updateRun(searchRun.id, "completed", identity);
       return res.json({
         people: [],
@@ -467,7 +483,12 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     // mark exhausted when we've read past the last page. Mid-stream empty
     // pages are transient and must not poison the cursor.
     const nextPage = currentPage + 1;
-    const totalPages = Math.ceil(totalEntries / DEFAULT_PER_PAGE);
+    // Clamp to Apollo's reachable window — a search with >50k total entries has
+    // more pages than Apollo will serve, so exhaust at the cap, not at totalPages.
+    const totalPages = Math.min(
+      Math.ceil(totalEntries / DEFAULT_PER_PAGE),
+      APOLLO_MAX_REACHABLE_PAGE,
+    );
     const done = nextPage > totalPages;
 
     if (cursorId) {
