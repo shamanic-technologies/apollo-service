@@ -421,22 +421,26 @@ describe("POST /search/next", () => {
     );
   });
 
-  // ─── No artificial page cap ───────────────────────────────────────────────
+  // ─── Apollo reachable-window cap (50k records = 500 pages × 100) ──────────
 
-  it("does NOT enforce a 500-page artificial cap when Apollo's totalPages exceeds 500", async () => {
-    // Reading page 600 of a 1000-page result set must stay non-exhausted.
+  it("exhausts at Apollo's reachable window when totalEntries exceeds 50k", async () => {
+    // Apollo serves at most 50,000 records (page 500 × per_page 100). A 100k
+    // result set has more pages than Apollo will return; reading page 500 →
+    // nextPage 501 > reachable cap → exhausted (NOT non-exhausted). The prior
+    // "no artificial cap" assumption produced HTTP 422 "Page * per page number
+    // is over threshold." in prod once the cursor advanced past page 500.
     mockCursor = {
       id: "cursor-1",
       orgId: "org-internal-123",
       campaignId: "campaign-1",
       searchParams: SEARCH_PARAMS,
-      currentPage: 600,
+      currentPage: 500,
       totalEntries: 100_000,
       exhausted: false,
     };
 
     mockSearchPeople.mockResolvedValue({
-      people: [{ id: "p-mid" }],
+      people: [{ id: "p-last-reachable" }],
       total_entries: 100_000,
     });
 
@@ -449,9 +453,38 @@ describe("POST /search/next", () => {
       .send({})
       .expect(200);
 
-    expect(res.body.done).toBe(false);
+    expect(res.body.done).toBe(true);
     expect(mockUpdateSet).toHaveBeenCalledWith(
-      expect.objectContaining({ currentPage: 601, exhausted: false })
+      expect.objectContaining({ currentPage: 501, exhausted: true })
+    );
+  });
+
+  it("returns done WITHOUT calling Apollo when cursor already advanced past the reachable cap", async () => {
+    // Self-heal: a cursor stranded at page 501 (from before this fix) must not
+    // re-fetch a doomed page. It returns done and persists exhausted.
+    mockCursor = {
+      id: "cursor-1",
+      orgId: "org-internal-123",
+      campaignId: "campaign-1",
+      searchParams: SEARCH_PARAMS,
+      currentPage: 501,
+      totalEntries: 100_000,
+      exhausted: false,
+    };
+
+    const res = await request(app)
+      .post("/search/next")
+      .set("X-API-Key", "test-key")
+      .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
+      .send({})
+      .expect(200);
+
+    expect(res.body.done).toBe(true);
+    expect(mockSearchPeople).not.toHaveBeenCalled();
+    expect(mockUpdateSet).toHaveBeenCalledWith(
+      expect.objectContaining({ exhausted: true })
     );
   });
 
