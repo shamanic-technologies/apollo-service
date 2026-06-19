@@ -55,7 +55,10 @@ export interface ApolloSearchParams {
   contact_email_status?: string[];
   q_organization_domains?: string[];
   currently_using_any_of_technology_uids?: string[];
-  revenue_range?: string[];
+  // Apollo expects a single {min, max} integer object — NOT an array of
+  // "min,max" strings. Sending the array form makes Apollo's Ruby do
+  // array["min"] → 422 "no implicit conversion of String into Integer".
+  revenue_range?: { min?: number; max?: number };
   organization_ids?: string[];
   page?: number;
   per_page?: number;
