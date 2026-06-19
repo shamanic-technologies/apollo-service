@@ -2,6 +2,56 @@ import type { ApolloPerson, ApolloSearchParams } from "./apollo-client.js";
 import type { ApolloPeopleEnrichment } from "../db/schema.js";
 
 /**
+ * Apollo's people-search `revenue_range` is a single `{min, max}` integer object,
+ * NOT an array of "min,max" strings. Callers/LLMs emit `revenueRange` as the
+ * documented string-array filter shape (e.g. `["1000000,10000000"]`); collapse
+ * it to the one `{min, max}` object Apollo accepts. Multiple ranges union into a
+ * single span (min of mins, max of maxes) since Apollo supports only one range;
+ * an open-ended bound (e.g. `"10001,"`) omits that key. Sending the array form
+ * makes Apollo's Ruby do `array["min"]` → 422 "no implicit conversion of String
+ * into Integer". Defensively passes an already-`{min,max}` input straight through.
+ */
+export function toApolloRevenueRange(
+  raw: unknown,
+): { min?: number; max?: number } | undefined {
+  if (raw == null) return undefined;
+
+  const finalize = (min?: number, max?: number) => {
+    const out: { min?: number; max?: number } = {};
+    if (min !== undefined) out.min = min;
+    if (max !== undefined) out.max = max;
+    return out.min === undefined && out.max === undefined ? undefined : out;
+  };
+
+  // Already an object — coerce its bounds to finite numbers.
+  if (!Array.isArray(raw) && typeof raw === "object") {
+    const o = raw as { min?: unknown; max?: unknown };
+    const min = Number(o.min);
+    const max = Number(o.max);
+    return finalize(
+      Number.isFinite(min) ? min : undefined,
+      Number.isFinite(max) ? max : undefined,
+    );
+  }
+
+  const entries = Array.isArray(raw) ? raw : [raw];
+  const mins: number[] = [];
+  const maxs: number[] = [];
+  for (const entry of entries) {
+    if (typeof entry !== "string") continue;
+    const [minStr, maxStr] = entry.split(",");
+    const min = Number(minStr?.trim());
+    const max = Number(maxStr?.trim());
+    if (minStr?.trim() && Number.isFinite(min)) mins.push(min);
+    if (maxStr?.trim() && Number.isFinite(max)) maxs.push(max);
+  }
+  return finalize(
+    mins.length ? Math.min(...mins) : undefined,
+    maxs.length ? Math.max(...maxs) : undefined,
+  );
+}
+
+/**
  * Map camelCase search filter params to Apollo's snake_case API format.
  * Shared by POST /search and POST /search/next.
  */
@@ -18,7 +68,7 @@ export function toApolloSearchParams(sp: Record<string, unknown>): ApolloSearchP
     contact_email_status: sp.contactEmailStatus as string[] | undefined,
     q_organization_domains: sp.qOrganizationDomains as string[] | undefined,
     currently_using_any_of_technology_uids: sp.currentlyUsingAnyOfTechnologyUids as string[] | undefined,
-    revenue_range: sp.revenueRange as string[] | undefined,
+    revenue_range: toApolloRevenueRange(sp.revenueRange),
     organization_ids: sp.organizationIds as string[] | undefined,
   };
 }

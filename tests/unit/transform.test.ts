@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment } from "../../src/lib/transform.js";
+import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment, toApolloSearchParams, toApolloRevenueRange } from "../../src/lib/transform.js";
 import type { ApolloPerson } from "../../src/lib/apollo-client.js";
 
 const fullPerson: ApolloPerson = {
@@ -322,6 +322,55 @@ describe("toEnrichmentDbValues", () => {
     // organization must be an object so downstream consumers can safely access .primary_domain etc.
     expect(raw.organization).toEqual({});
     expect((raw.organization as Record<string, unknown>).primary_domain).toBeUndefined();
+  });
+});
+
+describe("toApolloRevenueRange", () => {
+  it("parses a single 'min,max' string into a {min,max} integer object", () => {
+    expect(toApolloRevenueRange(["1000000,10000000"])).toEqual({ min: 1000000, max: 10000000 });
+  });
+
+  it("omits the max key for an open-ended range ('10001,')", () => {
+    expect(toApolloRevenueRange(["10001,"])).toEqual({ min: 10001 });
+  });
+
+  it("omits the min key for a leading-comma range (',5000000')", () => {
+    expect(toApolloRevenueRange([",5000000"])).toEqual({ max: 5000000 });
+  });
+
+  it("unions multiple ranges into one span (min of mins, max of maxes)", () => {
+    expect(toApolloRevenueRange(["1000000,10000000", "10000000,50000000"])).toEqual({
+      min: 1000000,
+      max: 50000000,
+    });
+  });
+
+  it("passes an already-{min,max} object through, coercing to numbers", () => {
+    expect(toApolloRevenueRange({ min: "100", max: "200" })).toEqual({ min: 100, max: 200 });
+  });
+
+  it("returns undefined for undefined, empty, or unparseable input", () => {
+    expect(toApolloRevenueRange(undefined)).toBeUndefined();
+    expect(toApolloRevenueRange(null)).toBeUndefined();
+    expect(toApolloRevenueRange([])).toBeUndefined();
+    expect(toApolloRevenueRange([","])).toBeUndefined();
+    expect(toApolloRevenueRange(["abc,def"])).toBeUndefined();
+  });
+});
+
+describe("toApolloSearchParams", () => {
+  it("maps revenueRange string array to Apollo's {min,max} object", () => {
+    const result = toApolloSearchParams({
+      personTitles: ["CEO"],
+      revenueRange: ["1000000,10000000"],
+    });
+    expect(result.person_titles).toEqual(["CEO"]);
+    expect(result.revenue_range).toEqual({ min: 1000000, max: 10000000 });
+  });
+
+  it("leaves revenue_range undefined when revenueRange is absent", () => {
+    const result = toApolloSearchParams({ personTitles: ["CEO"] });
+    expect(result.revenue_range).toBeUndefined();
   });
 });
 
