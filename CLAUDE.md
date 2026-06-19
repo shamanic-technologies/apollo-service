@@ -27,6 +27,25 @@ cleanly. The 500-page cap is Apollo's documented ceiling — it is NOT an artifi
 limit to be removed (a prior "no artificial cap" test made that mistake and caused
 prod 422→500s, #129).
 
+## Apollo range filters are `{min,max}` objects, NOT strings
+
+Apollo people-search **range** params are JSON objects `{ min, max }` with
+**integer** bounds — `revenue_range`, `organization_founded_year_range`,
+`organization_headcount_growth_range`, `person_total_yoe_range`,
+`organization_num_jobs_range`, `person_days_in_current_title_range`,
+`organization_job_posted_at_range`. Sending a range as a string (or array of
+`"min,max"` strings) makes Apollo's Ruby do `range["min"]` on a String/Array →
+`422 "no implicit conversion of String into Integer"`, surfacing as a 500 from
+`/search/dry-run` and a 502 at human-service `/orgs/audiences/suggest`. Our
+public filter contract keeps `revenueRange` as the documented `string[]`
+(`"min,max"`); `toApolloRevenueRange` in `src/lib/transform.ts` is what collapses
+it to the `{min,max}` object Apollo requires (multiple ranges union into one
+span; open-ended bounds omit that key). Any NEW Apollo range filter added to
+`SearchFiltersSchema` MUST map to `{min,max}` integers in `toApolloSearchParams`,
+never a passthrough string/array. The **count/enumerable** list params
+(`organization_num_employees_ranges`) genuinely ARE arrays of `"min,max"`
+strings — only the `*_range` object params need the conversion (#133, v0.22.1).
+
 ## Architecture
 
 - `src/schemas.ts` — Zod schemas + OpenAPI registry (source of truth for validation + OpenAPI)
