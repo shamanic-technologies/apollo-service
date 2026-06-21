@@ -82,7 +82,7 @@ router.post("/search/dry-run", serviceAuth, async (req: AuthenticatedRequest, re
       req.userId,
       "apollo",
       { callerMethod: "POST", callerPath: "/search/dry-run" },
-      { brandIds: req.brandIds, campaignId: req.campaignId, featureSlug: req.featureSlug, workflowSlug: req.workflowSlug }
+      { brandIds: req.brandIds, campaignId: req.campaignId, audienceId: req.audienceId, featureSlug: req.featureSlug, workflowSlug: req.workflowSlug }
     );
 
     const apolloParams = {
@@ -172,12 +172,12 @@ async function findCachedEnrichmentByPersonId(
  */
 router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const { runId, brandIds, campaignId, featureSlug, workflowSlug } = req;
+    const { runId, brandIds, campaignId, audienceId, featureSlug, workflowSlug } = req;
     if (!runId || !brandIds?.length || !campaignId) {
       return res.status(400).json({ type: "validation", error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
-    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandIds, campaignId, featureSlug, workflowSlug };
-    const tracking = { brandIds, campaignId, featureSlug, workflowSlug };
+    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandIds, campaignId, audienceId, featureSlug, workflowSlug };
+    const tracking = { brandIds, campaignId, audienceId, featureSlug, workflowSlug };
 
     const parsed = EnrichRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -196,6 +196,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
         userId: req.userId,
         brandIds,
         campaignId,
+        audienceId,
         serviceName: "apollo-service",
         taskName: "enrichment",
         parentRunId: runId,
@@ -225,6 +226,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
         runId,
         brandIds,
         campaignId,
+        audienceId,
         featureSlug,
         workflowSlug,
       });
@@ -268,6 +270,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
           userId: req.userId,
           brandIds,
           campaignId,
+          audienceId,
           serviceName: "apollo-service",
           taskName: "enrichment",
           parentRunId: runId,
@@ -279,6 +282,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
           runId,
           brandIds,
           campaignId,
+          audienceId,
           featureSlug,
           workflowSlug,
           ...toEnrichmentDbValues(person),
@@ -311,6 +315,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
         userId: req.userId,
         brandIds,
         campaignId,
+        audienceId,
         serviceName: "apollo-service",
         taskName: "enrichment",
         parentRunId: runId,
@@ -346,12 +351,12 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
  */
 router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const { runId, brandIds, campaignId, featureSlug, workflowSlug } = req;
+    const { runId, brandIds, campaignId, audienceId, featureSlug, workflowSlug } = req;
     if (!runId || !brandIds?.length || !campaignId) {
       return res.status(400).json({ type: "validation", error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
-    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandIds, campaignId, featureSlug, workflowSlug };
-    const tracking = { brandIds, campaignId, featureSlug, workflowSlug };
+    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandIds, campaignId, audienceId, featureSlug, workflowSlug };
+    const tracking = { brandIds, campaignId, audienceId, featureSlug, workflowSlug };
 
     const parsed = SearchNextRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -367,6 +372,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
       userId: req.userId,
       brandIds,
       campaignId,
+      audienceId,
       featureSlug,
       serviceName: "apollo-service",
       taskName: "people-search-next",
@@ -400,6 +406,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
         const [newCursor] = await db.insert(apolloSearchCursors).values({
           orgId: req.orgId!,
           campaignId,
+          audienceId,
           brandIds,
           featureSlug,
           workflowSlug,
@@ -509,6 +516,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
       runId,
       brandIds,
       campaignId,
+      audienceId,
       featureSlug,
       workflowSlug,
       requestParams: apolloParams,

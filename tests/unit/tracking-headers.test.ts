@@ -35,6 +35,7 @@ vi.mock("../../src/middleware/auth.js", () => ({
     if (req.headers["x-run-id"]) req.runId = req.headers["x-run-id"];
     if (req.headers["x-brand-id"]) { req.brandIds = String(req.headers["x-brand-id"]).split(",").map((s: string) => s.trim()).filter(Boolean); }
     if (req.headers["x-campaign-id"]) req.campaignId = req.headers["x-campaign-id"];
+    if (req.headers["x-audience-id"]) req.audienceId = req.headers["x-audience-id"];
     if (req.headers["x-feature-slug"]) req.featureSlug = req.headers["x-feature-slug"];
     if (req.headers["x-workflow-slug"]) req.workflowSlug = req.headers["x-workflow-slug"];
     next();
@@ -122,6 +123,7 @@ const TRACKING_HEADERS = {
   "X-Run-Id": "run-parent",
   "X-Brand-Id": "brand-abc",
   "X-Campaign-Id": "campaign-xyz",
+  "X-Audience-Id": "audience-789",
   "X-Feature-Slug": "lead-gen",
   "X-Workflow-Slug": "lead-search-workflow",
 };
@@ -154,7 +156,7 @@ describe("tracking headers forwarding", () => {
       "user-1",
       "apollo",
       expect.any(Object),
-      { brandIds: ["brand-abc"], campaignId: "campaign-xyz", featureSlug: "lead-gen", workflowSlug: "lead-search-workflow" }
+      { brandIds: ["brand-abc"], campaignId: "campaign-xyz", audienceId: "audience-789", featureSlug: "lead-gen", workflowSlug: "lead-search-workflow" }
     );
   });
 
@@ -251,6 +253,73 @@ describe("tracking headers forwarding", () => {
     expect(lastInsertValues).toMatchObject({
       workflowSlug: "lead-search-workflow",
     });
+  });
+
+  it("forwards audienceId in identity to runs-service (updateRun)", async () => {
+    const { default: searchRouter } = await import("../../src/routes/search.js");
+    const app = createApp();
+    app.use(searchRouter);
+
+    await request(app)
+      .post("/search/next")
+      .set(TRACKING_HEADERS)
+      .send({ searchParams: { personTitles: ["CEO"] } })
+      .expect(200);
+
+    expect(mockUpdateRun).toHaveBeenCalledWith(
+      "child-run-1",
+      "completed",
+      expect.objectContaining({ audienceId: "audience-789" })
+    );
+  });
+
+  it("passes audienceId to createRun", async () => {
+    const { default: searchRouter } = await import("../../src/routes/search.js");
+    const app = createApp();
+    app.use(searchRouter);
+
+    await request(app)
+      .post("/search/next")
+      .set(TRACKING_HEADERS)
+      .send({ searchParams: { personTitles: ["CEO"] } })
+      .expect(200);
+
+    expect(mockCreateRun).toHaveBeenCalledWith(
+      expect.objectContaining({ audienceId: "audience-789" })
+    );
+  });
+
+  it("stores audienceId in DB insert", async () => {
+    const { default: searchRouter } = await import("../../src/routes/search.js");
+    const app = createApp();
+    app.use(searchRouter);
+
+    await request(app)
+      .post("/search/next")
+      .set(TRACKING_HEADERS)
+      .send({ searchParams: { personTitles: ["CEO"] } })
+      .expect(200);
+
+    expect(lastInsertValues).toMatchObject({ audienceId: "audience-789" });
+  });
+
+  it("works without x-audience-id header (optional, non-campaign flow)", async () => {
+    const { default: searchRouter } = await import("../../src/routes/search.js");
+    const app = createApp();
+    app.use(searchRouter);
+
+    const headersWithout = { ...TRACKING_HEADERS };
+    delete (headersWithout as any)["X-Audience-Id"];
+
+    await request(app)
+      .post("/search/next")
+      .set(headersWithout)
+      .send({ searchParams: { personTitles: ["CEO"] } })
+      .expect(200);
+
+    expect(mockCreateRun).toHaveBeenCalledWith(
+      expect.objectContaining({ audienceId: undefined })
+    );
   });
 
   it("works without x-workflow-slug header (optional)", async () => {
