@@ -251,6 +251,7 @@ const runContextHeaders = z.object({
   "x-run-id": z.string().openapi({ description: "Caller's run ID — used as parentRunId when creating child runs", example: "run-abc-123" }),
   "x-brand-id": z.string().openapi({ description: "Brand ID(s) — single UUID or comma-separated list", example: "brand-1,brand-2" }),
   "x-campaign-id": z.string().openapi({ description: "Campaign ID", example: "campaign-1" }),
+  "x-audience-id": z.string().optional().openapi({ description: "Priority audience ID for per-audience cost attribution. Set on campaign-flow calls; absent otherwise.", example: "audience-1" }),
   "x-feature-slug": z.string().optional().openapi({ description: "Feature slug for tracking", example: "lead-gen" }),
   "x-workflow-slug": z.string().optional().openapi({ description: "Workflow slug for run tracking", example: "fetch-lead" }),
 });

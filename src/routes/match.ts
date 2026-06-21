@@ -103,12 +103,12 @@ async function findCachedMatch(
  */
 router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const { runId, brandIds, campaignId, featureSlug, workflowSlug } = req;
+    const { runId, brandIds, campaignId, audienceId, featureSlug, workflowSlug } = req;
     if (!runId || !brandIds?.length || !campaignId) {
       return res.status(400).json({ type: "validation", error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
     }
-    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandIds, campaignId, featureSlug, workflowSlug };
-    const tracking = { brandIds, campaignId, featureSlug, workflowSlug };
+    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandIds, campaignId, audienceId, featureSlug, workflowSlug };
+    const tracking = { brandIds, campaignId, audienceId, featureSlug, workflowSlug };
 
     const parsed = MatchRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -128,6 +128,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
         userId: req.userId,
         brandIds,
         campaignId,
+        audienceId,
         serviceName: "apollo-service",
         taskName: "person-match",
         parentRunId: runId,
@@ -157,6 +158,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
         runId,
         brandIds,
         campaignId,
+        audienceId,
         featureSlug,
         workflowSlug,
       });
@@ -197,6 +199,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
         userId: req.userId,
         brandIds,
         campaignId,
+        audienceId,
         featureSlug,
         serviceName: "apollo-service",
         taskName: "person-match",
@@ -212,6 +215,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
           runId,
           brandIds,
           campaignId,
+          audienceId,
           featureSlug,
           workflowSlug,
           ...toEnrichmentDbValues(person),
@@ -232,6 +236,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
           runId,
           brandIds,
           campaignId,
+          audienceId,
           featureSlug,
           workflowSlug,
           firstName,
@@ -254,6 +259,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
         userId: req.userId,
         brandIds,
         campaignId,
+        audienceId,
         serviceName: "apollo-service",
         taskName: "person-match",
         parentRunId: runId,

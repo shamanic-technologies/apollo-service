@@ -2142,6 +2142,17 @@
           {
             "schema": {
               "type": "string",
+              "description": "Priority audience ID for per-audience cost attribution. Set on campaign-flow calls; absent otherwise.",
+              "example": "audience-1"
+            },
+            "required": false,
+            "description": "Priority audience ID for per-audience cost attribution. Set on campaign-flow calls; absent otherwise.",
+            "name": "x-audience-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
               "description": "Feature slug for tracking",
               "example": "lead-gen"
             },
@@ -2257,6 +2268,17 @@
             "required": true,
             "description": "Campaign ID",
             "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Priority audience ID for per-audience cost attribution. Set on campaign-flow calls; absent otherwise.",
+              "example": "audience-1"
+            },
+            "required": false,
+            "description": "Priority audience ID for per-audience cost attribution. Set on campaign-flow calls; absent otherwise.",
+            "name": "x-audience-id",
             "in": "header"
           },
           {
@@ -2378,6 +2400,17 @@
             "required": true,
             "description": "Campaign ID",
             "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Priority audience ID for per-audience cost attribution. Set on campaign-flow calls; absent otherwise.",
+              "example": "audience-1"
+            },
+            "required": false,
+            "description": "Priority audience ID for per-audience cost attribution. Set on campaign-flow calls; absent otherwise.",
+            "name": "x-audience-id",
             "in": "header"
           },
           {

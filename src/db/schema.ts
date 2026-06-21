@@ -11,6 +11,7 @@ export const apolloPeopleSearches = pgTable(
     // Hierarchy IDs
     brandIds: text("brand_ids").array().notNull(),
     campaignId: text("campaign_id").notNull(),
+    audienceId: text("audience_id"),
     featureSlug: text("feature_slug"),
     workflowSlug: text("workflow_slug"),
 
@@ -31,6 +32,7 @@ export const apolloPeopleSearches = pgTable(
     index("idx_searches_run").on(table.runId),
     index("idx_searches_brand_ids").using("gin", table.brandIds),
     index("idx_searches_campaign").on(table.campaignId),
+    index("idx_searches_audience").on(table.audienceId),
     index("idx_searches_feature_slug").on(table.featureSlug),
   ]
 );
@@ -48,6 +50,7 @@ export const apolloPeopleEnrichments = pgTable(
     // Hierarchy IDs
     brandIds: text("brand_ids").array().notNull(),
     campaignId: text("campaign_id").notNull(),
+    audienceId: text("audience_id"),
     featureSlug: text("feature_slug"),
     workflowSlug: text("workflow_slug"),
 
@@ -143,6 +146,7 @@ export const apolloPeopleEnrichments = pgTable(
     index("idx_enrichments_email").on(table.email),
     index("idx_enrichments_person_id").on(table.apolloPersonId),
     index("idx_enrichments_campaign").on(table.campaignId),
+    index("idx_enrichments_audience").on(table.audienceId),
     index("idx_enrichments_feature_slug").on(table.featureSlug),
     index("idx_enrichments_waterfall_req").on(table.waterfallRequestId),
   ]
@@ -155,6 +159,7 @@ export const apolloSearchCursors = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     orgId: uuid("org_id").notNull(),
     campaignId: text("campaign_id").notNull(),
+    audienceId: text("audience_id"),
     brandIds: text("brand_ids").array().notNull(),
     featureSlug: text("feature_slug"),
     workflowSlug: text("workflow_slug"),
