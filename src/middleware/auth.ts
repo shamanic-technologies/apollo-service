@@ -6,6 +6,7 @@ export interface AuthenticatedRequest extends Request {
   runId?: string;
   brandIds?: string[];
   campaignId?: string;
+  audienceId?: string;
   featureSlug?: string;
   workflowSlug?: string;
 }
@@ -18,7 +19,7 @@ export function parseBrandIds(raw: string | undefined): string[] {
 /**
  * Middleware for internal service calls (no auth - Railway private network).
  * Requires x-org-id and x-user-id.
- * Optionally extracts x-run-id, x-brand-id, x-campaign-id, x-workflow-slug.
+ * Optionally extracts x-run-id, x-brand-id, x-campaign-id, x-audience-id, x-workflow-slug.
  */
 export async function serviceAuth(
   req: AuthenticatedRequest,
@@ -44,12 +45,14 @@ export async function serviceAuth(
     const brandIdRaw = req.headers["x-brand-id"] as string | undefined;
     const brandIds = parseBrandIds(brandIdRaw);
     const campaignId = req.headers["x-campaign-id"] as string | undefined;
+    const audienceId = req.headers["x-audience-id"] as string | undefined;
     const featureSlug = req.headers["x-feature-slug"] as string | undefined;
     const workflowSlug = req.headers["x-workflow-slug"] as string | undefined;
 
     if (runId) req.runId = runId;
     if (brandIds.length > 0) req.brandIds = brandIds;
     if (campaignId) req.campaignId = campaignId;
+    if (audienceId) req.audienceId = audienceId;
     if (featureSlug) req.featureSlug = featureSlug;
     if (workflowSlug) req.workflowSlug = workflowSlug;
 

@@ -84,6 +84,7 @@ export interface CreateRunParams {
   userId?: string;
   brandIds?: string[];
   campaignId?: string;
+  audienceId?: string;
   featureSlug?: string;
   serviceName: string;
   taskName: string;
@@ -103,6 +104,7 @@ export interface ListRunsParams {
   userId?: string;
   brandIds?: string[];
   campaignId?: string;
+  audienceId?: string;
   featureSlug?: string;
   serviceName?: string;
   taskName?: string;
@@ -122,6 +124,7 @@ export interface IdentityHeaders {
   runId?: string;
   brandIds?: string[];
   campaignId?: string;
+  audienceId?: string;
   featureSlug?: string;
   workflowSlug?: string;
 }
@@ -144,6 +147,7 @@ async function runsRequest<T>(
   if (identity?.runId) headers["x-run-id"] = identity.runId;
   if (identity?.brandIds?.length) headers["x-brand-id"] = identity.brandIds.join(",");
   if (identity?.campaignId) headers["x-campaign-id"] = identity.campaignId;
+  if (identity?.audienceId) headers["x-audience-id"] = identity.audienceId;
   if (identity?.featureSlug) headers["x-feature-slug"] = identity.featureSlug;
   if (identity?.workflowSlug) headers["x-workflow-slug"] = identity.workflowSlug;
 
@@ -210,6 +214,7 @@ export async function createRun(params: CreateRunParams): Promise<Run> {
     body: {
       brandIds: params.brandIds,
       campaignId: params.campaignId,
+      audienceId: params.audienceId,
       featureSlug: params.featureSlug,
       serviceName: params.serviceName,
       taskName: params.taskName,
@@ -286,6 +291,7 @@ export async function listRuns(
   if (params.userId) searchParams.set("userId", params.userId);
   if (params.brandIds?.length) searchParams.set("brandIds", params.brandIds.join(","));
   if (params.campaignId) searchParams.set("campaignId", params.campaignId);
+  if (params.audienceId) searchParams.set("audienceId", params.audienceId);
   if (params.serviceName) searchParams.set("serviceName", params.serviceName);
   if (params.taskName) searchParams.set("taskName", params.taskName);
   if (params.status) searchParams.set("status", params.status);

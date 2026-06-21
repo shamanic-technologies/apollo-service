@@ -62,6 +62,39 @@ describe("runs-client identity headers", () => {
     expect(body).toHaveProperty("taskName", "people-search");
   });
 
+  it("createRun puts audienceId in the body (read-side aggregation key)", async () => {
+    mockFetch.mockResolvedValueOnce(created({ id: "run-new" }));
+
+    const { createRun } = await import("../../src/lib/runs-client.js");
+    await createRun({
+      orgId: "org-123",
+      userId: "user-456",
+      campaignId: "campaign-xyz",
+      audienceId: "audience-789",
+      serviceName: "apollo-service",
+      taskName: "people-search",
+      parentRunId: "parent-run-789",
+    });
+
+    const [, opts] = mockFetch.mock.calls[0];
+    const body = JSON.parse(opts.body);
+    expect(body).toHaveProperty("audienceId", "audience-789");
+  });
+
+  it("addCosts forwards x-audience-id header from identity (cost-row tagging)", async () => {
+    mockFetch.mockResolvedValueOnce(created({ costs: [] }));
+
+    const { addCosts } = await import("../../src/lib/runs-client.js");
+    await addCosts("run-1", [{ costName: "apollo-credit", costSource: "platform", quantity: 1 }], {
+      orgId: "org-123",
+      userId: "user-456",
+      audienceId: "audience-789",
+    });
+
+    const [, opts] = mockFetch.mock.calls[0];
+    expect(opts.headers).toMatchObject({ "x-audience-id": "audience-789" });
+  });
+
   it("updateRun sends x-org-id, x-user-id, x-run-id headers", async () => {
     mockFetch.mockResolvedValueOnce(okResponse({ id: "run-1" }));
 
@@ -147,5 +180,31 @@ describe("keys-client identity headers", () => {
       "X-Caller-Method": "POST",
       "X-Caller-Path": "/search",
     });
+  });
+
+  it("decryptKey forwards x-audience-id when present in tracking", async () => {
+    mockFetch.mockResolvedValueOnce(okResponse({ key: "decrypted-key", keySource: "platform" }));
+
+    const { decryptKey } = await import("../../src/lib/keys-client.js");
+    await decryptKey(
+      "org-123",
+      "user-456",
+      "apollo",
+      { callerMethod: "POST", callerPath: "/search" },
+      { campaignId: "campaign-xyz", audienceId: "audience-789" }
+    );
+
+    const [, opts] = mockFetch.mock.calls[0];
+    expect(opts.headers).toMatchObject({ "x-audience-id": "audience-789" });
+  });
+
+  it("decryptKey omits x-audience-id when absent (no throw)", async () => {
+    mockFetch.mockResolvedValueOnce(okResponse({ key: "decrypted-key", keySource: "platform" }));
+
+    const { decryptKey } = await import("../../src/lib/keys-client.js");
+    await decryptKey("org-123", "user-456", "apollo", { callerMethod: "POST", callerPath: "/search" });
+
+    const [, opts] = mockFetch.mock.calls[0];
+    expect(opts.headers).not.toHaveProperty("x-audience-id");
   });
 });
