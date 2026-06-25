@@ -60,6 +60,27 @@ export interface ApolloSearchParams {
   // array["min"] → 422 "no implicit conversion of String into Integer".
   revenue_range?: { min?: number; max?: number };
   organization_ids?: string[];
+  // ── Faithful Apollo People Search params (additive) ──
+  include_similar_titles?: boolean;
+  q_organization_job_titles?: string[];
+  person_linkedin_urls?: string[];
+  currently_using_all_of_technology_uids?: string[];
+  currently_not_using_any_of_technology_uids?: string[];
+  q_organization_domains_list?: string[];
+  market_segments?: string[];
+  organization_naics_codes?: string[];
+  not_organization_naics_codes?: string[];
+  organization_sic_codes?: string[];
+  not_organization_sic_codes?: string[];
+  organization_job_locations?: string[];
+  organization_founded_year_range?: { min?: number; max?: number };
+  organization_include_unknown_founded_year?: boolean;
+  organization_headcount_growth_past_n_months?: number;
+  organization_headcount_growth_range?: { min?: number; max?: number };
+  organization_num_jobs_range?: { min?: number; max?: number };
+  organization_job_posted_at_range?: { min?: string; max?: string };
+  person_total_yoe_range?: { min?: number; max?: number };
+  person_days_in_current_title_range?: { min?: number; max?: number };
   page?: number;
   per_page?: number;
 }

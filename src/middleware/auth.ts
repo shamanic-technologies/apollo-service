@@ -62,3 +62,32 @@ export async function serviceAuth(
     return res.status(401).json({ type: "internal", error: "Authentication failed" });
   }
 }
+
+/**
+ * Org-only variant for read endpoints that do not need a user identity
+ * (e.g. GET /audiences/:id — locked headers are x-api-key + x-org-id only).
+ * Requires x-org-id; optionally extracts the same tracking headers as serviceAuth.
+ */
+export async function orgAuth(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+) {
+  try {
+    const orgId = req.headers["x-org-id"] as string;
+    if (!orgId) {
+      return res.status(400).json({ type: "validation", error: "x-org-id header required" });
+    }
+    req.orgId = orgId;
+
+    const userId = req.headers["x-user-id"] as string | undefined;
+    const brandIds = parseBrandIds(req.headers["x-brand-id"] as string | undefined);
+    if (userId) req.userId = userId;
+    if (brandIds.length > 0) req.brandIds = brandIds;
+
+    next();
+  } catch (error) {
+    console.error("[Apollo Service] Auth error:", error);
+    return res.status(401).json({ type: "internal", error: "Authentication failed" });
+  }
+}

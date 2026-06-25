@@ -2,6 +2,38 @@
 
 Apollo.io integration service for lead search, enrichment, and validation with cost tracking via runs-service.
 
+## apollo-service OWNS "an Apollo audience" — faithful Apollo vocabulary, single source
+
+This service is the single owner of the Apollo People-Search filter vocabulary
+and of saved Apollo audiences. The filter schema (`SearchFiltersSchema`) is 1:1
+FAITHFUL to Apollo's real People Search API — full accepted value sets, no
+narrowed/renamed enums. Consumers (human-service) store ONLY an apollo-audience
+id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
+
+- **Faithful filters (do NOT re-subset).** Seniorities include the FULL Apollo
+  set incl `head` + `intern`. `organizationNumEmployeesRanges` accepts ARBITRARY
+  `"min,max"` spans (not a fixed bucket enum). `*_range` params are `{min,max}`
+  objects (`revenueRangeNative`, `organizationFoundedYearRange`,
+  `organizationNumJobsRange`, `personTotalYoeRange`, … — see the "{min,max}"
+  section below). `includeSimilarTitles` is exposed. Any NEW Apollo people-search
+  filter is ADDITIVE/backward-compatible — widen, never narrow, and map it in
+  `toApolloSearchParams` (`*_range` → `{min,max}` via `cleanRange`).
+- **Stateful audiences (Bronze/Silver/Gold).** `apollo_audiences` table:
+  bronze = `refine_trace` (raw refine iterations + counts), silver = `filters`
+  (canonical faithful filter object keyed by id), gold = `count` snapshot.
+- **The NL-segment→filters agentic refine loop lives HERE** (`src/lib/audience-refine.ts`),
+  not in human-service. It calls **chat-service** for the LLM (chat-service owns
+  the LLM cost — apollo-service declares NONE for it) and uses the FREE Apollo
+  dry-run (per_page=1, zero credits) for live count feedback.
+- **Endpoints:** `POST /audiences/suggest-from-segment`, `GET /audiences/{id}`,
+  `POST /audiences/{id}/dry-run`. A serve-next-by-audience-id endpoint is a
+  later wave (designed with human-service) — do NOT build it here yet.
+- **Env vars (NEW consumer of chat-service):** `CHAT_SERVICE_URL` +
+  `CHAT_SERVICE_API_KEY` (shared fleet values) are required by the audience
+  endpoints. They are read lazily inside the handler, so their absence does NOT
+  break boot or any existing endpoint — only `/audiences/suggest-from-segment`
+  would 500 until they are set.
+
 ## Commands
 
 - `pnpm test` — run all tests (Vitest)
@@ -15,6 +47,23 @@ Apollo.io integration service for lead search, enrichment, and validation with c
 - `pnpm run db:generate` — generate Drizzle migrations
 - `pnpm run db:migrate` — run Drizzle migrations
 - `pnpm run db:push` — push schema directly (dev only)
+
+## Migrations are HAND-AUTHORED (journal + .sql), NOT `drizzle-kit generate`
+
+`drizzle-kit generate` is interactive (a TUI create/rename prompt that can't be
+fed from a pipe) AND this repo's `drizzle/meta` snapshots are STALE — only
+`0000`–`0007` exist, so generate diffs against a pre-`0008` baseline and offers
+bogus "rename from orgs/users" options. Don't fight it. To add a migration:
+1. Edit `src/db/schema.ts`.
+2. Hand-write `drizzle/NNNN_<name>.sql` (use `CREATE TABLE IF NOT EXISTS` /
+   `CREATE INDEX IF NOT EXISTS` so boot is idempotent; `--> statement-breakpoint`
+   between statements — mirror an existing migration like `0019`/`0020`).
+3. Append an entry to `drizzle/meta/_journal.json` (`idx`+1, same `version`,
+   `when` greater than the previous, `tag` = the filename without `.sql`).
+Boot `migrate()` reads ONLY the `.sql` files + `_journal.json` (never the
+snapshots), so a missing snapshot does not affect boot. Do NOT write to the
+journal/sql via a hooked shell redirect (`>`) — use the editor or `python3`
+direct file write (RTK truncation gotcha).
 
 ## Apollo pagination hard cap (DO NOT remove the cursor clamp)
 

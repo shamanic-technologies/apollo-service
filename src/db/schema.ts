@@ -176,9 +176,55 @@ export const apolloSearchCursors = pgTable(
   ]
 );
 
+// ─── Apollo audiences ────────────────────────────────────────────────────────
+// A saved, faithful Apollo People-Search filter set ("an Apollo audience"),
+// owned by apollo-service. human-service stores only `id` (a pointer) and never
+// holds Apollo's filter vocabulary.
+//
+// Layering (single-table, layered columns):
+//   bronze → `refineTrace` (raw refine iterations: every tested filter set +
+//            its live Apollo count + the model's decision)
+//   silver → `filters` (the canonical, faithful Apollo filter object) keyed by id
+//   gold   → `count` (the confirmed match-count snapshot) + `countRefreshedAt`
+export const apolloAudiences = pgTable(
+  "apollo_audiences",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id").notNull(),
+    userId: text("user_id"),
+    brandId: text("brand_id"),
+
+    name: text("name").notNull(),
+    description: text("description").notNull(),
+
+    // Silver: the canonical faithful Apollo filter object (public camelCase
+    // SearchFilters shape — the one vocabulary).
+    filters: jsonb("filters").notNull(),
+
+    // Gold: confirmed match-count snapshot + when it was last refreshed.
+    count: integer("count").notNull().default(0),
+    countRefreshedAt: timestamp("count_refreshed_at", { withTimezone: true }).notNull().defaultNow(),
+
+    // Bronze: the agentic refine loop's raw trace (filter sets tried, counts,
+    // decisions). Audit/replay only — never read on the hot path.
+    refineTrace: jsonb("refine_trace"),
+
+    status: text("status").notNull().default("confirmed"), // "confirmed" | "exhausted"
+
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_audiences_org").on(table.orgId),
+    index("idx_audiences_brand").on(table.brandId),
+  ]
+);
+
 export type ApolloPeopleSearch = typeof apolloPeopleSearches.$inferSelect;
 export type NewApolloPeopleSearch = typeof apolloPeopleSearches.$inferInsert;
 export type ApolloPeopleEnrichment = typeof apolloPeopleEnrichments.$inferSelect;
 export type NewApolloPeopleEnrichment = typeof apolloPeopleEnrichments.$inferInsert;
 export type ApolloSearchCursor = typeof apolloSearchCursors.$inferSelect;
 export type NewApolloSearchCursor = typeof apolloSearchCursors.$inferInsert;
+export type ApolloAudience = typeof apolloAudiences.$inferSelect;
+export type NewApolloAudience = typeof apolloAudiences.$inferInsert;
