@@ -114,6 +114,14 @@ export function toApolloSearchParams(sp: Record<string, unknown>): ApolloSearchP
     latest_funding_amount_range: cleanRange<number>(sp.latest_funding_amount_range) ?? cleanRange<number>(sp.latestFundingAmountRange),
     latest_funding_date_range: cleanRange<string>(sp.latest_funding_date_range) ?? cleanRange<string>(sp.latestFundingDateRange),
     organization_latest_funding_stage_cd: pick<string[]>("organization_latest_funding_stage_cd", "organizationLatestFundingStageCd"),
+    // ── UNDOCUMENTED-but-verified targeting filters (honored by People Search) ──
+    q_not_organization_keyword_tags: sp.q_not_organization_keyword_tags as string[] | undefined,
+    included_organization_keyword_fields: sp.included_organization_keyword_fields as string[] | undefined,
+    organization_trading_status: sp.organization_trading_status as string[] | undefined,
+    person_functions: sp.person_functions as string[] | undefined,
+    person_department_or_subdepartments: sp.person_department_or_subdepartments as string[] | undefined,
+    q_person_name: sp.q_person_name as string | undefined,
+    person_not_titles: sp.person_not_titles as string[] | undefined,
   };
 }
 
