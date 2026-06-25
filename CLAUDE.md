@@ -29,6 +29,21 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
   not in human-service. It calls **chat-service** for the LLM (chat-service owns
   the LLM cost — apollo-service declares NONE for it) and uses the FREE Apollo
   dry-run (per_page=1, zero credits) for live count feedback.
+- **Refine-prompt priority discipline — NEVER name the user's defining firmographics
+  as "least important / droppable".** The relaxation guidance in `buildSystemPrompt` /
+  `buildUserMessage` must NOT seed the model with examples like "drop a revenue or
+  headcount band" — naming a constraint as low-priority biases the LLM to discard
+  exactly the filters the user cares about MOST. The user's defining filters
+  (revenue range, employee/headcount range, job titles, industry/keyword tags,
+  geography, seniority) are PRESERVED to last resort; relaxation sheds the
+  highest-volume-cost / lowest-signal constraints FIRST — free-text `q_keywords` +
+  technology UIDs (`q_keywords="SaaS"` → ~86 vs `q_organization_keyword_tags=["software"]`
+  → ~128k). Build guidance also: prefer `q_organization_keyword_tags` over `q_keywords`
+  for a sector, default `includeSimilarTitles=true` for role targeting, and map each
+  stated constraint to its own structured filter (revenue→`revenueRange`,
+  headcount→`organizationNumEmployeesRanges`, hiring→`organization_num_jobs_range`).
+  (Cost 2026-06-25: prompt example "a revenue or headcount band" made the builder drop
+  revenue + reach for the volume-killer `q_keywords` → 14–67-match audiences. v0.24.13.)
 - **Endpoints:** `POST /audiences/suggest-from-segment`, `GET /audiences/{id}`,
   `POST /audiences/{id}/dry-run`. A serve-next-by-audience-id endpoint is a
   later wave (designed with human-service) — do NOT build it here yet.
