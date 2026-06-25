@@ -131,6 +131,58 @@ count unchanged (no 422). So a wrong field name is a **dead filter, not an
 error**. Never trust that a new People-Search filter works because it compiles;
 confirm it with a free dry-run **count delta** first.
 
+**Filter-discovery methodology (3-way count classification).** To probe whether a
+candidate undocumented filter/value is honored, hit `mixed_people/api_search` with
+`per_page=1` (free, reads `pagination.total_entries`) against a fixed baseline and
+read the delta — there are THREE outcomes, not two:
+- `count == baseline` → the **param NAME is dead** (Apollo dropped the whole key;
+  wrong field name). E.g. `not_organization_keyword_tags`, `person_departments`,
+  `organization_headcount_growth_range`.
+- `count == 0` → the **param is honored but the VALUE/slug is unknown** (Apollo
+  applied the filter, matched nothing). E.g. `person_functions=["healthcare"]` (0)
+  while `["engineering"]` works → "healthcare" is the wrong slug, not a dead param.
+- `count > 0 && != baseline` → **honored** ✅, publish it.
+Endpoint is `mixed_people/api_search` (the old `mixed_people/search` 422s as
+deprecated); auth header `x-api-key`. RTK truncates `curl` JSON — probe with
+Python `urllib` (see `/tmp/apollo_probe*.py` pattern from the 2026-06-25 sweep).
+Publish only `>0`-confirmed slugs in enums; never list a guessed slug.
+
+**Keywords are the harshest volume killer — express sector/vertical via keyword
+tags, never `q_keywords`/technology UIDs.** Verified: `q_keywords="SaaS"` → 86 vs
+`q_organization_keyword_tags=["software"]` → 128,274 (1,490×). The refine loop's
+relaxation order must shed `q_keywords` + technology UIDs FIRST. This is why the
+audience builder produced 14–67-match audiences before — it had no industry filter
+and fell back to `q_keywords`.
+
+**Verified 2026-06-25 — undocumented TARGETING filters People Search also honors
+(same baseline `CEO + United States` = 521,875).** The headline is the
+volume-friendly industry/vertical filter that replaces the volume-killing
+free-text `q_keywords` (verified: `q_keywords="SaaS"` → **86** vs
+`q_organization_keyword_tags=["software"]` → **128,274**):
+
+- `q_organization_keyword_tags` `string[]` — employer keyword/industry tags by
+  NAME (fintech → 2,137,121). **Always express a sector/vertical with this, never
+  `q_keywords` or a technology UID** — those are the harshest volume reducers.
+- `q_not_organization_keyword_tags` `string[]` — EXCLUDE those tags (the plain
+  `not_organization_keyword_tags` spelling is DEAD; use the `q_`-prefixed form).
+- `included_organization_keyword_fields` `string[]` — which employer fields the
+  keyword tags match. Honored: `tags | name | social_media_description`
+  (`seo_description` is silently ignored). Omit to default to ~`tags`.
+- `organization_trading_status` `string[]` — only `private` / `public` filter
+  (delisted/acquired/ipo/subsidiary/otc silently dropped).
+- `person_functions` `string[]` — lowercase_underscore. Honored: accounting,
+  administrative, arts_and_design, business_development, consulting, data_science,
+  education, engineering, entrepreneurship, finance, human_resources,
+  information_technology, legal, marketing, operations, product_management, sales,
+  support. An unknown slug returns **0 matches** (not a 422).
+- `person_department_or_subdepartments` `string[]` — department (`master_*`) or
+  subdepartment (leaf) slug. Honored `master_*`: master_engineering_technical,
+  master_information_technology, master_finance, master_sales, master_operations,
+  master_marketing, master_human_resources, master_legal. Leaf slugs (e.g.
+  `sales`, `information_technology`) also work; unknown slug → 0.
+- `q_person_name` `string` — free-text on the person's full name.
+- `person_not_titles` `string[]` — EXCLUDE these current titles.
+
 These are intentionally **beyond the official doc**. The durable copy of these
 rules (for caller LLMs + the refine loop) lives in
 `APOLLO_UNDOCUMENTED_FILTERS_ENCART` (`src/lib/filters-prompt.ts`), appended to

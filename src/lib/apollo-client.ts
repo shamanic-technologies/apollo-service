@@ -88,6 +88,15 @@ export interface ApolloSearchParams {
   latest_funding_amount_range?: { min?: number; max?: number };
   latest_funding_date_range?: { min?: string; max?: string };
   organization_latest_funding_stage_cd?: string[];
+  // ── UNDOCUMENTED-but-verified targeting filters (honored by People Search;
+  // see APOLLO_UNDOCUMENTED_FILTERS_ENCART + CLAUDE.md) ──
+  q_not_organization_keyword_tags?: string[];
+  included_organization_keyword_fields?: string[];
+  organization_trading_status?: string[];
+  person_functions?: string[];
+  person_department_or_subdepartments?: string[];
+  q_person_name?: string;
+  person_not_titles?: string[];
   page?: number;
   per_page?: number;
 }

@@ -421,6 +421,52 @@ export const ApolloNativeSearchFiltersSchema = z
       description: "Filter by employer's latest funding STAGE using Apollo NUMERIC stage codes (label strings like 'Series A' do NOT filter). Code map (certified via enrichment): 1=Angel, 2=Series A, 3=Series B, 4=Series C, 5=Series D, 6=Series E, 7=Series F, 8=Series G, 9=Series H, 10=Venture (Round not Specified), 11=Private Equity, 12=Other, 13=Debt Financing, 14=Equity Crowdfunding, 15=Convertible Note. NOTE: Seed is code 0 in Apollo but People Search does NOT filter on it (code 0 returns the 'has any stage' fallback), so Seed is not addressable here. See the UNDOCUMENTED FILTERS note. Undocumented for People Search but honored.",
       example: ["2", "3"],
     }),
+    // ── UNDOCUMENTED-but-verified TARGETING filters ──
+    // Documented for Apollo Organization Search / absent from the People Search
+    // doc, but mixed_people/api_search HONORS them (verified live 2026-06-25 via
+    // the free dry-run, baseline `CEO + United States` = 521,875). See the
+    // "UNDOCUMENTED FILTERS" encart + CLAUDE.md. Do NOT delete on a doc re-sync.
+    q_organization_keyword_tags: z.array(z.string().min(1)).optional().openapi({
+      description:
+        "Target a sector/vertical by employer KEYWORD TAGS (industry-style names). The VOLUME-FRIENDLY way to express 'SaaS', 'fintech', etc. — far higher volume than the free-text q_keywords (verified: q_keywords='SaaS' -> 86 matches vs q_organization_keyword_tags=['software'] -> 128,274). Prefer this over q_keywords for any industry/vertical concept. Undocumented for People Search but honored.",
+      example: ["software", "fintech"],
+    }),
+    q_not_organization_keyword_tags: z.array(z.string().min(1)).optional().openapi({
+      description:
+        "EXCLUDE people whose employer matches these keyword tags. Use this q_-prefixed form — the plain not_organization_keyword_tags spelling is silently dropped. Undocumented for People Search but honored.",
+      example: ["staffing", "recruiting"],
+    }),
+    included_organization_keyword_fields: z
+      .array(z.enum(["tags", "name", "social_media_description"]))
+      .optional()
+      .openapi({
+        description:
+          "Restrict which employer fields q_organization_keyword_tags matches against. Omit to default to ~tags. Verified honored values: tags, name, social_media_description (seo_description is silently ignored). Undocumented for People Search but honored.",
+        example: ["tags"],
+      }),
+    organization_trading_status: z.array(z.enum(["private", "public"])).optional().openapi({
+      description:
+        "Filter by employer public/private status. Only 'private' and 'public' filter (delisted/acquired/ipo/subsidiary/otc are silently dropped). Undocumented for People Search but honored.",
+      example: ["private"],
+    }),
+    person_functions: z.array(z.string().min(1)).optional().openapi({
+      description:
+        "Filter by the person's job FUNCTION (broad role family), lowercase_underscore slugs. Verified honored: accounting, administrative, arts_and_design, business_development, consulting, data_science, education, engineering, entrepreneurship, finance, human_resources, information_technology, legal, marketing, operations, product_management, sales, support. An unknown slug returns 0 matches (not a 422). Undocumented for People Search but honored.",
+      example: ["sales", "marketing"],
+    }),
+    person_department_or_subdepartments: z.array(z.string().min(1)).optional().openapi({
+      description:
+        "Filter by the person's DEPARTMENT (master_* slug) or subdepartment (leaf slug). Verified honored master_* values: master_engineering_technical, master_information_technology, master_finance, master_sales, master_operations, master_marketing, master_human_resources, master_legal. Leaf subdepartment slugs (e.g. 'sales', 'information_technology') also work; an unknown slug returns 0. Undocumented for People Search but honored.",
+      example: ["master_sales", "master_engineering_technical"],
+    }),
+    q_person_name: z.string().optional().openapi({
+      description: "Free-text search on the person's full name. Undocumented for People Search but honored.",
+      example: "jane smith",
+    }),
+    person_not_titles: z.array(z.string().min(1)).optional().openapi({
+      description: "EXCLUDE people whose current title matches any of these. Undocumented for People Search but honored.",
+      example: ["intern", "assistant"],
+    }),
   })
   .openapi("SearchFilters", {
     description: "Apollo People API Search filters using Apollo-native field names. All filters are combined using AND. Start broad and narrow down to avoid empty results.",
