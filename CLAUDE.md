@@ -115,10 +115,16 @@ via the FREE dry-run (`per_page=1`, zero credits); baseline `CEO + United States
 - `organization_latest_funding_stage_cd` `string[]` — honored, but **only Apollo
   NUMERIC stage codes filter**. Label strings (`"Series A"`) are silently treated
   as "has any funding stage" → all labels return the same 11,736 (no real
-  discrimination). Code map (reverse-engineered; anchor `apollo.io` = Series D =
-  `"5"`, plus strictly-decreasing CEO/US counts `2`→4071 … `9`→16):
-  `1`=Seed/Angel, `2`=Series A, `3`=Series B, `4`=Series C, `5`=Series D,
-  `6`=Series E, `7`=Series F, `8`=Series G, `9`=Series H, `10`=Late/Series I+.
+  discrimination). Code map **CERTIFIED** (each label read back via Organization
+  Enrichment 2026-06-25 — e.g. `2`→portalvagas.com=Series A, `5`→hackerrank.com=
+  Series D, `8`→anthropic.com=Series G):
+  `1`=Angel, `2`=Series A, `3`=Series B, `4`=Series C, `5`=Series D, `6`=Series E,
+  `7`=Series F, `8`=Series G, `9`=Series H, `10`=Venture (Round not Specified),
+  `11`=Private Equity, `12`=Other, `13`=Debt Financing, `14`=Equity Crowdfunding,
+  `15`=Convertible Note.
+  **`0`=Seed exists in Apollo but People Search does NOT filter on code `0`** (it
+  returns the "has any stage" fallback, 11,736), so Seed is **not addressable**
+  via People Search — codes `1`–`15` are the usable set.
 
 **Apollo silently DROPS unknown params** — a nonsense param returns the baseline
 count unchanged (no 422). So a wrong field name is a **dead filter, not an

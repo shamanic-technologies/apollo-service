@@ -418,7 +418,7 @@ export const ApolloNativeSearchFiltersSchema = z
       example: { min: "2024-01-01" },
     }),
     organization_latest_funding_stage_cd: z.array(z.string().min(1)).optional().openapi({
-      description: "Filter by employer's latest funding STAGE using Apollo NUMERIC stage codes (label strings like 'Series A' do NOT filter). Code map: 1=Seed/Angel, 2=Series A, 3=Series B, 4=Series C, 5=Series D, 6=Series E, 7=Series F, 8=Series G, 9=Series H, 10=Late/Series I+. See the UNDOCUMENTED FILTERS note. Undocumented for People Search but honored.",
+      description: "Filter by employer's latest funding STAGE using Apollo NUMERIC stage codes (label strings like 'Series A' do NOT filter). Code map (certified via enrichment): 1=Angel, 2=Series A, 3=Series B, 4=Series C, 5=Series D, 6=Series E, 7=Series F, 8=Series G, 9=Series H, 10=Venture (Round not Specified), 11=Private Equity, 12=Other, 13=Debt Financing, 14=Equity Crowdfunding, 15=Convertible Note. NOTE: Seed is code 0 in Apollo but People Search does NOT filter on it (code 0 returns the 'has any stage' fallback), so Seed is not addressable here. See the UNDOCUMENTED FILTERS note. Undocumented for People Search but honored.",
       example: ["2", "3"],
     }),
   })
