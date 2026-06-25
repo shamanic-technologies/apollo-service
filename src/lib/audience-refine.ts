@@ -206,10 +206,10 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
         // JSON mode needs no schema and returns free-form JSON, validated by the
         // Zod guards below. (chat-service owns the LLM cost either way.)
         provider: "google",
-        // flash-pro = Gemini 3.5 Flash (mid-tier). disableThinking minimizes
-        // reasoning for this structured-JSON decision task (Gemini 3 floors at
-        // `minimal`, no full-off) so the budget goes to the answer.
-        model: "flash-pro",
+        // flash = Gemini 2.5 Flash. disableThinking on Gemini 2.5 is a FULL-OFF
+        // (unlike Gemini 3 / flash-pro, which floors at `minimal`), so the whole
+        // output budget goes to this structured-JSON decision, no chain-of-thought.
+        model: "flash",
         responseFormat: "json",
         temperature: 0.2,
         maxTokens: 2000,
