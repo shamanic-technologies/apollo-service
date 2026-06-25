@@ -106,7 +106,7 @@ describe("Apollo audience endpoints", () => {
       content: "",
       tokensInput: 10,
       tokensOutput: 5,
-      model: "claude-sonnet",
+      model: "gemini-flash-pro",
     });
     app = await createApp();
   });
@@ -122,6 +122,10 @@ describe("Apollo audience endpoints", () => {
     expect(res.body.filters).toEqual(CONFIRMED_FILTERS);
     expect(res.body.count).toBe(4200);
     expect(mockChatComplete).toHaveBeenCalledTimes(1);
+    expect(mockChatComplete).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "google", model: "flash-pro", responseFormat: "json" }),
+      expect.any(Object),
+    );
     // The refine loop dry-ran the confirmed filters via Apollo per_page=1.
     expect(mockSearchPeople).toHaveBeenCalledWith("apollo-key", expect.objectContaining({ per_page: 1 }));
     // Stored row carries the faithful filters + count snapshot.

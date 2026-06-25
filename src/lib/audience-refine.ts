@@ -139,8 +139,11 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
       {
         message,
         systemPrompt,
-        provider: "anthropic",
-        model: "sonnet",
+        // Apollo filters are a dynamic object keyed by a large faithful
+        // vocabulary. Google JSON mode supports this without a strict
+        // responseSchema; Anthropic rejects JSON mode without one.
+        provider: "google",
+        model: "flash-pro",
         responseFormat: "json",
         temperature: 0.2,
         maxTokens: 2000,
