@@ -48,6 +48,23 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
 - `pnpm run db:migrate` — run Drizzle migrations
 - `pnpm run db:push` — push schema directly (dev only)
 
+## Migrations are HAND-AUTHORED (journal + .sql), NOT `drizzle-kit generate`
+
+`drizzle-kit generate` is interactive (a TUI create/rename prompt that can't be
+fed from a pipe) AND this repo's `drizzle/meta` snapshots are STALE — only
+`0000`–`0007` exist, so generate diffs against a pre-`0008` baseline and offers
+bogus "rename from orgs/users" options. Don't fight it. To add a migration:
+1. Edit `src/db/schema.ts`.
+2. Hand-write `drizzle/NNNN_<name>.sql` (use `CREATE TABLE IF NOT EXISTS` /
+   `CREATE INDEX IF NOT EXISTS` so boot is idempotent; `--> statement-breakpoint`
+   between statements — mirror an existing migration like `0019`/`0020`).
+3. Append an entry to `drizzle/meta/_journal.json` (`idx`+1, same `version`,
+   `when` greater than the previous, `tag` = the filename without `.sql`).
+Boot `migrate()` reads ONLY the `.sql` files + `_journal.json` (never the
+snapshots), so a missing snapshot does not affect boot. Do NOT write to the
+journal/sql via a hooked shell redirect (`>`) — use the editor or `python3`
+direct file write (RTK truncation gotcha).
+
 ## Apollo pagination hard cap (DO NOT remove the cursor clamp)
 
 Apollo People Search serves at most **50,000 records** via pagination
