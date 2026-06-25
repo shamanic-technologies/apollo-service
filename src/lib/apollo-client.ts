@@ -81,6 +81,13 @@ export interface ApolloSearchParams {
   organization_job_posted_at_range?: { min?: string; max?: string };
   person_total_yoe_range?: { min?: number; max?: number };
   person_days_in_current_title_range?: { min?: number; max?: number };
+  // ── UNDOCUMENTED-but-verified org-funding filters (honored by People Search;
+  // see APOLLO_UNDOCUMENTED_FILTERS_ENCART + CLAUDE.md). Documented only for
+  // Organization Search, but mixed_people/api_search applies them. ──
+  total_funding_range?: { min?: number; max?: number };
+  latest_funding_amount_range?: { min?: number; max?: number };
+  latest_funding_date_range?: { min?: string; max?: string };
+  organization_latest_funding_stage_cd?: string[];
   page?: number;
   per_page?: number;
 }

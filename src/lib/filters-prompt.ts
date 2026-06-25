@@ -104,3 +104,38 @@ export function buildFiltersPrompt<T extends z.ZodObject<any>>(schema: T): strin
 export function computeFiltersPromptVersion(prompt: string): string {
   return createHash("sha256").update(prompt).digest("hex").slice(0, 12);
 }
+
+/**
+ * UNDOCUMENTED-but-verified Apollo People-Search filter rules.
+ *
+ * These rules are NOT derivable from the Zod schema / official Apollo doc, so
+ * they live here as a hardcoded block appended to every filters-prompt surface
+ * (the /search/filters-prompt response AND the audience-refine LLM system
+ * prompt). Keeping them in a dedicated constant — separate from the
+ * auto-generated `buildFiltersPrompt` catalog — means a future "re-sync the
+ * schema to the official Apollo doc" pass will NOT silently erase them.
+ *
+ * Verified live 2026-06-25 via the FREE Apollo dry-run (per_page=1, zero
+ * credits). DO NOT delete on a doc re-sync — see CLAUDE.md.
+ */
+export const APOLLO_UNDOCUMENTED_FILTERS_ENCART = [
+  "=== UNDOCUMENTED-BUT-VERIFIED APOLLO PEOPLE-SEARCH RULES (do NOT remove on a doc re-sync) ===",
+  "Apollo's published People Search parameter list omits the org-funding filters",
+  "below (they are documented only for Organization Search), but the People Search",
+  "endpoint (mixed_people/api_search) DOES honor them. Verified live via the free",
+  "dry-run, baseline `CEO + United States` = 521,871 matches:",
+  "- total_funding_range {min,max} integer USD — honored (min=100M -> 10,258).",
+  "- latest_funding_amount_range {min,max} integer USD — honored (min=50M -> 8,642).",
+  "- latest_funding_date_range {min,max} ISO date — honored (2024+ -> 25,022).",
+  "- organization_latest_funding_stage_cd string[] — honored, but ONLY Apollo NUMERIC",
+  "  stage codes filter. Label strings (\"Series A\") are silently treated as \"has any",
+  "  funding stage\" and do NOT discriminate. Code map (reverse-engineered; anchor",
+  "  apollo.io = Series D = \"5\"):",
+  "    \"1\"=Seed/Angel  \"2\"=Series A  \"3\"=Series B  \"4\"=Series C  \"5\"=Series D",
+  "    \"6\"=Series E  \"7\"=Series F  \"8\"=Series G  \"9\"=Series H  \"10\"=Late/Series I+",
+  "RULE: Apollo silently DROPS unknown params (a nonsense param returns the baseline",
+  "count unchanged, no 422). A wrong field name is a DEAD filter, not an error — never",
+  "trust that a new People-Search filter works because it compiles; confirm it with a",
+  "free dry-run count delta first.",
+  "=== END UNDOCUMENTED RULES ===",
+].join("\n");
