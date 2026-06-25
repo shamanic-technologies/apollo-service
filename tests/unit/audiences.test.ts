@@ -210,4 +210,64 @@ describe("Apollo audience endpoints", () => {
     expect(res.body.count).toBe(4200);
     expect(res.body.filters).toEqual(CONFIRMED_FILTERS);
   });
+
+  it("does not accept a zero-match confirm when a later in-band audience exists", async () => {
+    const zeroFilters = { personTitles: ["Founder"], qKeywords: "consulting OR \"professional services\"" };
+    const inBandFilters = { personTitles: ["Head of Sales"], qKeywords: "consulting" };
+    mockChatComplete
+      .mockResolvedValueOnce({
+        json: { action: "confirm", filters: zeroFilters, reasoning: "specific founder segment" },
+        content: "", tokensInput: 1, tokensOutput: 1, model: "m",
+      })
+      .mockResolvedValueOnce({
+        json: { action: "confirm", filters: inBandFilters, reasoning: "healthy sales segment" },
+        content: "", tokensInput: 1, tokensOutput: 1, model: "m",
+      });
+    mockSearchPeople
+      .mockResolvedValueOnce({ total_entries: 0, people: [] })
+      .mockResolvedValueOnce({ total_entries: 1321, people: [] });
+
+    const res = await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(200);
+
+    expect(mockChatComplete).toHaveBeenCalledTimes(2);
+    expect(res.body.count).toBe(1321);
+    expect(res.body.filters).toEqual(inBandFilters);
+    expect(state.inserted.count).toBe(1321);
+  });
+
+  it("does not persist an audience when every tried filter set has zero matches", async () => {
+    mockChatComplete.mockResolvedValue({
+      json: { action: "confirm", filters: { personTitles: ["Founder"] }, reasoning: "try founders" },
+      content: "", tokensInput: 1, tokensOutput: 1, model: "m",
+    });
+    mockSearchPeople.mockResolvedValue({ total_entries: 0, people: [] });
+
+    await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(500);
+
+    expect(mockChatComplete).toHaveBeenCalledTimes(6);
+    expect(state.inserted).toBeNull();
+  });
+
+  it("prompts the model to target 1,000-100,000 live matches", async () => {
+    await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(200);
+
+    expect(mockChatComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        systemPrompt: expect.stringContaining("roughly 1,000-100,000"),
+      }),
+      expect.anything(),
+    );
+  });
 });
