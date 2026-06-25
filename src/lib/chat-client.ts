@@ -1,9 +1,15 @@
 /**
- * HTTP client for chat-service POST /complete.
+ * HTTP client for chat-service LLM completion.
  *
- * chat-service OWNS the LLM cost (provision→authorize→execute→actualize happens
- * inside chat-service, metered against the caller's org). apollo-service declares
- * NO LLM cost — it just calls this endpoint and passes the identity headers.
+ * Two endpoints, picked by whether the caller carries an inbound run id:
+ *   - WITH runId: POST /complete, org/run-scoped. chat-service meters the LLM
+ *     cost against the caller's org + run.
+ *   - WITHOUT runId: POST /internal/platform-complete, for run-less internal
+ *     callers (migrations/backfills/sweeps). chat-service uses the platform key
+ *     and declares the spend on a platform run, with no org balance gate.
+ *
+ * chat-service owns the LLM cost in both cases. apollo-service declares no LLM
+ * cost locally; it just calls chat-service and passes the relevant headers.
  */
 
 export type ChatProvider = "google" | "anthropic";
@@ -31,7 +37,7 @@ export interface ChatCompleteResult {
 export interface ChatTrackingHeaders {
   orgId: string;
   userId?: string;
-  /** Outbound x-run-id — this service's own runId (NOT the inbound parent). */
+  /** Outbound x-run-id: this service's own runId, not the inbound parent. */
   runId?: string;
   brandIds?: string[];
   campaignId?: string;
@@ -65,10 +71,29 @@ function buildHeaders(tracking: ChatTrackingHeaders): Record<string, string> {
   return headers;
 }
 
+/**
+ * Headers for POST /internal/platform-complete. The platform endpoint takes no
+ * org/user/run identity from this caller.
+ */
+function buildPlatformHeaders(): Record<string, string> {
+  const apiKey = process.env.CHAT_SERVICE_API_KEY;
+  if (!apiKey) throw new Error("[apollo-service] CHAT_SERVICE_API_KEY is required");
+  return {
+    "Content-Type": "application/json",
+    "x-api-key": apiKey,
+  };
+}
+
 export async function chatComplete(
   params: ChatCompleteParams,
   tracking: ChatTrackingHeaders,
 ): Promise<ChatCompleteResult> {
+  // Run-less callers (no inbound run id: migrations / backfills / internal
+  // sweeps) route to the platform completion endpoint; run-scoped callers keep
+  // the org-scoped /complete path. chat-service owns the cost in both cases.
+  const isPlatform = !tracking.runId;
+  const path = isPlatform ? "/internal/platform-complete" : "/complete";
+
   const body = {
     message: params.message,
     systemPrompt: params.systemPrompt,
@@ -76,18 +101,19 @@ export async function chatComplete(
     model: params.model,
     ...(params.responseFormat && { responseFormat: params.responseFormat }),
     ...(params.temperature !== undefined && { temperature: params.temperature }),
-    ...(params.maxTokens !== undefined && { maxTokens: params.maxTokens }),
+    // platform-complete has no maxTokens field in chat-service's request schema.
+    ...(!isPlatform && params.maxTokens !== undefined && { maxTokens: params.maxTokens }),
   };
 
-  const res = await fetch(`${baseUrl()}/complete`, {
+  const res = await fetch(`${baseUrl()}${path}`, {
     method: "POST",
-    headers: buildHeaders(tracking),
+    headers: isPlatform ? buildPlatformHeaders() : buildHeaders(tracking),
     body: JSON.stringify(body),
   });
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`[apollo-service][chat-client] POST /complete returned ${res.status}: ${text}`);
+    throw new Error(`[apollo-service][chat-client] POST ${path} returned ${res.status}: ${text}`);
   }
 
   return (await res.json()) as ChatCompleteResult;
