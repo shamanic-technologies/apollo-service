@@ -147,12 +147,15 @@ deprecated); auth header `x-api-key`. RTK truncates `curl` JSON — probe with
 Python `urllib` (see `/tmp/apollo_probe*.py` pattern from the 2026-06-25 sweep).
 Publish only `>0`-confirmed slugs in enums; never list a guessed slug.
 
-**Keywords are the harshest volume killer — express sector/vertical via keyword
-tags, never `q_keywords`/technology UIDs.** Verified: `q_keywords="SaaS"` → 86 vs
-`q_organization_keyword_tags=["software"]` → 128,274 (1,490×). The refine loop's
-relaxation order must shed `q_keywords` + technology UIDs FIRST. This is why the
+**Keywords are the harshest volume killer — use them CONSCIOUSLY, don't ban them.**
+Verified: `q_keywords="SaaS"` → 86 vs `q_organization_keyword_tags=["software"]` →
+128,274 (1,490×). `q_keywords` + technology UIDs stay fully available (use them when
+the request truly needs that precision) but they crush the count, so the prompt
+must make the model aware of the trade-off and PREFER keyword-tags/industry for a
+sector — never hard-ban keyword/tech. The refine loop's relaxation order sheds
+`q_keywords` + technology UIDs FIRST (most volume per constraint). This is why the
 audience builder produced 14–67-match audiences before — it had no industry filter
-and fell back to `q_keywords`.
+and fell back to `q_keywords` unknowingly.
 
 **Verified 2026-06-25 — undocumented TARGETING filters People Search also honors
 (same baseline `CEO + United States` = 521,875).** The headline is the
@@ -161,8 +164,9 @@ free-text `q_keywords` (verified: `q_keywords="SaaS"` → **86** vs
 `q_organization_keyword_tags=["software"]` → **128,274**):
 
 - `q_organization_keyword_tags` `string[]` — employer keyword/industry tags by
-  NAME (fintech → 2,137,121). **Always express a sector/vertical with this, never
-  `q_keywords` or a technology UID** — those are the harshest volume reducers.
+  NAME (fintech → 2,137,121). **Prefer this for a sector/vertical** — `q_keywords`
+  and technology UIDs stay available but are the harshest volume reducers, so use
+  them consciously (knowing they slash the count), not reflexively.
 - `q_not_organization_keyword_tags` `string[]` — EXCLUDE those tags (the plain
   `not_organization_keyword_tags` spelling is DEAD; use the `q_`-prefixed form).
 - `included_organization_keyword_fields` `string[]` — which employer fields the
