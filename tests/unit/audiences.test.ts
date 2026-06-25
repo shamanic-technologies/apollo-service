@@ -264,6 +264,9 @@ describe("Apollo audience endpoints", () => {
       .expect(200);
 
     const [[opts]] = mockChatComplete.mock.calls;
+    // Refine loop runs on flash-pro (Gemini 3.5 Flash) with thinking minimized.
+    expect(opts.model).toBe("flash-pro");
+    expect(opts.disableThinking).toBe(true);
     expect(opts.systemPrompt).toContain("AT LEAST 1,000");
     expect(opts.systemPrompt).toContain("NEVER confirm");
     expect(opts.systemPrompt).toContain("RELAX AGGRESSIVELY");

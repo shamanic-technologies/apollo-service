@@ -23,6 +23,9 @@ export interface ChatCompleteParams {
   responseFormat?: "json";
   temperature?: number;
   maxTokens?: number;
+  /** Minimize the model's internal reasoning. Provider-floored: Gemini 3 (incl.
+   * flash-pro) drops to its lowest level (`minimal`), not full-off. */
+  disableThinking?: boolean;
 }
 
 export interface ChatCompleteResult {
@@ -101,6 +104,7 @@ export async function chatComplete(
     model: params.model,
     ...(params.responseFormat && { responseFormat: params.responseFormat }),
     ...(params.temperature !== undefined && { temperature: params.temperature }),
+    ...(params.disableThinking !== undefined && { disableThinking: params.disableThinking }),
     // platform-complete has no maxTokens field in chat-service's request schema.
     ...(!isPlatform && params.maxTokens !== undefined && { maxTokens: params.maxTokens }),
   };
