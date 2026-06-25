@@ -2,6 +2,38 @@
 
 Apollo.io integration service for lead search, enrichment, and validation with cost tracking via runs-service.
 
+## apollo-service OWNS "an Apollo audience" — faithful Apollo vocabulary, single source
+
+This service is the single owner of the Apollo People-Search filter vocabulary
+and of saved Apollo audiences. The filter schema (`SearchFiltersSchema`) is 1:1
+FAITHFUL to Apollo's real People Search API — full accepted value sets, no
+narrowed/renamed enums. Consumers (human-service) store ONLY an apollo-audience
+id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
+
+- **Faithful filters (do NOT re-subset).** Seniorities include the FULL Apollo
+  set incl `head` + `intern`. `organizationNumEmployeesRanges` accepts ARBITRARY
+  `"min,max"` spans (not a fixed bucket enum). `*_range` params are `{min,max}`
+  objects (`revenueRangeNative`, `organizationFoundedYearRange`,
+  `organizationNumJobsRange`, `personTotalYoeRange`, … — see the "{min,max}"
+  section below). `includeSimilarTitles` is exposed. Any NEW Apollo people-search
+  filter is ADDITIVE/backward-compatible — widen, never narrow, and map it in
+  `toApolloSearchParams` (`*_range` → `{min,max}` via `cleanRange`).
+- **Stateful audiences (Bronze/Silver/Gold).** `apollo_audiences` table:
+  bronze = `refine_trace` (raw refine iterations + counts), silver = `filters`
+  (canonical faithful filter object keyed by id), gold = `count` snapshot.
+- **The NL-segment→filters agentic refine loop lives HERE** (`src/lib/audience-refine.ts`),
+  not in human-service. It calls **chat-service** for the LLM (chat-service owns
+  the LLM cost — apollo-service declares NONE for it) and uses the FREE Apollo
+  dry-run (per_page=1, zero credits) for live count feedback.
+- **Endpoints:** `POST /audiences/suggest-from-segment`, `GET /audiences/{id}`,
+  `POST /audiences/{id}/dry-run`. A serve-next-by-audience-id endpoint is a
+  later wave (designed with human-service) — do NOT build it here yet.
+- **Env vars (NEW consumer of chat-service):** `CHAT_SERVICE_URL` +
+  `CHAT_SERVICE_API_KEY` (shared fleet values) are required by the audience
+  endpoints. They are read lazily inside the handler, so their absence does NOT
+  break boot or any existing endpoint — only `/audiences/suggest-from-segment`
+  would 500 until they are set.
+
 ## Commands
 
 - `pnpm test` — run all tests (Vitest)

@@ -76,9 +76,28 @@ describe("buildFiltersPrompt(SearchFiltersSchema)", () => {
     expect(block).toMatch(/enum: verified \| unverified \| likely to engage \| unavailable/);
   });
 
-  it("renders organizationNumEmployeesRanges enum line with all 11 ranges", () => {
+  it("renders organizationNumEmployeesRanges as arbitrary string[] (no fixed-bucket enum)", () => {
     const block = prompt.split(/\n(?=- )/).find((b) => b.startsWith("- organizationNumEmployeesRanges:"));
-    expect(block).toMatch(/enum: 1,10 \| 11,20 \| 21,50 \| 51,100 \| 101,200 \| 201,500 \| 501,1000 \| 1001,2000 \| 2001,5000 \| 5001,10000 \| 10001,/);
+    // Faithful Apollo: arbitrary 'min,max' spans, NOT a fixed bucket enum.
+    expect(block).toMatch(/^- organizationNumEmployeesRanges: string\[\]$/m);
+    expect(block).not.toMatch(/enum:/);
+    expect(block).toMatch(/ARBITRARY/);
+  });
+
+  it("renders the full faithful seniority enum incl head and intern", () => {
+    const block = prompt.split(/\n(?=- )/).find((b) => b.startsWith("- personSeniorities:"));
+    expect(block).toMatch(/\| partner \| head \| intern/);
+  });
+
+  it("renders range-object filters (e.g. revenueRangeNative) as object with a {min,max} example", () => {
+    const block = prompt.split(/\n(?=- )/).find((b) => b.startsWith("- revenueRangeNative:"));
+    expect(block).toMatch(/^- revenueRangeNative: object$/m);
+    expect(block).toMatch(/ex:\s*\{.*"min".*"max".*\}/);
+  });
+
+  it("renders boolean filters (e.g. includeSimilarTitles) as boolean", () => {
+    const block = prompt.split(/\n(?=- )/).find((b) => b.startsWith("- includeSimilarTitles:"));
+    expect(block).toMatch(/^- includeSimilarTitles: boolean$/m);
   });
 
   it("does NOT render an enum line for plain string[] fields like personTitles", () => {

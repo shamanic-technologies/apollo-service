@@ -52,10 +52,30 @@ export function toApolloRevenueRange(
 }
 
 /**
+ * Clean a `{min, max}` range object: keep only the bounds that are present
+ * (not null/undefined), drop the key entirely when empty. Works for both
+ * integer ranges and ISO-date ranges — Apollo accepts either as `{min, max}`.
+ */
+function cleanRange<T extends number | string>(
+  raw: unknown,
+): { min?: T; max?: T } | undefined {
+  if (raw == null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const o = raw as { min?: unknown; max?: unknown };
+  const out: { min?: T; max?: T } = {};
+  if (o.min !== undefined && o.min !== null) out.min = o.min as T;
+  if (o.max !== undefined && o.max !== null) out.max = o.max as T;
+  return out.min === undefined && out.max === undefined ? undefined : out;
+}
+
+/**
  * Map camelCase search filter params to Apollo's snake_case API format.
  * Shared by POST /search and POST /search/next.
  */
 export function toApolloSearchParams(sp: Record<string, unknown>): ApolloSearchParams {
+  // Prefer the native {min,max} revenue object when supplied; else collapse the
+  // legacy `revenueRange` string-array into Apollo's required {min,max}.
+  const revenueNative = cleanRange<number>(sp.revenueRangeNative);
+
   return {
     person_titles: sp.personTitles as string[] | undefined,
     q_organization_keyword_tags: sp.qOrganizationKeywordTags as string[] | undefined,
@@ -68,8 +88,29 @@ export function toApolloSearchParams(sp: Record<string, unknown>): ApolloSearchP
     contact_email_status: sp.contactEmailStatus as string[] | undefined,
     q_organization_domains: sp.qOrganizationDomains as string[] | undefined,
     currently_using_any_of_technology_uids: sp.currentlyUsingAnyOfTechnologyUids as string[] | undefined,
-    revenue_range: toApolloRevenueRange(sp.revenueRange),
+    revenue_range: revenueNative ?? toApolloRevenueRange(sp.revenueRange),
     organization_ids: sp.organizationIds as string[] | undefined,
+    // ── Faithful Apollo People Search params (additive) ──
+    include_similar_titles: sp.includeSimilarTitles as boolean | undefined,
+    q_organization_job_titles: sp.qOrganizationJobTitles as string[] | undefined,
+    person_linkedin_urls: sp.personLinkedinUrls as string[] | undefined,
+    currently_using_all_of_technology_uids: sp.currentlyUsingAllOfTechnologyUids as string[] | undefined,
+    currently_not_using_any_of_technology_uids: sp.currentlyNotUsingAnyOfTechnologyUids as string[] | undefined,
+    q_organization_domains_list: sp.qOrganizationDomainsList as string[] | undefined,
+    market_segments: sp.marketSegments as string[] | undefined,
+    organization_naics_codes: sp.organizationNaicsCodes as string[] | undefined,
+    not_organization_naics_codes: sp.notOrganizationNaicsCodes as string[] | undefined,
+    organization_sic_codes: sp.organizationSicCodes as string[] | undefined,
+    not_organization_sic_codes: sp.notOrganizationSicCodes as string[] | undefined,
+    organization_job_locations: sp.organizationJobLocations as string[] | undefined,
+    organization_founded_year_range: cleanRange<number>(sp.organizationFoundedYearRange),
+    organization_include_unknown_founded_year: sp.organizationIncludeUnknownFoundedYear as boolean | undefined,
+    organization_headcount_growth_past_n_months: sp.organizationHeadcountGrowthPastNMonths as number | undefined,
+    organization_headcount_growth_range: cleanRange<number>(sp.organizationHeadcountGrowthRange),
+    organization_num_jobs_range: cleanRange<number>(sp.organizationNumJobsRange),
+    organization_job_posted_at_range: cleanRange<string>(sp.organizationJobPostedAtRange),
+    person_total_yoe_range: cleanRange<number>(sp.personTotalYoeRange),
+    person_days_in_current_title_range: cleanRange<number>(sp.personDaysInCurrentTitleRange),
   };
 }
 
