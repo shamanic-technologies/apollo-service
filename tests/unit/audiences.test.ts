@@ -269,7 +269,7 @@ describe("Apollo audience endpoints", () => {
     expect(opts.disableThinking).toBe(true);
     expect(opts.systemPrompt).toContain("AT LEAST 1,000");
     expect(opts.systemPrompt).toContain("NEVER confirm");
-    expect(opts.systemPrompt).toContain("RELAX AGGRESSIVELY");
+    expect(opts.systemPrompt).toContain("SHEDDING THE HIGHEST-VOLUME-COST");
   });
 
   it("keeps testing past a < 1,000 set, relaxing until it crosses the floor, then confirms", async () => {
@@ -296,7 +296,7 @@ describe("Apollo audience endpoints", () => {
     // The escalation nudge fires on the 2nd+ turn once a < 1,000 count is on record.
     const secondTurnMsg = mockChatComplete.mock.calls[1][0].message as string;
     expect(secondTurnMsg).toContain("BELOW the 1,000 floor");
-    expect(secondTurnMsg).toContain("DROP the constraint YOU judge least important");
+    expect(secondTurnMsg).toContain("SHED the highest-volume-cost constraint");
   });
 
   it("invalid model output does not consume the 6 real-attempt budget", async () => {
