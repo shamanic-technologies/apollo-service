@@ -122,6 +122,13 @@ describe("Apollo audience endpoints", () => {
     expect(res.body.filters).toEqual(CONFIRMED_FILTERS);
     expect(res.body.count).toBe(4200);
     expect(mockChatComplete).toHaveBeenCalledTimes(1);
+    // Refine LLM goes through Google (Gemini) JSON mode, NOT Anthropic: chat-service
+    // requires a strict responseSchema for Anthropic JSON, incompatible with the
+    // sparse Apollo filter object. Gemini JSON mode needs no schema.
+    expect(mockChatComplete).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "google", responseFormat: "json" }),
+      expect.anything(),
+    );
     // The refine loop dry-ran the confirmed filters via Apollo per_page=1.
     expect(mockSearchPeople).toHaveBeenCalledWith("apollo-key", expect.objectContaining({ per_page: 1 }));
     // Stored row carries the faithful filters + count snapshot.
