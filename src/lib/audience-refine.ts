@@ -84,17 +84,32 @@ function buildSystemPrompt(catalog: string): string {
     catalog,
     "=== END FILTERS ===",
     "",
+    "BUILD GUIDANCE:",
+    "- For a SECTOR / VERTICAL (SaaS, fintech, B2B, ...) use q_organization_keyword_tags, NOT the",
+    "  free-text q_keywords — q_keywords is the single harshest volume killer (orders of magnitude",
+    "  fewer matches) and should only be used when the request needs that exact-phrase precision.",
+    "- When the request targets a ROLE, set includeSimilarTitles=true so equivalent titles are",
+    "  matched too, unless the request is explicitly title-exact.",
+    "- Map every concrete constraint the request states to its OWN structured filter: a revenue band",
+    "  -> revenueRange, an employee/headcount band -> organizationNumEmployeesRanges, a hiring signal",
+    "  -> organization_num_jobs_range, an industry -> q_organization_keyword_tags. Do not let one",
+    "  filter (e.g. keywords) absorb a constraint another filter expresses better.",
+    "",
     "PRIMARY GOAL: produce an audience with AT LEAST 1,000 matches (ideal band 1,000-100,000).",
     "An audience under 1,000 is a FAILURE unless 1,000 is genuinely unreachable. NEVER confirm",
     "a set whose count is below 1,000.",
     "",
-    "RELAX AGGRESSIVELY to cross 1,000. When a filter set returns < 1,000 you MUST loosen or DROP",
-    "constraints and test again. Drop the LEAST IMPORTANT constraints first and keep the most",
-    "defining ones — YOU decide, for THIS specific request, which constraints matter least (a",
-    "revenue or headcount band, a secondary keyword/technology, an overly tight seniority, etc.)",
-    "and relax those before anything central. Stay as CLOSE as possible to the original request:",
-    "preserve what the request is fundamentally about (who the user wants to reach) and shed the",
-    "peripheral qualifiers until the count reaches 1,000.",
+    "RELAX by SHEDDING THE HIGHEST-VOLUME-COST, LOWEST-SIGNAL CONSTRAINTS FIRST. When a filter set",
+    "returns < 1,000 you MUST loosen and test again — relax in THIS order:",
+    "  1. Free-text q_keywords and technology UIDs FIRST. They crush the match count for very little",
+    "     targeting value (q_keywords=\"SaaS\" returns ~86 matches; q_organization_keyword_tags=",
+    "     [\"software\"] returns ~128,274). Express any sector/vertical with q_organization_keyword_tags,",
+    "     NOT q_keywords — only fall back to q_keywords/technology when the request needs that precision.",
+    "  2. THEN, only if still below 1,000, loosen ONE secondary qualifier.",
+    "PRESERVE the user's DEFINING firmographics & demographics — revenue range, employee range, job",
+    "titles, industry / keyword tags, geography, seniority. These are what the user cares about MOST.",
+    "Drop one of THESE only as a LAST resort, and only the single least-defining one. NEVER volunteer",
+    "to drop revenue or headcount before the keyword/technology constraints are gone.",
     "",
     "Too many (> 100,000) -> add back / tighten constraints toward the request.",
     "",
@@ -142,8 +157,9 @@ function buildUserMessage(
   if (lastValid && lastValid.count < TARGET_MIN) {
     lines.push(
       `Latest count ${lastValid.count} is BELOW the 1,000 floor. You have ${remaining} test(s) left. ` +
-        "DROP the constraint YOU judge least important for this request NOW and test a broader " +
-        "set. Do NOT confirm below 1,000.",
+        "SHED the highest-volume-cost constraint NOW — drop q_keywords / technology UIDs FIRST " +
+        "(swap a sector to q_organization_keyword_tags if not already), and PRESERVE revenue, " +
+        "employee range, titles, industry, geography, seniority. Test a broader set. Do NOT confirm below 1,000.",
     );
     if (remaining <= 1) {
       lines.push(
