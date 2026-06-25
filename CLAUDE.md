@@ -17,7 +17,11 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
   `organizationNumJobsRange`, `personTotalYoeRange`, … — see the "{min,max}"
   section below). `includeSimilarTitles` is exposed. Any NEW Apollo people-search
   filter is ADDITIVE/backward-compatible — widen, never narrow, and map it in
-  `toApolloSearchParams` (`*_range` → `{min,max}` via `cleanRange`).
+  `toApolloSearchParams` (`*_range` → `{min,max}` via `cleanRange`). A real
+  Apollo people-search filter that is MISSING from the schema is a **gap to
+  fill**, never an optional "want me to add it?" — surface it and add it. (Cost
+  2026-06-25: funding filters were entirely absent from the input path; framing
+  the add as optional drew a sharp correction.)
 - **Stateful audiences (Bronze/Silver/Gold).** `apollo_audiences` table:
   bronze = `refine_trace` (raw refine iterations + counts), silver = `filters`
   (canonical faithful filter object keyed by id), gold = `count` snapshot.
