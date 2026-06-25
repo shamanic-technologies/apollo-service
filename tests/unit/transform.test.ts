@@ -372,6 +372,27 @@ describe("toApolloSearchParams", () => {
     const result = toApolloSearchParams({ personTitles: ["CEO"] });
     expect(result.revenue_range).toBeUndefined();
   });
+
+  it("maps the undocumented org-funding filters (honored by People Search)", () => {
+    const result = toApolloSearchParams({
+      total_funding_range: { min: 1000000, max: 50000000 },
+      latest_funding_amount_range: { min: 5000000 },
+      latest_funding_date_range: { min: "2024-01-01" },
+      organization_latest_funding_stage_cd: ["2", "3"],
+    });
+    expect(result.total_funding_range).toEqual({ min: 1000000, max: 50000000 });
+    expect(result.latest_funding_amount_range).toEqual({ min: 5000000 });
+    expect(result.latest_funding_date_range).toEqual({ min: "2024-01-01" });
+    expect(result.organization_latest_funding_stage_cd).toEqual(["2", "3"]);
+  });
+
+  it("leaves the undocumented funding filters undefined when absent", () => {
+    const result = toApolloSearchParams({ personTitles: ["CEO"] });
+    expect(result.total_funding_range).toBeUndefined();
+    expect(result.latest_funding_amount_range).toBeUndefined();
+    expect(result.latest_funding_date_range).toBeUndefined();
+    expect(result.organization_latest_funding_stage_cd).toBeUndefined();
+  });
 });
 
 describe("transformCachedEnrichment", () => {

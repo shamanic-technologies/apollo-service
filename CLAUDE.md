@@ -17,7 +17,11 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
   `organizationNumJobsRange`, `personTotalYoeRange`, … — see the "{min,max}"
   section below). `includeSimilarTitles` is exposed. Any NEW Apollo people-search
   filter is ADDITIVE/backward-compatible — widen, never narrow, and map it in
-  `toApolloSearchParams` (`*_range` → `{min,max}` via `cleanRange`).
+  `toApolloSearchParams` (`*_range` → `{min,max}` via `cleanRange`). A real
+  Apollo people-search filter that is MISSING from the schema is a **gap to
+  fill**, never an optional "want me to add it?" — surface it and add it. (Cost
+  2026-06-25: funding filters were entirely absent from the input path; framing
+  the add as optional drew a sharp correction.)
 - **Stateful audiences (Bronze/Silver/Gold).** `apollo_audiences` table:
   bronze = `refine_trace` (raw refine iterations + counts), silver = `filters`
   (canonical faithful filter object keyed by id), gold = `count` snapshot.
@@ -94,6 +98,39 @@ span; open-ended bounds omit that key). Any NEW Apollo range filter added to
 never a passthrough string/array. The **count/enumerable** list params
 (`organization_num_employees_ranges`) genuinely ARE arrays of `"min,max"`
 strings — only the `*_range` object params need the conversion (#133, v0.22.1).
+
+## People Search honors UNDOCUMENTED org-funding filters (verified live — DO NOT delete on a doc re-sync)
+
+We hit **People Search only** (`mixed_people/api_search` via `searchPeople`) — the
+refine loop AND every dry-run go through it. We never call Company/Organization
+Search. Apollo's *published* People Search parameter list does NOT include the
+org-funding filters below (they are documented only for **Organization Search**),
+but the People Search engine **honors them anyway**. Verified live **2026-06-25**
+via the FREE dry-run (`per_page=1`, zero credits); baseline `CEO + United States`
+= 521,871 matches:
+
+- `total_funding_range {min,max}` int USD — honored (min=100M → 10,258).
+- `latest_funding_amount_range {min,max}` int USD — honored (min=50M → 8,642).
+- `latest_funding_date_range {min,max}` ISO date — honored (2024+ → 25,022).
+- `organization_latest_funding_stage_cd` `string[]` — honored, but **only Apollo
+  NUMERIC stage codes filter**. Label strings (`"Series A"`) are silently treated
+  as "has any funding stage" → all labels return the same 11,736 (no real
+  discrimination). Code map (reverse-engineered; anchor `apollo.io` = Series D =
+  `"5"`, plus strictly-decreasing CEO/US counts `2`→4071 … `9`→16):
+  `1`=Seed/Angel, `2`=Series A, `3`=Series B, `4`=Series C, `5`=Series D,
+  `6`=Series E, `7`=Series F, `8`=Series G, `9`=Series H, `10`=Late/Series I+.
+
+**Apollo silently DROPS unknown params** — a nonsense param returns the baseline
+count unchanged (no 422). So a wrong field name is a **dead filter, not an
+error**. Never trust that a new People-Search filter works because it compiles;
+confirm it with a free dry-run **count delta** first.
+
+These are intentionally **beyond the official doc**. The durable copy of these
+rules (for caller LLMs + the refine loop) lives in
+`APOLLO_UNDOCUMENTED_FILTERS_ENCART` (`src/lib/filters-prompt.ts`), appended to
+both `/search/filters-prompt` and the audience-refine system prompt. If you ever
+"re-sync `SearchFiltersSchema` to the official Apollo doc", **keep these fields +
+the encart** — they are not in the doc by design, but they work.
 
 ## Architecture
 

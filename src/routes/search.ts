@@ -11,7 +11,7 @@ import { authorizeCredit } from "../lib/billing-client.js";
 import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment, toApolloSearchParams } from "../lib/transform.js";
 import { assertKeySource } from "../lib/validators.js";
 import { SearchNextRequestSchema, SearchDryRunRequestSchema, EnrichRequestSchema, StatsRequestSchema, ApolloNativeSearchFiltersSchema } from "../schemas.js";
-import { buildFiltersPrompt, computeFiltersPromptVersion } from "../lib/filters-prompt.js";
+import { buildFiltersPrompt, computeFiltersPromptVersion, APOLLO_UNDOCUMENTED_FILTERS_ENCART } from "../lib/filters-prompt.js";
 import { deepEqual } from "../lib/deep-equal.js";
 import { traceEvent } from "../lib/trace-event.js";
 // Waterfall disabled 2026-05-28 — see src/lib/waterfall.ts header for revive.
@@ -44,7 +44,10 @@ const APOLLO_MAX_REACHABLE_PAGE = Math.floor(APOLLO_MAX_SEARCH_RESULTS / DEFAULT
 // Compute the filters prompt once at module load. ApolloNativeSearchFiltersSchema
 // is static, so the prompt + hash never change between calls — fail-loud at
 // startup if any field is missing description/example metadata.
-const FILTERS_PROMPT = buildFiltersPrompt(ApolloNativeSearchFiltersSchema);
+// Append the UNDOCUMENTED-but-verified rules encart (funding filters + code map
+// + "unknown params are silently dropped" rule) so caller LLMs get them too. The
+// hash covers the encart, so changes to it bust the caller cache.
+const FILTERS_PROMPT = `${buildFiltersPrompt(ApolloNativeSearchFiltersSchema)}\n\n${APOLLO_UNDOCUMENTED_FILTERS_ENCART}`;
 const FILTERS_PROMPT_VERSION = computeFiltersPromptVersion(FILTERS_PROMPT);
 
 /**

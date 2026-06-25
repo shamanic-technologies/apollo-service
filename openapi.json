@@ -406,6 +406,58 @@
           "organization_job_posted_at_range": {
             "$ref": "#/components/schemas/DateRange"
           },
+          "total_funding_range": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IntRange"
+              },
+              {
+                "description": "Filter by employer TOTAL funding raised across all rounds, {min,max} integer USD. Undocumented for People Search but honored.",
+                "example": {
+                  "min": 1000000,
+                  "max": 50000000
+                }
+              }
+            ]
+          },
+          "latest_funding_amount_range": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IntRange"
+              },
+              {
+                "description": "Filter by the amount of the employer's MOST RECENT funding round, {min,max} integer USD. Undocumented for People Search but honored.",
+                "example": {
+                  "min": 5000000
+                }
+              }
+            ]
+          },
+          "latest_funding_date_range": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DateRange"
+              },
+              {
+                "description": "Filter by the date of the employer's most recent funding round, {min,max} as ISO YYYY-MM-DD dates. Undocumented for People Search but honored.",
+                "example": {
+                  "min": "2024-01-01"
+                }
+              }
+            ]
+          },
+          "organization_latest_funding_stage_cd": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Filter by employer's latest funding STAGE using Apollo NUMERIC stage codes (label strings like 'Series A' do NOT filter). Code map: 1=Seed/Angel, 2=Series A, 3=Series B, 4=Series C, 5=Series D, 6=Series E, 7=Series F, 8=Series G, 9=Series H, 10=Late/Series I+. See the UNDOCUMENTED FILTERS note. Undocumented for People Search but honored.",
+            "example": [
+              "2",
+              "3"
+            ]
+          },
           "personTitles": {
             "type": "array",
             "items": {
@@ -1299,6 +1351,58 @@
           },
           "organization_job_posted_at_range": {
             "$ref": "#/components/schemas/DateRange"
+          },
+          "total_funding_range": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IntRange"
+              },
+              {
+                "description": "Filter by employer TOTAL funding raised across all rounds, {min,max} integer USD. Undocumented for People Search but honored.",
+                "example": {
+                  "min": 1000000,
+                  "max": 50000000
+                }
+              }
+            ]
+          },
+          "latest_funding_amount_range": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IntRange"
+              },
+              {
+                "description": "Filter by the amount of the employer's MOST RECENT funding round, {min,max} integer USD. Undocumented for People Search but honored.",
+                "example": {
+                  "min": 5000000
+                }
+              }
+            ]
+          },
+          "latest_funding_date_range": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DateRange"
+              },
+              {
+                "description": "Filter by the date of the employer's most recent funding round, {min,max} as ISO YYYY-MM-DD dates. Undocumented for People Search but honored.",
+                "example": {
+                  "min": "2024-01-01"
+                }
+              }
+            ]
+          },
+          "organization_latest_funding_stage_cd": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Filter by employer's latest funding STAGE using Apollo NUMERIC stage codes (label strings like 'Series A' do NOT filter). Code map: 1=Seed/Angel, 2=Series A, 3=Series B, 4=Series C, 5=Series D, 6=Series E, 7=Series F, 8=Series G, 9=Series H, 10=Late/Series I+. See the UNDOCUMENTED FILTERS note. Undocumented for People Search but honored.",
+            "example": [
+              "2",
+              "3"
+            ]
           },
           "personTitles": {
             "type": "array",
@@ -2659,6 +2763,58 @@
           },
           "organization_job_posted_at_range": {
             "$ref": "#/components/schemas/DateRange"
+          },
+          "total_funding_range": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IntRange"
+              },
+              {
+                "description": "Filter by employer TOTAL funding raised across all rounds, {min,max} integer USD. Undocumented for People Search but honored.",
+                "example": {
+                  "min": 1000000,
+                  "max": 50000000
+                }
+              }
+            ]
+          },
+          "latest_funding_amount_range": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IntRange"
+              },
+              {
+                "description": "Filter by the amount of the employer's MOST RECENT funding round, {min,max} integer USD. Undocumented for People Search but honored.",
+                "example": {
+                  "min": 5000000
+                }
+              }
+            ]
+          },
+          "latest_funding_date_range": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DateRange"
+              },
+              {
+                "description": "Filter by the date of the employer's most recent funding round, {min,max} as ISO YYYY-MM-DD dates. Undocumented for People Search but honored.",
+                "example": {
+                  "min": "2024-01-01"
+                }
+              }
+            ]
+          },
+          "organization_latest_funding_stage_cd": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Filter by employer's latest funding STAGE using Apollo NUMERIC stage codes (label strings like 'Series A' do NOT filter). Code map: 1=Seed/Angel, 2=Series A, 3=Series B, 4=Series C, 5=Series D, 6=Series E, 7=Series F, 8=Series G, 9=Series H, 10=Late/Series I+. See the UNDOCUMENTED FILTERS note. Undocumented for People Search but honored.",
+            "example": [
+              "2",
+              "3"
+            ]
           }
         },
         "description": "The confirmed Apollo-native filter object."
