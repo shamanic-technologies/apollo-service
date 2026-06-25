@@ -89,15 +89,12 @@ function buildSystemPrompt(catalog: string): string {
     "a set whose count is below 1,000.",
     "",
     "RELAX AGGRESSIVELY to cross 1,000. When a filter set returns < 1,000 you MUST loosen or DROP",
-    "constraints and test again. Drop constraints in THIS order (least-defining first), stopping",
-    "the moment the count reaches 1,000:",
-    "  1. revenueRange (revenue band)",
-    "  2. organizationNumEmployeesRanges (headcount band)",
-    "  3. secondary keywords / technologies / extra industry terms",
-    "  4. widen seniorities (add adjacent senior levels) and/or set includeSimilarTitles: true",
-    "ALWAYS KEEP the core intent: the primary job title(s)/role plus the primary industry and",
-    "geography from the request. Stay as CLOSE as possible to the original request — drop the",
-    "widest, least-defining constraint first, never the core role.",
+    "constraints and test again. Drop the LEAST IMPORTANT constraints first and keep the most",
+    "defining ones — YOU decide, for THIS specific request, which constraints matter least (a",
+    "revenue or headcount band, a secondary keyword/technology, an overly tight seniority, etc.)",
+    "and relax those before anything central. Stay as CLOSE as possible to the original request:",
+    "preserve what the request is fundamentally about (who the user wants to reach) and shed the",
+    "peripheral qualifiers until the count reaches 1,000.",
     "",
     "Too many (> 100,000) -> add back / tighten constraints toward the request.",
     "",
@@ -105,9 +102,9 @@ function buildSystemPrompt(catalog: string): string {
     '{ "action": "test" | "confirm", "filters": { ...faithful filters... }, "reasoning": "<one short line>" }',
     '- "test": you want the live count for this filter set before deciding.',
     '- "confirm": this set is good (count >= 1,000 and <= 100,000) — stop and persist it.',
-    "Only confirm when the count is >= 1,000. If you still cannot reach 1,000 after dropping every",
-    "non-core constraint, spend your LAST turn testing your BROADEST core-only set (primary role +",
-    "industry + geography only) so the closest-possible audience is captured.",
+    "Only confirm when the count is >= 1,000. If you still cannot reach 1,000 after relaxing every",
+    "non-essential constraint, spend your LAST turn testing your BROADEST set that still honors the",
+    "core of the request, so the closest-possible audience is captured.",
   ].join("\n");
 }
 
@@ -145,13 +142,13 @@ function buildUserMessage(
   if (lastValid && lastValid.count < TARGET_MIN) {
     lines.push(
       `Latest count ${lastValid.count} is BELOW the 1,000 floor. You have ${remaining} test(s) left. ` +
-        "DROP the least-defining constraint NOW (revenue band first, then headcount band, then " +
-        "secondary keywords) and test a broader set. Do NOT confirm below 1,000.",
+        "DROP the constraint YOU judge least important for this request NOW and test a broader " +
+        "set. Do NOT confirm below 1,000.",
     );
     if (remaining <= 1) {
       lines.push(
-        "This is your LAST test — submit your BROADEST core-only set (primary role + industry + " +
-          "geography only) to capture the closest-possible audience.",
+        "This is your LAST test — submit your BROADEST set that still honors the core of the " +
+          "request, to capture the closest-possible audience.",
       );
     }
   } else {
