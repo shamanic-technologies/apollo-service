@@ -244,25 +244,13 @@
             "type": "array",
             "items": {
               "type": "string",
-              "enum": [
-                "1,10",
-                "11,20",
-                "21,50",
-                "51,100",
-                "101,200",
-                "201,500",
-                "501,1000",
-                "1001,2000",
-                "2001,5000",
-                "5001,10000",
-                "10001,"
-              ]
+              "pattern": "^\\d+,\\d*$"
             },
-            "description": "Filter by employee count ranges.",
+            "description": "Filter by employer employee-count ranges. Apollo accepts ARBITRARY 'min,max' integer spans — not a fixed bucket list. Use an open-ended max ('10001,') for \"N or more\". Pass multiple spans to union them.",
             "example": [
-              "11,20",
-              "21,50",
-              "51,100"
+              "1,10",
+              "250,500",
+              "10001,"
             ]
           },
           "qOrganizationIndustryTagIds": {
@@ -307,12 +295,14 @@
                 "c_suite",
                 "owner",
                 "founder",
-                "partner"
+                "partner",
+                "head",
+                "intern"
               ]
             },
-            "description": "Filter by seniority level. Valid values: entry, senior, manager, director, vp, c_suite, owner, founder, partner.",
+            "description": "Filter by seniority level. Apollo's full set: entry, senior, manager, director, vp, c_suite, owner, founder, partner, head, intern. Use `head` for \"Head of X\" roles (e.g. Head of Growth/Sales) and `c_suite` for CxO.",
             "example": [
-              "director",
+              "head",
               "vp",
               "c_suite"
             ]
@@ -379,9 +369,263 @@
             "example": [
               "5f5e100a01d6b1000169c754"
             ]
+          },
+          "includeSimilarTitles": {
+            "type": "boolean",
+            "description": "Apollo include_similar_titles. When false, personTitles match strictly; when true (Apollo default), Apollo also matches similar/equivalent titles. Set false to tighten an over-broad title match.",
+            "example": false
+          },
+          "qOrganizationJobTitles": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Job titles listed in ACTIVE job postings at the person's current employer (hiring-signal targeting). Different from personTitles (the person's own title).",
+            "example": [
+              "sales manager",
+              "research analyst"
+            ]
+          },
+          "personLinkedinUrls": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Find specific people by their full LinkedIn profile URL.",
+            "example": [
+              "https://www.linkedin.com/in/tim-zheng"
+            ]
+          },
+          "currentlyUsingAllOfTechnologyUids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Match people whose current employer uses ALL of these technologies (Apollo technology UIDs; underscores for spaces/periods).",
+            "example": [
+              "salesforce",
+              "google_analytics"
+            ]
+          },
+          "currentlyNotUsingAnyOfTechnologyUids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "EXCLUDE people whose current employer uses ANY of these technologies (Apollo technology UIDs).",
+            "example": [
+              "hubspot"
+            ]
+          },
+          "qOrganizationDomainsList": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Apollo's native organization-domain filter (q_organization_domains_list). Restrict to people at these company domains.",
+            "example": [
+              "apollo.io",
+              "google.com"
+            ]
+          },
+          "marketSegments": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Filter by the current employer's market-segment terms (matched against the employer's tags/name).",
+            "example": [
+              "B2B",
+              "Enterprise",
+              "Healthcare"
+            ]
+          },
+          "organizationNaicsCodes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\d{2,5}$"
+            },
+            "description": "Match employers by NAICS industry code (2–5 digits; prefix match — a shorter code is broader).",
+            "example": [
+              "5415",
+              "54151"
+            ]
+          },
+          "notOrganizationNaicsCodes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\d{2,5}$"
+            },
+            "description": "EXCLUDE employers matching these NAICS codes (prefix match).",
+            "example": [
+              "5415"
+            ]
+          },
+          "organizationSicCodes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\d{4}$"
+            },
+            "description": "Match employers by 4-digit SIC industry code.",
+            "example": [
+              "7372",
+              "5045"
+            ]
+          },
+          "notOrganizationSicCodes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\d{4}$"
+            },
+            "description": "EXCLUDE employers with these 4-digit SIC codes.",
+            "example": [
+              "7372"
+            ]
+          },
+          "organizationJobLocations": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Locations of jobs the person's employer is actively recruiting for.",
+            "example": [
+              "atlanta",
+              "japan"
+            ]
+          },
+          "revenueRangeNative": {
+            "$ref": "#/components/schemas/IntRange"
+          },
+          "organizationFoundedYearRange": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IntRange"
+              },
+              {
+                "description": "Filter by the employer's founding year, {min,max} (inclusive). Apollo advanced filter.",
+                "example": {
+                  "min": 2015,
+                  "max": 2020
+                }
+              }
+            ]
+          },
+          "organizationIncludeUnknownFoundedYear": {
+            "type": "boolean",
+            "description": "When true, also include people whose employer founding year is unknown (pairs with organizationFoundedYearRange).",
+            "example": false
+          },
+          "organizationHeadcountGrowthPastNMonths": {
+            "type": "integer",
+            "description": "Trailing-month window over which to measure employer headcount growth (pairs with organizationHeadcountGrowthRange).",
+            "example": 6
+          },
+          "organizationHeadcountGrowthRange": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IntRange"
+              },
+              {
+                "description": "Filter by employer headcount-growth PERCENT over the window, {min,max}.",
+                "example": {
+                  "min": 10,
+                  "max": 100
+                }
+              }
+            ]
+          },
+          "organizationNumJobsRange": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IntRange"
+              },
+              {
+                "description": "Filter by the number of active job postings at the employer, {min,max} (hiring-intensity signal).",
+                "example": {
+                  "min": 50,
+                  "max": 500
+                }
+              }
+            ]
+          },
+          "organizationJobPostedAtRange": {
+            "$ref": "#/components/schemas/DateRange"
+          },
+          "personTotalYoeRange": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IntRange"
+              },
+              {
+                "description": "Filter by the person's TOTAL years of professional experience across their career, {min,max} (inclusive).",
+                "example": {
+                  "min": 5,
+                  "max": 15
+                }
+              }
+            ]
+          },
+          "personDaysInCurrentTitleRange": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IntRange"
+              },
+              {
+                "description": "Filter by how long the person has held their current title, in DAYS, {min,max}. Convert from natural units (1yr=365, 1mo=30).",
+                "example": {
+                  "min": 90,
+                  "max": 730
+                }
+              }
+            ]
           }
         },
         "description": "Apollo search filters. Used to count matching people without consuming credits, creating runs, or writing to the DB."
+      },
+      "IntRange": {
+        "type": "object",
+        "properties": {
+          "min": {
+            "type": "integer"
+          },
+          "max": {
+            "type": "integer"
+          }
+        },
+        "description": "Native Apollo revenue_range as a {min,max} integer object (USD, no symbols/commas). Faithful alternative to the legacy string-array `revenueRange`; prefer this for new callers. If both are sent, this native object wins.",
+        "example": {
+          "min": 500000,
+          "max": 1500000
+        }
+      },
+      "DateRange": {
+        "type": "object",
+        "properties": {
+          "min": {
+            "type": "string",
+            "minLength": 1
+          },
+          "max": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "description": "Filter by when the employer posted jobs, {min,max} as ISO YYYY-MM-DD dates.",
+        "example": {
+          "min": "2025-07-25",
+          "max": "2025-09-25"
+        }
       },
       "SearchNextResponse": {
         "type": "object",
@@ -867,25 +1111,13 @@
             "type": "array",
             "items": {
               "type": "string",
-              "enum": [
-                "1,10",
-                "11,20",
-                "21,50",
-                "51,100",
-                "101,200",
-                "201,500",
-                "501,1000",
-                "1001,2000",
-                "2001,5000",
-                "5001,10000",
-                "10001,"
-              ]
+              "pattern": "^\\d+,\\d*$"
             },
-            "description": "Filter by employee count ranges.",
+            "description": "Filter by employer employee-count ranges. Apollo accepts ARBITRARY 'min,max' integer spans — not a fixed bucket list. Use an open-ended max ('10001,') for \"N or more\". Pass multiple spans to union them.",
             "example": [
-              "11,20",
-              "21,50",
-              "51,100"
+              "1,10",
+              "250,500",
+              "10001,"
             ]
           },
           "qOrganizationIndustryTagIds": {
@@ -930,12 +1162,14 @@
                 "c_suite",
                 "owner",
                 "founder",
-                "partner"
+                "partner",
+                "head",
+                "intern"
               ]
             },
-            "description": "Filter by seniority level. Valid values: entry, senior, manager, director, vp, c_suite, owner, founder, partner.",
+            "description": "Filter by seniority level. Apollo's full set: entry, senior, manager, director, vp, c_suite, owner, founder, partner, head, intern. Use `head` for \"Head of X\" roles (e.g. Head of Growth/Sales) and `c_suite` for CxO.",
             "example": [
-              "director",
+              "head",
               "vp",
               "c_suite"
             ]
@@ -1001,6 +1235,226 @@
             "description": "Filter by specific Apollo organization IDs.",
             "example": [
               "5f5e100a01d6b1000169c754"
+            ]
+          },
+          "includeSimilarTitles": {
+            "type": "boolean",
+            "description": "Apollo include_similar_titles. When false, personTitles match strictly; when true (Apollo default), Apollo also matches similar/equivalent titles. Set false to tighten an over-broad title match.",
+            "example": false
+          },
+          "qOrganizationJobTitles": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Job titles listed in ACTIVE job postings at the person's current employer (hiring-signal targeting). Different from personTitles (the person's own title).",
+            "example": [
+              "sales manager",
+              "research analyst"
+            ]
+          },
+          "personLinkedinUrls": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Find specific people by their full LinkedIn profile URL.",
+            "example": [
+              "https://www.linkedin.com/in/tim-zheng"
+            ]
+          },
+          "currentlyUsingAllOfTechnologyUids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Match people whose current employer uses ALL of these technologies (Apollo technology UIDs; underscores for spaces/periods).",
+            "example": [
+              "salesforce",
+              "google_analytics"
+            ]
+          },
+          "currentlyNotUsingAnyOfTechnologyUids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "EXCLUDE people whose current employer uses ANY of these technologies (Apollo technology UIDs).",
+            "example": [
+              "hubspot"
+            ]
+          },
+          "qOrganizationDomainsList": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Apollo's native organization-domain filter (q_organization_domains_list). Restrict to people at these company domains.",
+            "example": [
+              "apollo.io",
+              "google.com"
+            ]
+          },
+          "marketSegments": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Filter by the current employer's market-segment terms (matched against the employer's tags/name).",
+            "example": [
+              "B2B",
+              "Enterprise",
+              "Healthcare"
+            ]
+          },
+          "organizationNaicsCodes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\d{2,5}$"
+            },
+            "description": "Match employers by NAICS industry code (2–5 digits; prefix match — a shorter code is broader).",
+            "example": [
+              "5415",
+              "54151"
+            ]
+          },
+          "notOrganizationNaicsCodes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\d{2,5}$"
+            },
+            "description": "EXCLUDE employers matching these NAICS codes (prefix match).",
+            "example": [
+              "5415"
+            ]
+          },
+          "organizationSicCodes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\d{4}$"
+            },
+            "description": "Match employers by 4-digit SIC industry code.",
+            "example": [
+              "7372",
+              "5045"
+            ]
+          },
+          "notOrganizationSicCodes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\d{4}$"
+            },
+            "description": "EXCLUDE employers with these 4-digit SIC codes.",
+            "example": [
+              "7372"
+            ]
+          },
+          "organizationJobLocations": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Locations of jobs the person's employer is actively recruiting for.",
+            "example": [
+              "atlanta",
+              "japan"
+            ]
+          },
+          "revenueRangeNative": {
+            "$ref": "#/components/schemas/IntRange"
+          },
+          "organizationFoundedYearRange": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IntRange"
+              },
+              {
+                "description": "Filter by the employer's founding year, {min,max} (inclusive). Apollo advanced filter.",
+                "example": {
+                  "min": 2015,
+                  "max": 2020
+                }
+              }
+            ]
+          },
+          "organizationIncludeUnknownFoundedYear": {
+            "type": "boolean",
+            "description": "When true, also include people whose employer founding year is unknown (pairs with organizationFoundedYearRange).",
+            "example": false
+          },
+          "organizationHeadcountGrowthPastNMonths": {
+            "type": "integer",
+            "description": "Trailing-month window over which to measure employer headcount growth (pairs with organizationHeadcountGrowthRange).",
+            "example": 6
+          },
+          "organizationHeadcountGrowthRange": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IntRange"
+              },
+              {
+                "description": "Filter by employer headcount-growth PERCENT over the window, {min,max}.",
+                "example": {
+                  "min": 10,
+                  "max": 100
+                }
+              }
+            ]
+          },
+          "organizationNumJobsRange": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IntRange"
+              },
+              {
+                "description": "Filter by the number of active job postings at the employer, {min,max} (hiring-intensity signal).",
+                "example": {
+                  "min": 50,
+                  "max": 500
+                }
+              }
+            ]
+          },
+          "organizationJobPostedAtRange": {
+            "$ref": "#/components/schemas/DateRange"
+          },
+          "personTotalYoeRange": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IntRange"
+              },
+              {
+                "description": "Filter by the person's TOTAL years of professional experience across their career, {min,max} (inclusive).",
+                "example": {
+                  "min": 5,
+                  "max": 15
+                }
+              }
+            ]
+          },
+          "personDaysInCurrentTitleRange": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IntRange"
+              },
+              {
+                "description": "Filter by how long the person has held their current title, in DAYS, {min,max}. Convert from natural units (1yr=365, 1mo=30).",
+                "example": {
+                  "min": 90,
+                  "max": 730
+                }
+              }
             ]
           }
         },
@@ -1924,6 +2378,109 @@
           "endpoint",
           "items"
         ]
+      },
+      "SuggestFromSegmentResponse": {
+        "type": "object",
+        "properties": {
+          "apolloAudienceId": {
+            "type": "string",
+            "description": "Persisted apollo-audience id. human-service stores ONLY this pointer."
+          },
+          "filters": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SearchFilters"
+              },
+              {
+                "description": "The confirmed faithful Apollo filter object."
+              }
+            ]
+          },
+          "count": {
+            "type": "integer",
+            "description": "Live match-count snapshot for the confirmed filters."
+          }
+        },
+        "required": [
+          "apolloAudienceId",
+          "filters",
+          "count"
+        ]
+      },
+      "SuggestFromSegmentRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Short human label for the audience.",
+            "example": "US fintech heads of growth"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Self-contained natural-language description of the target segment. Drives the agentic NL→faithful-Apollo-filters refine loop.",
+            "example": "Heads of growth and VPs of marketing at US-based Series A–C fintech companies with 50–500 employees."
+          },
+          "brandId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Owning brand, or null.",
+            "example": "brand-1"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "brandId"
+        ]
+      },
+      "AudienceResponse": {
+        "type": "object",
+        "properties": {
+          "apolloAudienceId": {
+            "type": "string"
+          },
+          "filters": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SearchFilters"
+              },
+              {
+                "description": "Apollo search filters. All filters are combined using AND. Start broad and narrow down to avoid empty results."
+              }
+            ]
+          },
+          "count": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "description": "\"confirmed\" or \"exhausted\"."
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "apolloAudienceId",
+          "filters",
+          "count",
+          "status",
+          "createdAt"
+        ]
+      },
+      "AudienceDryRunResponse": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer",
+            "description": "Fresh live match-count for the stored filters."
+          }
+        },
+        "required": [
+          "count"
+        ]
       }
     },
     "parameters": {
@@ -2825,6 +3382,247 @@
           },
           "400": {
             "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/audiences/suggest-from-segment": {
+      "post": {
+        "summary": "Build + persist a faithful Apollo audience from a natural-language segment",
+        "description": "Runs the agentic NL→faithful-Apollo-filters refine loop (LLM via chat-service, free Apollo dry-runs for live counts), then persists the confirmed audience. Returns the apollo-audience id, the faithful filters, and the count snapshot. The LLM cost is owned by chat-service; this endpoint declares no cost (dry-runs are free).",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-run-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SuggestFromSegmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Persisted audience",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuggestFromSegmentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/audiences/{apolloAudienceId}": {
+      "get": {
+        "summary": "Fetch a persisted Apollo audience by id",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "apolloAudienceId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The audience",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/audiences/{apolloAudienceId}/dry-run": {
+      "post": {
+        "summary": "Re-count a persisted Apollo audience (free dry-run)",
+        "description": "Re-runs the free Apollo dry-run against the stored filters and returns a fresh count. Also refreshes the stored count snapshot. No credits consumed.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "apolloAudienceId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-run-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Fresh match count",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceDryRunResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
             "content": {
               "application/json": {
                 "schema": {

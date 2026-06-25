@@ -3,7 +3,7 @@ import { z } from "zod";
 import { getOpenApiMetadata } from "@asteasolutions/zod-to-openapi";
 
 interface FieldShape {
-  typeStr: "string" | "string[]";
+  typeStr: "string" | "string[]" | "boolean" | "integer" | "object";
   enumValues: string[] | null;
 }
 
@@ -22,6 +22,23 @@ function describeFieldShape(fieldName: string, node: any): FieldShape {
 
   if (innerType === "string") {
     return { typeStr: "string", enumValues: null };
+  }
+
+  if (innerType === "boolean") {
+    return { typeStr: "boolean", enumValues: null };
+  }
+
+  // z.number() and z.number().int() — both render as a numeric scalar. The
+  // example line carries the concrete shape, so we don't distinguish int/float.
+  if (innerType === "number" || innerType === "int") {
+    return { typeStr: "integer", enumValues: null };
+  }
+
+  // Range / record objects (e.g. {min,max}). The example shows the exact shape,
+  // so we emit a generic "object" type and let the example + description carry
+  // the structure — keeps one faithful vocabulary without per-field prompt code.
+  if (innerType === "object" || innerType === "record") {
+    return { typeStr: "object", enumValues: null };
   }
 
   if (innerType === "array") {
@@ -45,7 +62,7 @@ function describeFieldShape(fieldName: string, node: any): FieldShape {
   }
 
   throw new Error(
-    `[apollo-service] filters-prompt: field "${fieldName}" has unsupported type "${innerType}". Supported: string, string[], enum, enum[].`
+    `[apollo-service] filters-prompt: field "${fieldName}" has unsupported type "${innerType}". Supported: string, string[], boolean, integer, object, enum, enum[].`
   );
 }
 

@@ -41,20 +41,19 @@ const EmailStatusSchema = z.enum(EMAIL_STATUSES).nullable().openapi({
 
 // ─── Shared schemas ──────────────────────────────────────────────────────────
 
-const VALID_EMPLOYEE_RANGES = [
-  "1,10",
-  "11,20",
-  "21,50",
-  "51,100",
-  "101,200",
-  "201,500",
-  "501,1000",
-  "1001,2000",
-  "2001,5000",
-  "5001,10000",
-  "10001,",
-] as const;
+// Apollo employee-count ranges are arbitrary "min,max" strings — NOT a fixed
+// bucket enum. Apollo accepts any integer span (e.g. "250,500", "10001,"). We
+// validate the SHAPE ("min,max" with an optional open-ended max) but never
+// narrow the accepted spans. The legacy bucket values below remain valid (they
+// are just specific instances of the shape) so existing callers keep working.
+const EMPLOYEE_RANGE_REGEX = /^\d+,\d*$/;
+const EXAMPLE_EMPLOYEE_RANGES = ["1,10", "250,500", "10001,"] as const;
 
+// Apollo's full, faithful person-seniority set (developer/docs.apollo.io People
+// Search). The first nine are the historical subset; `head` and `intern` are
+// the two values Apollo accepts that were previously dropped — `head` is needed
+// for "Head of Growth/Sales" audiences. Appended (not reordered) so the order
+// stays stable; Apollo matches on the value, not the position.
 const VALID_SENIORITIES = [
   "entry",
   "senior",
@@ -65,7 +64,28 @@ const VALID_SENIORITIES = [
   "owner",
   "founder",
   "partner",
+  "head",
+  "intern",
 ] as const;
+
+// Apollo people-search range params are `{min, max}` objects with integer
+// bounds (see CLAUDE.md "Apollo range filters are {min,max} objects"). Both
+// bounds optional — an open-ended range omits the missing key.
+const IntRangeSchema = z
+  .object({
+    min: z.number().int().optional(),
+    max: z.number().int().optional(),
+  })
+  .openapi("IntRange");
+
+// Date-bounded range params (e.g. organization_job_posted_at_range) use ISO
+// `YYYY-MM-DD` string bounds, both optional.
+const DateRangeSchema = z
+  .object({
+    min: z.string().min(1).optional(),
+    max: z.string().min(1).optional(),
+  })
+  .openapi("DateRange");
 
 const VALID_EMAIL_STATUSES = [
   "verified",
@@ -316,10 +336,14 @@ export const SearchFiltersSchema = z
       description: "Filter by organization HQ location.",
       example: ["United States", "California, US"],
     }),
-    organizationNumEmployeesRanges: z.array(z.enum(VALID_EMPLOYEE_RANGES)).optional().openapi({
-      description: "Filter by employee count ranges.",
-      example: ["11,20", "21,50", "51,100"],
-    }),
+    organizationNumEmployeesRanges: z
+      .array(z.string().regex(EMPLOYEE_RANGE_REGEX, "must be 'min,max' (e.g. '250,500' or '10001,' for open-ended)"))
+      .optional()
+      .openapi({
+        description:
+          "Filter by employer employee-count ranges. Apollo accepts ARBITRARY 'min,max' integer spans — not a fixed bucket list. Use an open-ended max ('10001,') for \"N or more\". Pass multiple spans to union them.",
+        example: ["1,10", "250,500", "10001,"],
+      }),
     qOrganizationIndustryTagIds: z.array(z.string().min(1)).optional().openapi({
       description: "Filter by industry names (use GET /reference/industries for valid values).",
       example: ["Information Technology and Services", "Computer Software"],
@@ -333,8 +357,8 @@ export const SearchFiltersSchema = z
       example: ["San Francisco, California, US", "New York, US"],
     }),
     personSeniorities: z.array(z.enum(VALID_SENIORITIES)).optional().openapi({
-      description: "Filter by seniority level. Valid values: entry, senior, manager, director, vp, c_suite, owner, founder, partner.",
-      example: ["director", "vp", "c_suite"],
+      description: "Filter by seniority level. Apollo's full set: entry, senior, manager, director, vp, c_suite, owner, founder, partner, head, intern. Use `head` for \"Head of X\" roles (e.g. Head of Growth/Sales) and `c_suite` for CxO.",
+      example: ["head", "vp", "c_suite"],
     }),
     contactEmailStatus: z.array(z.enum(VALID_EMAIL_STATUSES)).optional().openapi({
       description: "Filter by email verification status. Valid values: verified, unverified, likely to engage, unavailable.",
@@ -355,6 +379,94 @@ export const SearchFiltersSchema = z
     organizationIds: z.array(z.string().min(1)).optional().openapi({
       description: "Filter by specific Apollo organization IDs.",
       example: ["5f5e100a01d6b1000169c754"],
+    }),
+
+    // ── Faithful Apollo People Search filters (additive — verbatim Apollo
+    // vocabulary, full accepted value sets). See developer/docs.apollo.io. ──
+
+    includeSimilarTitles: z.boolean().optional().openapi({
+      description: "Apollo include_similar_titles. When false, personTitles match strictly; when true (Apollo default), Apollo also matches similar/equivalent titles. Set false to tighten an over-broad title match.",
+      example: false,
+    }),
+    qOrganizationJobTitles: z.array(z.string().min(1)).optional().openapi({
+      description: "Job titles listed in ACTIVE job postings at the person's current employer (hiring-signal targeting). Different from personTitles (the person's own title).",
+      example: ["sales manager", "research analyst"],
+    }),
+    personLinkedinUrls: z.array(z.string().min(1)).optional().openapi({
+      description: "Find specific people by their full LinkedIn profile URL.",
+      example: ["https://www.linkedin.com/in/tim-zheng"],
+    }),
+    currentlyUsingAllOfTechnologyUids: z.array(z.string().min(1)).optional().openapi({
+      description: "Match people whose current employer uses ALL of these technologies (Apollo technology UIDs; underscores for spaces/periods).",
+      example: ["salesforce", "google_analytics"],
+    }),
+    currentlyNotUsingAnyOfTechnologyUids: z.array(z.string().min(1)).optional().openapi({
+      description: "EXCLUDE people whose current employer uses ANY of these technologies (Apollo technology UIDs).",
+      example: ["hubspot"],
+    }),
+    qOrganizationDomainsList: z.array(z.string().min(1)).optional().openapi({
+      description: "Apollo's native organization-domain filter (q_organization_domains_list). Restrict to people at these company domains.",
+      example: ["apollo.io", "google.com"],
+    }),
+    marketSegments: z.array(z.string().min(1)).optional().openapi({
+      description: "Filter by the current employer's market-segment terms (matched against the employer's tags/name).",
+      example: ["B2B", "Enterprise", "Healthcare"],
+    }),
+    organizationNaicsCodes: z.array(z.string().regex(/^\d{2,5}$/)).optional().openapi({
+      description: "Match employers by NAICS industry code (2–5 digits; prefix match — a shorter code is broader).",
+      example: ["5415", "54151"],
+    }),
+    notOrganizationNaicsCodes: z.array(z.string().regex(/^\d{2,5}$/)).optional().openapi({
+      description: "EXCLUDE employers matching these NAICS codes (prefix match).",
+      example: ["5415"],
+    }),
+    organizationSicCodes: z.array(z.string().regex(/^\d{4}$/)).optional().openapi({
+      description: "Match employers by 4-digit SIC industry code.",
+      example: ["7372", "5045"],
+    }),
+    notOrganizationSicCodes: z.array(z.string().regex(/^\d{4}$/)).optional().openapi({
+      description: "EXCLUDE employers with these 4-digit SIC codes.",
+      example: ["7372"],
+    }),
+    organizationJobLocations: z.array(z.string().min(1)).optional().openapi({
+      description: "Locations of jobs the person's employer is actively recruiting for.",
+      example: ["atlanta", "japan"],
+    }),
+    revenueRangeNative: IntRangeSchema.optional().openapi({
+      description: "Native Apollo revenue_range as a {min,max} integer object (USD, no symbols/commas). Faithful alternative to the legacy string-array `revenueRange`; prefer this for new callers. If both are sent, this native object wins.",
+      example: { min: 500000, max: 1500000 },
+    }),
+    organizationFoundedYearRange: IntRangeSchema.optional().openapi({
+      description: "Filter by the employer's founding year, {min,max} (inclusive). Apollo advanced filter.",
+      example: { min: 2015, max: 2020 },
+    }),
+    organizationIncludeUnknownFoundedYear: z.boolean().optional().openapi({
+      description: "When true, also include people whose employer founding year is unknown (pairs with organizationFoundedYearRange).",
+      example: false,
+    }),
+    organizationHeadcountGrowthPastNMonths: z.number().int().optional().openapi({
+      description: "Trailing-month window over which to measure employer headcount growth (pairs with organizationHeadcountGrowthRange).",
+      example: 6,
+    }),
+    organizationHeadcountGrowthRange: IntRangeSchema.optional().openapi({
+      description: "Filter by employer headcount-growth PERCENT over the window, {min,max}.",
+      example: { min: 10, max: 100 },
+    }),
+    organizationNumJobsRange: IntRangeSchema.optional().openapi({
+      description: "Filter by the number of active job postings at the employer, {min,max} (hiring-intensity signal).",
+      example: { min: 50, max: 500 },
+    }),
+    organizationJobPostedAtRange: DateRangeSchema.optional().openapi({
+      description: "Filter by when the employer posted jobs, {min,max} as ISO YYYY-MM-DD dates.",
+      example: { min: "2025-07-25", max: "2025-09-25" },
+    }),
+    personTotalYoeRange: IntRangeSchema.optional().openapi({
+      description: "Filter by the person's TOTAL years of professional experience across their career, {min,max} (inclusive).",
+      example: { min: 5, max: 15 },
+    }),
+    personDaysInCurrentTitleRange: IntRangeSchema.optional().openapi({
+      description: "Filter by how long the person has held their current title, in DAYS, {min,max}. Convert from natural units (1yr=365, 1mo=30).",
+      example: { min: 90, max: 730 },
     }),
   })
   .openapi("SearchFilters", {
@@ -989,5 +1101,116 @@ registry.registerPath({
       description: "Internal server error",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
+  },
+});
+
+// ─── Apollo audiences (stateful: persisted faithful Apollo filter sets) ───────
+
+const audienceHeaders = z.object({
+  "x-api-key": z.string().optional(),
+  "x-org-id": z.string(),
+  "x-user-id": z.string(),
+  "x-brand-id": z.string().optional(),
+  "x-run-id": z.string().optional(),
+});
+
+const audienceOrgHeaders = z.object({
+  "x-api-key": z.string().optional(),
+  "x-org-id": z.string(),
+});
+
+export const SuggestFromSegmentRequestSchema = z
+  .object({
+    name: z.string().min(1).openapi({ description: "Short human label for the audience.", example: "US fintech heads of growth" }),
+    description: z.string().min(1).openapi({
+      description: "Self-contained natural-language description of the target segment. Drives the agentic NL→faithful-Apollo-filters refine loop.",
+      example: "Heads of growth and VPs of marketing at US-based Series A–C fintech companies with 50–500 employees.",
+    }),
+    brandId: z.string().nullable().openapi({ description: "Owning brand, or null.", example: "brand-1" }),
+  })
+  .openapi("SuggestFromSegmentRequest");
+
+const SuggestFromSegmentResponseSchema = z
+  .object({
+    apolloAudienceId: z.string().openapi({ description: "Persisted apollo-audience id. human-service stores ONLY this pointer." }),
+    filters: SearchFiltersSchema.openapi({ description: "The confirmed faithful Apollo filter object." }),
+    count: z.number().int().openapi({ description: "Live match-count snapshot for the confirmed filters." }),
+  })
+  .openapi("SuggestFromSegmentResponse");
+
+const AudienceResponseSchema = z
+  .object({
+    apolloAudienceId: z.string(),
+    filters: SearchFiltersSchema,
+    count: z.number().int(),
+    status: z.string().openapi({ description: '"confirmed" or "exhausted".' }),
+    createdAt: z.string(),
+  })
+  .openapi("AudienceResponse");
+
+const AudienceDryRunResponseSchema = z
+  .object({
+    count: z.number().int().openapi({ description: "Fresh live match-count for the stored filters." }),
+  })
+  .openapi("AudienceDryRunResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/audiences/suggest-from-segment",
+  summary: "Build + persist a faithful Apollo audience from a natural-language segment",
+  description:
+    "Runs the agentic NL→faithful-Apollo-filters refine loop (LLM via chat-service, free Apollo dry-runs for live counts), then persists the confirmed audience. Returns the apollo-audience id, the faithful filters, and the count snapshot. The LLM cost is owned by chat-service; this endpoint declares no cost (dry-runs are free).",
+  request: {
+    headers: audienceHeaders,
+    body: {
+      content: { "application/json": { schema: SuggestFromSegmentRequestSchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      description: "Persisted audience",
+      content: { "application/json": { schema: SuggestFromSegmentResponseSchema } },
+    },
+    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponseSchema } } },
+    500: { description: "Internal server error", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/audiences/{apolloAudienceId}",
+  summary: "Fetch a persisted Apollo audience by id",
+  request: {
+    headers: audienceOrgHeaders,
+    params: z.object({ apolloAudienceId: z.string() }),
+  },
+  responses: {
+    200: {
+      description: "The audience",
+      content: { "application/json": { schema: AudienceResponseSchema } },
+    },
+    404: { description: "Not found", content: { "application/json": { schema: ErrorResponseSchema } } },
+    500: { description: "Internal server error", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/audiences/{apolloAudienceId}/dry-run",
+  summary: "Re-count a persisted Apollo audience (free dry-run)",
+  description:
+    "Re-runs the free Apollo dry-run against the stored filters and returns a fresh count. Also refreshes the stored count snapshot. No credits consumed.",
+  request: {
+    headers: audienceHeaders,
+    params: z.object({ apolloAudienceId: z.string() }),
+  },
+  responses: {
+    200: {
+      description: "Fresh match count",
+      content: { "application/json": { schema: AudienceDryRunResponseSchema } },
+    },
+    404: { description: "Not found", content: { "application/json": { schema: ErrorResponseSchema } } },
+    500: { description: "Internal server error", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });

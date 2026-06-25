@@ -141,6 +141,13 @@
       "when": 1779062400000,
       "tag": "0019_add_audience_id",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1779148800000,
+      "tag": "0020_add_apollo_audiences",
+      "breakpoints": true
     }
   ]
 }
