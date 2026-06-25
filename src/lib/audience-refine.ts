@@ -22,7 +22,13 @@ import { SearchFiltersSchema } from "../schemas.js";
  * `confirm`; Apollo serves at most 50,000 records via pagination. */
 const TARGET_MIN = 1_000;
 const TARGET_MAX = 100_000;
-const MAX_REFINE_ITERATIONS = 6;
+/** Real dry-run attempts (each consumes a live count). The loop relaxes
+ * constraints across these to cross the 1,000 floor. */
+const MAX_REAL_ATTEMPTS = 6;
+/** Extra budget for unusable model output (malformed decision JSON or filters
+ * rejected by the faithful schema). These do NOT consume a real attempt — a
+ * Gemini hiccup must not eat the relaxation budget. */
+const MAX_INVALID_RETRIES = 3;
 
 export interface RefineIteration {
   iteration: number;
@@ -78,18 +84,38 @@ function buildSystemPrompt(catalog: string): string {
     catalog,
     "=== END FILTERS ===",
     "",
-    "Goal: a focused audience whose match count is roughly 1,000-100,000.",
-    "Too many (>100000) -> add/tighten filters. Too few or zero -> loosen or drop filters.",
+    "PRIMARY GOAL: produce an audience with AT LEAST 1,000 matches (ideal band 1,000-100,000).",
+    "An audience under 1,000 is a FAILURE unless 1,000 is genuinely unreachable. NEVER confirm",
+    "a set whose count is below 1,000.",
+    "",
+    "RELAX AGGRESSIVELY to cross 1,000. When a filter set returns < 1,000 you MUST loosen or DROP",
+    "constraints and test again. Drop constraints in THIS order (least-defining first), stopping",
+    "the moment the count reaches 1,000:",
+    "  1. revenueRange (revenue band)",
+    "  2. organizationNumEmployeesRanges (headcount band)",
+    "  3. secondary keywords / technologies / extra industry terms",
+    "  4. widen seniorities (add adjacent senior levels) and/or set includeSimilarTitles: true",
+    "ALWAYS KEEP the core intent: the primary job title(s)/role plus the primary industry and",
+    "geography from the request. Stay as CLOSE as possible to the original request — drop the",
+    "widest, least-defining constraint first, never the core role.",
+    "",
+    "Too many (> 100,000) -> add back / tighten constraints toward the request.",
     "",
     "Each turn, reply with ONLY a JSON object (no prose, no code fences):",
     '{ "action": "test" | "confirm", "filters": { ...faithful filters... }, "reasoning": "<one short line>" }',
     '- "test": you want the live count for this filter set before deciding.',
-    '- "confirm": this filter set is good — stop and persist it.',
-    "Confirm once the count is in a sensible range and further refinement would not help.",
+    '- "confirm": this set is good (count >= 1,000 and <= 100,000) — stop and persist it.',
+    "Only confirm when the count is >= 1,000. If you still cannot reach 1,000 after dropping every",
+    "non-core constraint, spend your LAST turn testing your BROADEST core-only set (primary role +",
+    "industry + geography only) so the closest-possible audience is captured.",
   ].join("\n");
 }
 
-function buildUserMessage(input: RefineInput, history: RefineIteration[]): string {
+function buildUserMessage(
+  input: RefineInput,
+  history: RefineIteration[],
+  realAttemptsUsed: number,
+): string {
   const lines: string[] = [
     `Segment name: ${input.name}`,
     `Segment description: ${input.description}`,
@@ -97,17 +123,39 @@ function buildUserMessage(input: RefineInput, history: RefineIteration[]): strin
   ];
   if (history.length === 0) {
     lines.push("No filter sets tried yet. Propose your first filter set with action \"test\".");
-  } else {
-    lines.push("Filter sets tried so far (most recent last):");
-    for (const h of history) {
-      if (h.action === "invalid") {
-        lines.push(`- INVALID (rejected by schema): ${JSON.stringify(h.filters)} — errors: ${(h.validationErrors ?? []).join("; ")}`);
-      } else {
-        lines.push(`- count=${h.count} for filters=${JSON.stringify(h.filters)}`);
-      }
+    return lines.join("\n");
+  }
+
+  lines.push("Filter sets tried so far (most recent last):");
+  for (const h of history) {
+    if (h.action === "invalid") {
+      lines.push(`- INVALID (rejected by schema): ${JSON.stringify(h.filters)} — errors: ${(h.validationErrors ?? []).join("; ")}`);
+    } else {
+      lines.push(`- count=${h.count} for filters=${JSON.stringify(h.filters)}`);
     }
-    lines.push("");
-    lines.push("Refine further (action \"test\") or finalize (action \"confirm\").");
+  }
+  lines.push("");
+
+  // Escalate when the most recent real count is still below the 1,000 floor:
+  // tell the model exactly how many tests remain and force a constraint drop.
+  const lastValid = [...history]
+    .reverse()
+    .find((h): h is RefineIteration & { count: number } => h.action !== "invalid" && h.count !== null);
+  const remaining = MAX_REAL_ATTEMPTS - realAttemptsUsed;
+  if (lastValid && lastValid.count < TARGET_MIN) {
+    lines.push(
+      `Latest count ${lastValid.count} is BELOW the 1,000 floor. You have ${remaining} test(s) left. ` +
+        "DROP the least-defining constraint NOW (revenue band first, then headcount band, then " +
+        "secondary keywords) and test a broader set. Do NOT confirm below 1,000.",
+    );
+    if (remaining <= 1) {
+      lines.push(
+        "This is your LAST test — submit your BROADEST core-only set (primary role + industry + " +
+          "geography only) to capture the closest-possible audience.",
+      );
+    }
+  } else {
+    lines.push("Refine further (action \"test\") or finalize (action \"confirm\", only if count >= 1,000).");
   }
   return lines.join("\n");
 }
@@ -139,8 +187,16 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
   const systemPrompt = buildSystemPrompt(input.filtersPromptCatalog);
   const trace: RefineIteration[] = [];
 
-  for (let i = 1; i <= MAX_REFINE_ITERATIONS; i++) {
-    const message = buildUserMessage(input, trace);
+  // Two separate budgets: MAX_REAL_ATTEMPTS live dry-runs (the relaxation budget),
+  // plus MAX_INVALID_RETRIES extra turns for unusable model output that must NOT
+  // eat a real attempt. `step` numbers the trace rows in order.
+  let realAttempts = 0;
+  let invalidRetries = 0;
+  let step = 0;
+
+  while (realAttempts < MAX_REAL_ATTEMPTS) {
+    step += 1;
+    const message = buildUserMessage(input, trace, realAttempts);
     const res = await chatComplete(
       {
         message,
@@ -163,15 +219,17 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
 
     const parsed = RefineDecisionSchema.safeParse(res.json);
     if (!parsed.success) {
-      // Model returned an unusable decision shape — record and retry.
+      // Unusable decision shape — burns the retry budget, NOT a real attempt.
+      invalidRetries += 1;
       trace.push({
-        iteration: i,
+        iteration: step,
         action: "invalid",
         filters: (res.json?.filters as Record<string, unknown>) ?? null,
         count: null,
         reasoning: "model decision did not match {action, filters}",
         validationErrors: parsed.error.issues.map((e) => `${e.path.join(".")}: ${e.message}`),
       });
+      if (invalidRetries > MAX_INVALID_RETRIES) break;
       continue;
     }
 
@@ -185,20 +243,25 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
         ...flat.formErrors,
         ...Object.entries(flat.fieldErrors).flatMap(([k, v]) => (v ?? []).map((m) => `${k}: ${m}`)),
       ];
-      trace.push({ iteration: i, action: "invalid", filters, count: null, reasoning: reasoning ?? "", validationErrors });
+      // Schema-invalid filters — burns the retry budget, NOT a real attempt.
+      invalidRetries += 1;
+      trace.push({ iteration: step, action: "invalid", filters, count: null, reasoning: reasoning ?? "", validationErrors });
+      if (invalidRetries > MAX_INVALID_RETRIES) break;
       continue;
     }
 
+    // A valid filter set we can dry-run — this consumes one real attempt.
+    realAttempts += 1;
     const validFilters = filterCheck.data as Record<string, unknown>;
     const count = await dryRunCount(input.apolloApiKey, validFilters);
 
     if (action === "confirm" && isInTargetBand(count)) {
-      trace.push({ iteration: i, action: "confirm", filters: validFilters, count, reasoning: reasoning ?? "" });
+      trace.push({ iteration: step, action: "confirm", filters: validFilters, count, reasoning: reasoning ?? "" });
       return { filters: validFilters, count, status: "confirmed", trace };
     }
 
     trace.push({
-      iteration: i,
+      iteration: step,
       action: action === "confirm" ? "rejected_confirm" : "test",
       filters: validFilters,
       count,
@@ -206,7 +269,7 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
     });
   }
 
-  // Exhausted the iteration budget without a confirm — keep the best tried set.
+  // Exhausted the attempt budget without a confirm — keep the best tried set.
   const best = pickBest(trace);
   if (!best) {
     throw new Error("[apollo-service][refineAudience] no positive-match filter set was produced after refinement");
