@@ -256,18 +256,76 @@ describe("Apollo audience endpoints", () => {
     expect(state.inserted).toBeNull();
   });
 
-  it("prompts the model to target 1,000-100,000 live matches", async () => {
+  it("prompts the model with a hard >= 1,000 floor and relaxation order", async () => {
     await request(app)
       .post("/audiences/suggest-from-segment")
       .set(HEADERS)
       .send({ name: "n", description: "d", brandId: null })
       .expect(200);
 
-    expect(mockChatComplete).toHaveBeenCalledWith(
-      expect.objectContaining({
-        systemPrompt: expect.stringContaining("roughly 1,000-100,000"),
-      }),
-      expect.anything(),
-    );
+    const [[opts]] = mockChatComplete.mock.calls;
+    expect(opts.systemPrompt).toContain("AT LEAST 1,000");
+    expect(opts.systemPrompt).toContain("NEVER confirm");
+    expect(opts.systemPrompt).toContain("RELAX AGGRESSIVELY");
+  });
+
+  it("keeps testing past a < 1,000 set, relaxing until it crosses the floor, then confirms", async () => {
+    // Three narrow sets all < 1,000, then a relaxed set that crosses 1,000 and confirms.
+    mockChatComplete
+      .mockResolvedValueOnce({ json: { action: "test", filters: { personTitles: ["Head of Sales"], revenueRange: ["10000000,100000000"] }, reasoning: "narrow" }, content: "", tokensInput: 1, tokensOutput: 1, model: "m" })
+      .mockResolvedValueOnce({ json: { action: "test", filters: { personTitles: ["Head of Sales"], organizationNumEmployeesRanges: ["50,500"] }, reasoning: "drop revenue" }, content: "", tokensInput: 1, tokensOutput: 1, model: "m" })
+      .mockResolvedValueOnce({ json: { action: "confirm", filters: { personTitles: ["Head of Sales"] }, reasoning: "broaden, drop headcount" }, content: "", tokensInput: 1, tokensOutput: 1, model: "m" });
+    mockSearchPeople
+      .mockResolvedValueOnce({ total_entries: 136, people: [] })
+      .mockResolvedValueOnce({ total_entries: 480, people: [] })
+      .mockResolvedValueOnce({ total_entries: 12500, people: [] });
+
+    const res = await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "Heads of Sales at SaaS 50-500 $10-100M", brandId: null })
+      .expect(200);
+
+    expect(mockChatComplete).toHaveBeenCalledTimes(3);
+    expect(res.body.count).toBe(12500);
+    expect(state.inserted.status).toBe("confirmed");
+
+    // The escalation nudge fires on the 2nd+ turn once a < 1,000 count is on record.
+    const secondTurnMsg = mockChatComplete.mock.calls[1][0].message as string;
+    expect(secondTurnMsg).toContain("BELOW the 1,000 floor");
+    expect(secondTurnMsg).toContain("DROP the least-defining constraint");
+  });
+
+  it("invalid model output does not consume the 6 real-attempt budget", async () => {
+    // 2 malformed decisions (no real attempt) then 6 valid zero-match confirms (6 real attempts).
+    mockChatComplete
+      .mockResolvedValueOnce({ json: { garbage: true }, content: "", tokensInput: 1, tokensOutput: 1, model: "m" })
+      .mockResolvedValueOnce({ json: { still: "wrong" }, content: "", tokensInput: 1, tokensOutput: 1, model: "m" })
+      .mockResolvedValue({ json: { action: "confirm", filters: { personTitles: ["Founder"] }, reasoning: "x" }, content: "", tokensInput: 1, tokensOutput: 1, model: "m" });
+    mockSearchPeople.mockResolvedValue({ total_entries: 0, people: [] });
+
+    await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(500); // all real attempts zero-match → no positive set → 500
+
+    // 2 invalid (retry budget) + 6 valid (real budget) = 8 chat calls; invalids did not eat the 6.
+    expect(mockChatComplete).toHaveBeenCalledTimes(8);
+    expect(mockSearchPeople).toHaveBeenCalledTimes(6);
+  });
+
+  it("aborts once the invalid-retry budget is exhausted", async () => {
+    // 4 consecutive malformed decisions (> MAX_INVALID_RETRIES of 3) → break, no positive set → 500.
+    mockChatComplete.mockResolvedValue({ json: { garbage: true }, content: "", tokensInput: 1, tokensOutput: 1, model: "m" });
+
+    await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(500);
+
+    expect(mockChatComplete).toHaveBeenCalledTimes(4); // 4th trips invalidRetries > 3 → break
+    expect(mockSearchPeople).not.toHaveBeenCalled();
   });
 });
