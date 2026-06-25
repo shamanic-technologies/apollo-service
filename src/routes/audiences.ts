@@ -4,15 +4,18 @@ import { db } from "../db/index.js";
 import { apolloAudiences } from "../db/schema.js";
 import { serviceAuth, orgAuth, AuthenticatedRequest } from "../middleware/auth.js";
 import { decryptKey } from "../lib/keys-client.js";
-import { buildFiltersPrompt } from "../lib/filters-prompt.js";
+import { buildFiltersPrompt, APOLLO_UNDOCUMENTED_FILTERS_ENCART } from "../lib/filters-prompt.js";
 import { refineAudience, dryRunCount } from "../lib/audience-refine.js";
 import { SuggestFromSegmentRequestSchema, ApolloNativeSearchFiltersSchema } from "../schemas.js";
 
 const router = Router();
 
 // Apollo-native catalog, computed once at module load. Fed to the refine loop's
-// LLM so it builds only valid canonical Apollo filters.
-const FILTERS_PROMPT = buildFiltersPrompt(ApolloNativeSearchFiltersSchema);
+// LLM so it builds only valid canonical Apollo filters. The UNDOCUMENTED-but-
+// verified rules encart (funding filters + stage code map + "unknown params are
+// silently dropped") is appended so the LLM can use them and they survive a
+// future doc re-sync of the schema.
+const FILTERS_PROMPT = `${buildFiltersPrompt(ApolloNativeSearchFiltersSchema)}\n\n${APOLLO_UNDOCUMENTED_FILTERS_ENCART}`;
 
 /**
  * POST /audiences/suggest-from-segment — run the agentic NL→faithful-Apollo-

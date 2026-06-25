@@ -109,6 +109,11 @@ export function toApolloSearchParams(sp: Record<string, unknown>): ApolloSearchP
     organization_job_posted_at_range: cleanRange<string>(sp.organization_job_posted_at_range) ?? cleanRange<string>(sp.organizationJobPostedAtRange),
     person_total_yoe_range: cleanRange<number>(sp.person_total_yoe_range) ?? cleanRange<number>(sp.personTotalYoeRange),
     person_days_in_current_title_range: cleanRange<number>(sp.person_days_in_current_title_range) ?? cleanRange<number>(sp.personDaysInCurrentTitleRange),
+    // ── UNDOCUMENTED-but-verified org-funding filters (honored by People Search) ──
+    total_funding_range: cleanRange<number>(sp.total_funding_range) ?? cleanRange<number>(sp.totalFundingRange),
+    latest_funding_amount_range: cleanRange<number>(sp.latest_funding_amount_range) ?? cleanRange<number>(sp.latestFundingAmountRange),
+    latest_funding_date_range: cleanRange<string>(sp.latest_funding_date_range) ?? cleanRange<string>(sp.latestFundingDateRange),
+    organization_latest_funding_stage_cd: pick<string[]>("organization_latest_funding_stage_cd", "organizationLatestFundingStageCd"),
   };
 }
 

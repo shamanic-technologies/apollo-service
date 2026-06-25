@@ -400,6 +400,27 @@ export const ApolloNativeSearchFiltersSchema = z
       description: "Filter by when the employer posted jobs, {min,max} as ISO YYYY-MM-DD dates.",
       example: { min: "2025-07-25", max: "2025-09-25" },
     }),
+    // ── UNDOCUMENTED-but-verified org-funding filters ──
+    // Apollo documents these for Organization Search only, but the People Search
+    // endpoint (mixed_people/api_search) HONORS them (verified live 2026-06-25
+    // via the free dry-run). See the "UNDOCUMENTED FILTERS" note appended to the
+    // filters prompt and CLAUDE.md. Do NOT delete when re-syncing to the doc.
+    total_funding_range: IntRangeSchema.optional().openapi({
+      description: "Filter by employer TOTAL funding raised across all rounds, {min,max} integer USD. Undocumented for People Search but honored.",
+      example: { min: 1000000, max: 50000000 },
+    }),
+    latest_funding_amount_range: IntRangeSchema.optional().openapi({
+      description: "Filter by the amount of the employer's MOST RECENT funding round, {min,max} integer USD. Undocumented for People Search but honored.",
+      example: { min: 5000000 },
+    }),
+    latest_funding_date_range: DateRangeSchema.optional().openapi({
+      description: "Filter by the date of the employer's most recent funding round, {min,max} as ISO YYYY-MM-DD dates. Undocumented for People Search but honored.",
+      example: { min: "2024-01-01" },
+    }),
+    organization_latest_funding_stage_cd: z.array(z.string().min(1)).optional().openapi({
+      description: "Filter by employer's latest funding STAGE using Apollo NUMERIC stage codes (label strings like 'Series A' do NOT filter). Code map: 1=Seed/Angel, 2=Series A, 3=Series B, 4=Series C, 5=Series D, 6=Series E, 7=Series F, 8=Series G, 9=Series H, 10=Late/Series I+. See the UNDOCUMENTED FILTERS note. Undocumented for People Search but honored.",
+      example: ["2", "3"],
+    }),
   })
   .openapi("SearchFilters", {
     description: "Apollo People API Search filters using Apollo-native field names. All filters are combined using AND. Start broad and narrow down to avoid empty results.",

@@ -5,6 +5,7 @@ import { z } from "zod";
 import {
   buildFiltersPrompt,
   computeFiltersPromptVersion,
+  APOLLO_UNDOCUMENTED_FILTERS_ENCART,
 } from "../../src/lib/filters-prompt.js";
 import { ApolloNativeSearchFiltersSchema } from "../../src/schemas.js";
 
@@ -143,6 +144,21 @@ describe("buildFiltersPrompt — fail-loud on missing metadata", () => {
   });
 });
 
+describe("APOLLO_UNDOCUMENTED_FILTERS_ENCART", () => {
+  it("documents the verified org-funding filters + stage code map", () => {
+    expect(APOLLO_UNDOCUMENTED_FILTERS_ENCART).toMatch(/UNDOCUMENTED-BUT-VERIFIED/);
+    expect(APOLLO_UNDOCUMENTED_FILTERS_ENCART).toMatch(/total_funding_range/);
+    expect(APOLLO_UNDOCUMENTED_FILTERS_ENCART).toMatch(/latest_funding_amount_range/);
+    expect(APOLLO_UNDOCUMENTED_FILTERS_ENCART).toMatch(/latest_funding_date_range/);
+    expect(APOLLO_UNDOCUMENTED_FILTERS_ENCART).toMatch(/organization_latest_funding_stage_cd/);
+    // stage code map present
+    expect(APOLLO_UNDOCUMENTED_FILTERS_ENCART).toMatch(/"2"=Series A/);
+    expect(APOLLO_UNDOCUMENTED_FILTERS_ENCART).toMatch(/"5"=Series D/);
+    // the "unknown params silently dropped" rule
+    expect(APOLLO_UNDOCUMENTED_FILTERS_ENCART).toMatch(/silently DROPS unknown params/);
+  });
+});
+
 describe("computeFiltersPromptVersion", () => {
   it("is deterministic for the same input string", () => {
     const a = computeFiltersPromptVersion("hello world");
@@ -190,6 +206,18 @@ describe("GET /search/filters-prompt", () => {
     expect(res.body.prompt).toMatch(
       /enum: entry \| senior \| manager \| director \| vp \| c_suite \| owner \| founder \| partner/
     );
+  });
+
+  it("response prompt appends the UNDOCUMENTED-but-verified funding rules encart", async () => {
+    const res = await request(app)
+      .get("/search/filters-prompt")
+      .set(HEADERS)
+      .expect(200);
+
+    expect(res.body.prompt).toMatch(/UNDOCUMENTED-BUT-VERIFIED/);
+    expect(res.body.prompt).toMatch(/^- total_funding_range: object$/m);
+    expect(res.body.prompt).toMatch(/^- organization_latest_funding_stage_cd: string\[\]$/m);
+    expect(res.body.prompt).toMatch(/"5"=Series D/);
   });
 
   it("schemaVersion stable across requests (same content → same hash)", async () => {
