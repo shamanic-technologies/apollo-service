@@ -6,13 +6,13 @@ import { serviceAuth, orgAuth, AuthenticatedRequest } from "../middleware/auth.j
 import { decryptKey } from "../lib/keys-client.js";
 import { buildFiltersPrompt } from "../lib/filters-prompt.js";
 import { refineAudience, dryRunCount } from "../lib/audience-refine.js";
-import { SuggestFromSegmentRequestSchema, SearchFiltersSchema } from "../schemas.js";
+import { SuggestFromSegmentRequestSchema, ApolloNativeSearchFiltersSchema } from "../schemas.js";
 
 const router = Router();
 
-// Faithful-filter catalog, computed once at module load (SearchFiltersSchema is
-// static). Fed to the refine loop's LLM so it builds only valid Apollo filters.
-const FILTERS_PROMPT = buildFiltersPrompt(SearchFiltersSchema);
+// Apollo-native catalog, computed once at module load. Fed to the refine loop's
+// LLM so it builds only valid canonical Apollo filters.
+const FILTERS_PROMPT = buildFiltersPrompt(ApolloNativeSearchFiltersSchema);
 
 /**
  * POST /audiences/suggest-from-segment — run the agentic NL→faithful-Apollo-

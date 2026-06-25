@@ -6,7 +6,7 @@ import {
   buildFiltersPrompt,
   computeFiltersPromptVersion,
 } from "../../src/lib/filters-prompt.js";
-import { SearchFiltersSchema } from "../../src/schemas.js";
+import { ApolloNativeSearchFiltersSchema } from "../../src/schemas.js";
 
 vi.mock("../../src/middleware/auth.js", () => ({
   serviceAuth: (req: any, _res: any, next: any) => {
@@ -48,72 +48,78 @@ vi.mock("../../src/lib/apollo-client.js", async (importOriginal) => ({
 
 const HEADERS = { "X-Org-Id": "org-1", "X-User-Id": "user-1" };
 
-describe("buildFiltersPrompt(SearchFiltersSchema)", () => {
-  const prompt = buildFiltersPrompt(SearchFiltersSchema);
+describe("buildFiltersPrompt(ApolloNativeSearchFiltersSchema)", () => {
+  const prompt = buildFiltersPrompt(ApolloNativeSearchFiltersSchema);
 
-  it("renders qKeywords as string (NOT string[])", () => {
-    expect(prompt).toMatch(/^- qKeywords: string$/m);
-    expect(prompt).not.toMatch(/^- qKeywords: string\[\]$/m);
+  it("renders q_keywords as string (NOT string[])", () => {
+    expect(prompt).toMatch(/^- q_keywords: string$/m);
+    expect(prompt).not.toMatch(/^- q_keywords: string\[\]$/m);
   });
 
-  it("renders qKeywords example as OR-joined free text", () => {
-    // Match the example line under qKeywords
-    const block = prompt.split(/\n(?=- )/).find((b) => b.startsWith("- qKeywords:"));
+  it("renders q_keywords example as OR-joined free text", () => {
+    const block = prompt.split(/\n(?=- )/).find((b) => b.startsWith("- q_keywords:"));
     expect(block).toBeDefined();
     expect(block).toMatch(/ex:\s*"[^"]*\bOR\b[^"]*"/);
   });
 
-  it("renders personSeniorities as string[] with full enum list", () => {
-    const block = prompt.split(/\n(?=- )/).find((b) => b.startsWith("- personSeniorities:"));
-    expect(block).toMatch(/^- personSeniorities: string\[\]$/m);
+  it("renders person_seniorities as string[] with full enum list", () => {
+    const block = prompt.split(/\n(?=- )/).find((b) => b.startsWith("- person_seniorities:"));
+    expect(block).toMatch(/^- person_seniorities: string\[\]$/m);
     expect(block).toMatch(
       /enum: entry \| senior \| manager \| director \| vp \| c_suite \| owner \| founder \| partner/
     );
   });
 
-  it("renders contactEmailStatus enum line with all four values", () => {
-    const block = prompt.split(/\n(?=- )/).find((b) => b.startsWith("- contactEmailStatus:"));
+  it("renders contact_email_status enum line with all four values", () => {
+    const block = prompt.split(/\n(?=- )/).find((b) => b.startsWith("- contact_email_status:"));
     expect(block).toMatch(/enum: verified \| unverified \| likely to engage \| unavailable/);
   });
 
-  it("renders organizationNumEmployeesRanges as arbitrary string[] (no fixed-bucket enum)", () => {
-    const block = prompt.split(/\n(?=- )/).find((b) => b.startsWith("- organizationNumEmployeesRanges:"));
+  it("renders organization_num_employees_ranges as arbitrary string[] (no fixed-bucket enum)", () => {
+    const block = prompt.split(/\n(?=- )/).find((b) => b.startsWith("- organization_num_employees_ranges:"));
     // Faithful Apollo: arbitrary 'min,max' spans, NOT a fixed bucket enum.
-    expect(block).toMatch(/^- organizationNumEmployeesRanges: string\[\]$/m);
+    expect(block).toMatch(/^- organization_num_employees_ranges: string\[\]$/m);
     expect(block).not.toMatch(/enum:/);
     expect(block).toMatch(/ARBITRARY/);
   });
 
   it("renders the full faithful seniority enum incl head and intern", () => {
-    const block = prompt.split(/\n(?=- )/).find((b) => b.startsWith("- personSeniorities:"));
+    const block = prompt.split(/\n(?=- )/).find((b) => b.startsWith("- person_seniorities:"));
     expect(block).toMatch(/\| partner \| head \| intern/);
   });
 
-  it("renders range-object filters (e.g. revenueRangeNative) as object with a {min,max} example", () => {
-    const block = prompt.split(/\n(?=- )/).find((b) => b.startsWith("- revenueRangeNative:"));
-    expect(block).toMatch(/^- revenueRangeNative: object$/m);
+  it("renders range-object filters (e.g. revenue_range) as object with a {min,max} example", () => {
+    const block = prompt.split(/\n(?=- )/).find((b) => b.startsWith("- revenue_range:"));
+    expect(block).toMatch(/^- revenue_range: object$/m);
     expect(block).toMatch(/ex:\s*\{.*"min".*"max".*\}/);
   });
 
-  it("renders boolean filters (e.g. includeSimilarTitles) as boolean", () => {
-    const block = prompt.split(/\n(?=- )/).find((b) => b.startsWith("- includeSimilarTitles:"));
-    expect(block).toMatch(/^- includeSimilarTitles: boolean$/m);
+  it("renders boolean filters (e.g. include_similar_titles) as boolean", () => {
+    const block = prompt.split(/\n(?=- )/).find((b) => b.startsWith("- include_similar_titles:"));
+    expect(block).toMatch(/^- include_similar_titles: boolean$/m);
   });
 
-  it("does NOT render an enum line for plain string[] fields like personTitles", () => {
-    const block = prompt.split(/\n(?=- )/).find((b) => b.startsWith("- personTitles:"));
+  it("does NOT render an enum line for plain string[] fields like person_titles", () => {
+    const block = prompt.split(/\n(?=- )/).find((b) => b.startsWith("- person_titles:"));
     expect(block).toBeDefined();
     expect(block).not.toMatch(/enum:/);
   });
 
-  it("contains every field from SearchFiltersSchema", () => {
-    for (const fieldName of Object.keys(SearchFiltersSchema.shape)) {
+  it("uses Apollo-native field names and hides legacy/non-doc aliases", () => {
+    expect(prompt).toMatch(/^- person_titles: string\[\]$/m);
+    expect(prompt).toMatch(/^- q_organization_domains_list: string\[\]$/m);
+    expect(prompt).toMatch(/^- organization_num_jobs_range: object$/m);
+    expect(prompt).not.toMatch(/personTitles|includeSimilarTitles|revenueRangeNative|qOrganizationDomainsList|qOrganizationKeywordTags/);
+  });
+
+  it("contains every field from ApolloNativeSearchFiltersSchema", () => {
+    for (const fieldName of Object.keys(ApolloNativeSearchFiltersSchema.shape)) {
       expect(prompt).toMatch(new RegExp(`^- ${fieldName}:`, "m"));
     }
   });
 
   it("includes description and ex line for every field", () => {
-    for (const fieldName of Object.keys(SearchFiltersSchema.shape)) {
+    for (const fieldName of Object.keys(ApolloNativeSearchFiltersSchema.shape)) {
       const blocks = prompt.split(/\n(?=- )/).filter((b) => b.startsWith(`- ${fieldName}:`));
       expect(blocks.length).toBe(1);
       expect(blocks[0]).toMatch(/^\s+ex:/m);
@@ -180,7 +186,7 @@ describe("GET /search/filters-prompt", () => {
       .set(HEADERS)
       .expect(200);
 
-    expect(res.body.prompt).toMatch(/^- qKeywords: string$/m);
+    expect(res.body.prompt).toMatch(/^- q_keywords: string$/m);
     expect(res.body.prompt).toMatch(
       /enum: entry \| senior \| manager \| director \| vp \| c_suite \| owner \| founder \| partner/
     );

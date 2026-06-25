@@ -2,14 +2,9 @@ import type { ApolloPerson, ApolloSearchParams } from "./apollo-client.js";
 import type { ApolloPeopleEnrichment } from "../db/schema.js";
 
 /**
- * Apollo's people-search `revenue_range` is a single `{min, max}` integer object,
- * NOT an array of "min,max" strings. Callers/LLMs emit `revenueRange` as the
- * documented string-array filter shape (e.g. `["1000000,10000000"]`); collapse
- * it to the one `{min, max}` object Apollo accepts. Multiple ranges union into a
- * single span (min of mins, max of maxes) since Apollo supports only one range;
- * an open-ended bound (e.g. `"10001,"`) omits that key. Sending the array form
- * makes Apollo's Ruby do `array["min"]` → 422 "no implicit conversion of String
- * into Integer". Defensively passes an already-`{min,max}` input straight through.
+ * Legacy compatibility for the old `revenueRange` string-array alias. Apollo's
+ * people-search `revenue_range` is a single `{min, max}` integer object, not an
+ * array of "min,max" strings. Collapse multiple legacy ranges into one span.
  */
 export function toApolloRevenueRange(
   raw: unknown,
@@ -68,49 +63,52 @@ function cleanRange<T extends number | string>(
 }
 
 /**
- * Map camelCase search filter params to Apollo's snake_case API format.
- * Shared by POST /search and POST /search/next.
+ * Map search filter params to Apollo's snake_case API format. New callers use
+ * Apollo-native names; legacy camelCase aliases are accepted only as a
+ * transition shim and are not shown in /search/filters-prompt.
  */
 export function toApolloSearchParams(sp: Record<string, unknown>): ApolloSearchParams {
-  // Prefer the native {min,max} revenue object when supplied; else collapse the
-  // legacy `revenueRange` string-array into Apollo's required {min,max}.
-  const revenueNative = cleanRange<number>(sp.revenueRangeNative);
+  const pick = <T>(native: string, legacy?: string): T | undefined =>
+    (sp[native] ?? (legacy ? sp[legacy] : undefined)) as T | undefined;
+
+  const revenueNative =
+    cleanRange<number>(sp.revenue_range) ??
+    cleanRange<number>(sp.revenueRangeNative);
 
   return {
-    person_titles: sp.personTitles as string[] | undefined,
-    q_organization_keyword_tags: sp.qOrganizationKeywordTags as string[] | undefined,
-    organization_locations: sp.organizationLocations as string[] | undefined,
-    organization_num_employees_ranges: sp.organizationNumEmployeesRanges as string[] | undefined,
-    q_organization_industry_tag_ids: sp.qOrganizationIndustryTagIds as string[] | undefined,
-    q_keywords: sp.qKeywords as string | undefined,
-    person_locations: sp.personLocations as string[] | undefined,
-    person_seniorities: sp.personSeniorities as string[] | undefined,
-    contact_email_status: sp.contactEmailStatus as string[] | undefined,
-    q_organization_domains: sp.qOrganizationDomains as string[] | undefined,
-    currently_using_any_of_technology_uids: sp.currentlyUsingAnyOfTechnologyUids as string[] | undefined,
+    person_titles: pick<string[]>("person_titles", "personTitles"),
+    q_organization_keyword_tags: sp.q_organization_keyword_tags as string[] | undefined,
+    organization_locations: pick<string[]>("organization_locations", "organizationLocations"),
+    organization_num_employees_ranges: pick<string[]>("organization_num_employees_ranges", "organizationNumEmployeesRanges"),
+    q_organization_industry_tag_ids: sp.q_organization_industry_tag_ids as string[] | undefined,
+    q_keywords: pick<string>("q_keywords", "qKeywords"),
+    person_locations: pick<string[]>("person_locations", "personLocations"),
+    person_seniorities: pick<string[]>("person_seniorities", "personSeniorities"),
+    contact_email_status: pick<string[]>("contact_email_status", "contactEmailStatus"),
+    q_organization_domains: sp.q_organization_domains as string[] | undefined,
+    currently_using_any_of_technology_uids: pick<string[]>("currently_using_any_of_technology_uids", "currentlyUsingAnyOfTechnologyUids"),
     revenue_range: revenueNative ?? toApolloRevenueRange(sp.revenueRange),
-    organization_ids: sp.organizationIds as string[] | undefined,
-    // ── Faithful Apollo People Search params (additive) ──
-    include_similar_titles: sp.includeSimilarTitles as boolean | undefined,
-    q_organization_job_titles: sp.qOrganizationJobTitles as string[] | undefined,
-    person_linkedin_urls: sp.personLinkedinUrls as string[] | undefined,
-    currently_using_all_of_technology_uids: sp.currentlyUsingAllOfTechnologyUids as string[] | undefined,
-    currently_not_using_any_of_technology_uids: sp.currentlyNotUsingAnyOfTechnologyUids as string[] | undefined,
-    q_organization_domains_list: sp.qOrganizationDomainsList as string[] | undefined,
-    market_segments: sp.marketSegments as string[] | undefined,
-    organization_naics_codes: sp.organizationNaicsCodes as string[] | undefined,
-    not_organization_naics_codes: sp.notOrganizationNaicsCodes as string[] | undefined,
-    organization_sic_codes: sp.organizationSicCodes as string[] | undefined,
-    not_organization_sic_codes: sp.notOrganizationSicCodes as string[] | undefined,
-    organization_job_locations: sp.organizationJobLocations as string[] | undefined,
-    organization_founded_year_range: cleanRange<number>(sp.organizationFoundedYearRange),
-    organization_include_unknown_founded_year: sp.organizationIncludeUnknownFoundedYear as boolean | undefined,
-    organization_headcount_growth_past_n_months: sp.organizationHeadcountGrowthPastNMonths as number | undefined,
-    organization_headcount_growth_range: cleanRange<number>(sp.organizationHeadcountGrowthRange),
-    organization_num_jobs_range: cleanRange<number>(sp.organizationNumJobsRange),
-    organization_job_posted_at_range: cleanRange<string>(sp.organizationJobPostedAtRange),
-    person_total_yoe_range: cleanRange<number>(sp.personTotalYoeRange),
-    person_days_in_current_title_range: cleanRange<number>(sp.personDaysInCurrentTitleRange),
+    organization_ids: pick<string[]>("organization_ids", "organizationIds"),
+    include_similar_titles: pick<boolean>("include_similar_titles", "includeSimilarTitles"),
+    q_organization_job_titles: pick<string[]>("q_organization_job_titles", "qOrganizationJobTitles"),
+    person_linkedin_urls: pick<string[]>("person_linkedin_urls", "personLinkedinUrls"),
+    currently_using_all_of_technology_uids: pick<string[]>("currently_using_all_of_technology_uids", "currentlyUsingAllOfTechnologyUids"),
+    currently_not_using_any_of_technology_uids: pick<string[]>("currently_not_using_any_of_technology_uids", "currentlyNotUsingAnyOfTechnologyUids"),
+    q_organization_domains_list: pick<string[]>("q_organization_domains_list", "qOrganizationDomainsList") ?? (sp.qOrganizationDomains as string[] | undefined),
+    market_segments: pick<string[]>("market_segments", "marketSegments"),
+    organization_naics_codes: pick<string[]>("organization_naics_codes", "organizationNaicsCodes"),
+    not_organization_naics_codes: pick<string[]>("not_organization_naics_codes", "notOrganizationNaicsCodes"),
+    organization_sic_codes: pick<string[]>("organization_sic_codes", "organizationSicCodes"),
+    not_organization_sic_codes: pick<string[]>("not_organization_sic_codes", "notOrganizationSicCodes"),
+    organization_job_locations: pick<string[]>("organization_job_locations", "organizationJobLocations"),
+    organization_founded_year_range: cleanRange<number>(sp.organization_founded_year_range) ?? cleanRange<number>(sp.organizationFoundedYearRange),
+    organization_include_unknown_founded_year: pick<boolean>("organization_include_unknown_founded_year", "organizationIncludeUnknownFoundedYear"),
+    organization_headcount_growth_past_n_months: pick<number>("organization_headcount_growth_past_n_months", "organizationHeadcountGrowthPastNMonths"),
+    organization_headcount_growth_range: cleanRange<number>(sp.organization_headcount_growth_range) ?? cleanRange<number>(sp.organizationHeadcountGrowthRange),
+    organization_num_jobs_range: cleanRange<number>(sp.organization_num_jobs_range) ?? cleanRange<number>(sp.organizationNumJobsRange),
+    organization_job_posted_at_range: cleanRange<string>(sp.organization_job_posted_at_range) ?? cleanRange<string>(sp.organizationJobPostedAtRange),
+    person_total_yoe_range: cleanRange<number>(sp.person_total_yoe_range) ?? cleanRange<number>(sp.personTotalYoeRange),
+    person_days_in_current_title_range: cleanRange<number>(sp.person_days_in_current_title_range) ?? cleanRange<number>(sp.personDaysInCurrentTitleRange),
   };
 }
 

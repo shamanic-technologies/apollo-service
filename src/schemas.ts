@@ -322,155 +322,133 @@ registry.registerPath({
 
 // ─── Shared filter schema (used by /search/next + /search/dry-run) ──────────
 
-export const SearchFiltersSchema = z
+export const ApolloNativeSearchFiltersSchema = z
   .object({
-    personTitles: z.array(z.string().min(1)).optional().openapi({
+    person_titles: z.array(z.string().min(1)).optional().openapi({
       description: "Filter by job titles.",
       example: ["CEO", "CTO", "VP Engineering"],
     }),
-    qOrganizationKeywordTags: z.array(z.string().min(1)).optional().openapi({
-      description: "Filter by organization keyword tags.",
-      example: ["SaaS", "fintech"],
+    include_similar_titles: z.boolean().optional().openapi({
+      description: "When false, return only strict matches for person_titles. When true or omitted, Apollo may include similar titles.",
+      example: false,
     }),
-    organizationLocations: z.array(z.string().min(1)).optional().openapi({
+    q_keywords: z.string().optional().openapi({
+      description: "Free-text keyword search across person and organization fields.",
+      example: "machine learning OR data science OR AI",
+    }),
+    person_locations: z.array(z.string().min(1)).optional().openapi({
+      description: "Filter by person's location (city, state, country). Different from organization_locations, which filters by company HQ.",
+      example: ["San Francisco, California, US", "New York, US"],
+    }),
+    person_seniorities: z.array(z.enum(VALID_SENIORITIES)).optional().openapi({
+      description: "Filter by seniority level. Apollo's full set: owner, founder, c_suite, partner, vp, head, director, manager, senior, entry, intern.",
+      example: ["head", "vp", "c_suite"],
+    }),
+    organization_locations: z.array(z.string().min(1)).optional().openapi({
       description: "Filter by organization HQ location.",
       example: ["United States", "California, US"],
     }),
-    organizationNumEmployeesRanges: z
+    q_organization_domains_list: z.array(z.string().min(1)).optional().openapi({
+      description: "Restrict to people at these company domains. Do not include www, @, or protocol.",
+      example: ["apollo.io", "google.com"],
+    }),
+    contact_email_status: z.array(z.enum(VALID_EMAIL_STATUSES)).optional().openapi({
+      description: "Filter by email verification status. Valid values: verified, unverified, likely to engage, unavailable.",
+      example: ["verified"],
+    }),
+    organization_ids: z.array(z.string().min(1)).optional().openapi({
+      description: "Filter by specific Apollo organization IDs.",
+      example: ["5f5e100a01d6b1000169c754"],
+    }),
+    organization_num_employees_ranges: z
       .array(z.string().regex(EMPLOYEE_RANGE_REGEX, "must be 'min,max' (e.g. '250,500' or '10001,' for open-ended)"))
       .optional()
       .openapi({
         description:
-          "Filter by employer employee-count ranges. Apollo accepts ARBITRARY 'min,max' integer spans — not a fixed bucket list. Use an open-ended max ('10001,') for \"N or more\". Pass multiple spans to union them.",
+          "Filter by employer employee-count ranges. Apollo accepts ARBITRARY 'min,max' integer spans, not a fixed bucket list. Use an open-ended max ('10001,') for \"N or more\". Pass multiple spans to union them.",
         example: ["1,10", "250,500", "10001,"],
       }),
-    qOrganizationIndustryTagIds: z.array(z.string().min(1)).optional().openapi({
-      description: "Filter by industry names (use GET /reference/industries for valid values).",
-      example: ["Information Technology and Services", "Computer Software"],
+    revenue_range: IntRangeSchema.optional().openapi({
+      description: "Filter by employer annual revenue as {min,max} integer USD bounds. Do not use currency symbols, commas, or decimals.",
+      example: { min: 500000, max: 1500000 },
     }),
-    qKeywords: z.string().optional().openapi({
-      description: "Free-text keyword search across person and organization fields. Use OR to widen, AND to narrow.",
-      example: "machine learning OR data science OR AI",
-    }),
-    personLocations: z.array(z.string().min(1)).optional().openapi({
-      description: "Filter by person's location (city, state, country). Different from organizationLocations which filters by company HQ.",
-      example: ["San Francisco, California, US", "New York, US"],
-    }),
-    personSeniorities: z.array(z.enum(VALID_SENIORITIES)).optional().openapi({
-      description: "Filter by seniority level. Apollo's full set: entry, senior, manager, director, vp, c_suite, owner, founder, partner, head, intern. Use `head` for \"Head of X\" roles (e.g. Head of Growth/Sales) and `c_suite` for CxO.",
-      example: ["head", "vp", "c_suite"],
-    }),
-    contactEmailStatus: z.array(z.enum(VALID_EMAIL_STATUSES)).optional().openapi({
-      description: "Filter by email verification status. Valid values: verified, unverified, likely to engage, unavailable.",
-      example: ["verified"],
-    }),
-    qOrganizationDomains: z.array(z.string().min(1)).optional().openapi({
-      description: "Filter by specific company domains.",
-      example: ["google.com", "meta.com"],
-    }),
-    currentlyUsingAnyOfTechnologyUids: z.array(z.string().min(1)).optional().openapi({
-      description: "Filter by technology stack (Apollo technology UIDs).",
-      example: ["salesforce", "hubspot"],
-    }),
-    revenueRange: z.array(z.string().min(1)).optional().openapi({
-      description: "Filter by annual revenue ranges (comma-separated min,max format).",
-      example: ["1000000,10000000", "10000000,50000000"],
-    }),
-    organizationIds: z.array(z.string().min(1)).optional().openapi({
-      description: "Filter by specific Apollo organization IDs.",
-      example: ["5f5e100a01d6b1000169c754"],
-    }),
-
-    // ── Faithful Apollo People Search filters (additive — verbatim Apollo
-    // vocabulary, full accepted value sets). See developer/docs.apollo.io. ──
-
-    includeSimilarTitles: z.boolean().optional().openapi({
-      description: "Apollo include_similar_titles. When false, personTitles match strictly; when true (Apollo default), Apollo also matches similar/equivalent titles. Set false to tighten an over-broad title match.",
-      example: false,
-    }),
-    qOrganizationJobTitles: z.array(z.string().min(1)).optional().openapi({
-      description: "Job titles listed in ACTIVE job postings at the person's current employer (hiring-signal targeting). Different from personTitles (the person's own title).",
-      example: ["sales manager", "research analyst"],
-    }),
-    personLinkedinUrls: z.array(z.string().min(1)).optional().openapi({
-      description: "Find specific people by their full LinkedIn profile URL.",
-      example: ["https://www.linkedin.com/in/tim-zheng"],
-    }),
-    currentlyUsingAllOfTechnologyUids: z.array(z.string().min(1)).optional().openapi({
-      description: "Match people whose current employer uses ALL of these technologies (Apollo technology UIDs; underscores for spaces/periods).",
+    currently_using_all_of_technology_uids: z.array(z.string().min(1)).optional().openapi({
+      description: "Match people whose current employer uses ALL of these technologies. Use Apollo technology UIDs with underscores for spaces/periods.",
       example: ["salesforce", "google_analytics"],
     }),
-    currentlyNotUsingAnyOfTechnologyUids: z.array(z.string().min(1)).optional().openapi({
-      description: "EXCLUDE people whose current employer uses ANY of these technologies (Apollo technology UIDs).",
+    currently_using_any_of_technology_uids: z.array(z.string().min(1)).optional().openapi({
+      description: "Match people whose current employer uses ANY of these technologies. Use Apollo technology UIDs with underscores for spaces/periods.",
+      example: ["salesforce", "hubspot"],
+    }),
+    currently_not_using_any_of_technology_uids: z.array(z.string().min(1)).optional().openapi({
+      description: "EXCLUDE people whose current employer uses ANY of these technologies.",
       example: ["hubspot"],
     }),
-    qOrganizationDomainsList: z.array(z.string().min(1)).optional().openapi({
-      description: "Apollo's native organization-domain filter (q_organization_domains_list). Restrict to people at these company domains.",
-      example: ["apollo.io", "google.com"],
+    q_organization_job_titles: z.array(z.string().min(1)).optional().openapi({
+      description: "Job titles listed in active job postings at the person's current employer.",
+      example: ["sales manager", "research analyst"],
     }),
-    marketSegments: z.array(z.string().min(1)).optional().openapi({
-      description: "Filter by the current employer's market-segment terms (matched against the employer's tags/name).",
-      example: ["B2B", "Enterprise", "Healthcare"],
-    }),
-    organizationNaicsCodes: z.array(z.string().regex(/^\d{2,5}$/)).optional().openapi({
-      description: "Match employers by NAICS industry code (2–5 digits; prefix match — a shorter code is broader).",
-      example: ["5415", "54151"],
-    }),
-    notOrganizationNaicsCodes: z.array(z.string().regex(/^\d{2,5}$/)).optional().openapi({
-      description: "EXCLUDE employers matching these NAICS codes (prefix match).",
-      example: ["5415"],
-    }),
-    organizationSicCodes: z.array(z.string().regex(/^\d{4}$/)).optional().openapi({
-      description: "Match employers by 4-digit SIC industry code.",
-      example: ["7372", "5045"],
-    }),
-    notOrganizationSicCodes: z.array(z.string().regex(/^\d{4}$/)).optional().openapi({
-      description: "EXCLUDE employers with these 4-digit SIC codes.",
-      example: ["7372"],
-    }),
-    organizationJobLocations: z.array(z.string().min(1)).optional().openapi({
+    organization_job_locations: z.array(z.string().min(1)).optional().openapi({
       description: "Locations of jobs the person's employer is actively recruiting for.",
       example: ["atlanta", "japan"],
     }),
-    revenueRangeNative: IntRangeSchema.optional().openapi({
-      description: "Native Apollo revenue_range as a {min,max} integer object (USD, no symbols/commas). Faithful alternative to the legacy string-array `revenueRange`; prefer this for new callers. If both are sent, this native object wins.",
-      example: { min: 500000, max: 1500000 },
-    }),
-    organizationFoundedYearRange: IntRangeSchema.optional().openapi({
-      description: "Filter by the employer's founding year, {min,max} (inclusive). Apollo advanced filter.",
-      example: { min: 2015, max: 2020 },
-    }),
-    organizationIncludeUnknownFoundedYear: z.boolean().optional().openapi({
-      description: "When true, also include people whose employer founding year is unknown (pairs with organizationFoundedYearRange).",
-      example: false,
-    }),
-    organizationHeadcountGrowthPastNMonths: z.number().int().optional().openapi({
-      description: "Trailing-month window over which to measure employer headcount growth (pairs with organizationHeadcountGrowthRange).",
-      example: 6,
-    }),
-    organizationHeadcountGrowthRange: IntRangeSchema.optional().openapi({
-      description: "Filter by employer headcount-growth PERCENT over the window, {min,max}.",
-      example: { min: 10, max: 100 },
-    }),
-    organizationNumJobsRange: IntRangeSchema.optional().openapi({
+    organization_num_jobs_range: IntRangeSchema.optional().openapi({
       description: "Filter by the number of active job postings at the employer, {min,max} (hiring-intensity signal).",
       example: { min: 50, max: 500 },
     }),
-    organizationJobPostedAtRange: DateRangeSchema.optional().openapi({
+    organization_job_posted_at_range: DateRangeSchema.optional().openapi({
       description: "Filter by when the employer posted jobs, {min,max} as ISO YYYY-MM-DD dates.",
       example: { min: "2025-07-25", max: "2025-09-25" },
     }),
-    personTotalYoeRange: IntRangeSchema.optional().openapi({
-      description: "Filter by the person's TOTAL years of professional experience across their career, {min,max} (inclusive).",
-      example: { min: 5, max: 15 },
-    }),
-    personDaysInCurrentTitleRange: IntRangeSchema.optional().openapi({
-      description: "Filter by how long the person has held their current title, in DAYS, {min,max}. Convert from natural units (1yr=365, 1mo=30).",
-      example: { min: 90, max: 730 },
-    }),
   })
   .openapi("SearchFilters", {
-    description: "Apollo search filters. All filters are combined using AND. Start broad and narrow down to avoid empty results.",
+    description: "Apollo People API Search filters using Apollo-native field names. All filters are combined using AND. Start broad and narrow down to avoid empty results.",
+  });
+
+const LegacySearchFilterAliasesSchema = z.object({
+  personTitles: z.array(z.string().min(1)).optional(),
+  qOrganizationKeywordTags: z.array(z.string().min(1)).optional(),
+  organizationLocations: z.array(z.string().min(1)).optional(),
+  organizationNumEmployeesRanges: z
+    .array(z.string().regex(EMPLOYEE_RANGE_REGEX, "must be 'min,max' (e.g. '250,500' or '10001,' for open-ended)"))
+    .optional(),
+  qOrganizationIndustryTagIds: z.array(z.string().min(1)).optional(),
+  qKeywords: z.string().optional(),
+  personLocations: z.array(z.string().min(1)).optional(),
+  personSeniorities: z.array(z.enum(VALID_SENIORITIES)).optional(),
+  contactEmailStatus: z.array(z.enum(VALID_EMAIL_STATUSES)).optional(),
+  qOrganizationDomains: z.array(z.string().min(1)).optional(),
+  currentlyUsingAnyOfTechnologyUids: z.array(z.string().min(1)).optional(),
+  revenueRange: z.array(z.string().min(1)).optional(),
+  organizationIds: z.array(z.string().min(1)).optional(),
+  includeSimilarTitles: z.boolean().optional(),
+  qOrganizationJobTitles: z.array(z.string().min(1)).optional(),
+  personLinkedinUrls: z.array(z.string().min(1)).optional(),
+  currentlyUsingAllOfTechnologyUids: z.array(z.string().min(1)).optional(),
+  currentlyNotUsingAnyOfTechnologyUids: z.array(z.string().min(1)).optional(),
+  qOrganizationDomainsList: z.array(z.string().min(1)).optional(),
+  marketSegments: z.array(z.string().min(1)).optional(),
+  organizationNaicsCodes: z.array(z.string().regex(/^\d{2,5}$/)).optional(),
+  notOrganizationNaicsCodes: z.array(z.string().regex(/^\d{2,5}$/)).optional(),
+  organizationSicCodes: z.array(z.string().regex(/^\d{4}$/)).optional(),
+  notOrganizationSicCodes: z.array(z.string().regex(/^\d{4}$/)).optional(),
+  organizationJobLocations: z.array(z.string().min(1)).optional(),
+  revenueRangeNative: IntRangeSchema.optional(),
+  organizationFoundedYearRange: IntRangeSchema.optional(),
+  organizationIncludeUnknownFoundedYear: z.boolean().optional(),
+  organizationHeadcountGrowthPastNMonths: z.number().int().optional(),
+  organizationHeadcountGrowthRange: IntRangeSchema.optional(),
+  organizationNumJobsRange: IntRangeSchema.optional(),
+  organizationJobPostedAtRange: DateRangeSchema.optional(),
+  personTotalYoeRange: IntRangeSchema.optional(),
+  personDaysInCurrentTitleRange: IntRangeSchema.optional(),
+});
+
+export const SearchFiltersSchema = ApolloNativeSearchFiltersSchema
+  .merge(LegacySearchFilterAliasesSchema)
+  .openapi("SearchFiltersRuntime", {
+    description:
+      "Runtime Apollo People API Search filters. New callers should use Apollo-native field names; camelCase fields are deprecated compatibility aliases.",
   });
 
 // ─── GET /search/filters-prompt ─────────────────────────────────────────────
@@ -479,7 +457,7 @@ const FiltersPromptResponseSchema = z
   .object({
     prompt: z.string().openapi({
       description:
-        "Markdown-formatted prompt fragment describing every field of SearchFiltersSchema. One block per field with type, optional enum values, an example, and a one-line description. Designed to be embedded in a caller's LLM system prompt.",
+        "Markdown-formatted prompt fragment describing every Apollo-native People Search filter field. One block per field with type, optional enum values, an example, and a one-line description. Designed to be embedded in a caller's LLM system prompt.",
     }),
     schemaVersion: z.string().openapi({
       description:
@@ -493,7 +471,7 @@ registry.registerPath({
   path: "/search/filters-prompt",
   summary: "Get the filter-shape prompt fragment for caller LLMs",
   description:
-    "Returns a markdown block documenting every filter accepted by /search/next and /search/dry-run, generated from SearchFiltersSchema. Single source of truth for callers (e.g. lead-service) that need to instruct an LLM how to build search filters. The schemaVersion is a stable hash of the prompt — cache by this value.",
+    "Returns a markdown block documenting the Apollo-native People Search filter vocabulary. Single source of truth for callers that need to instruct an LLM how to build search filters. Deprecated compatibility aliases accepted by runtime routes are intentionally hidden. The schemaVersion is a stable hash of the prompt — cache by this value.",
   request: {
     headers: basicHeaders,
   },
@@ -1133,7 +1111,7 @@ export const SuggestFromSegmentRequestSchema = z
 const SuggestFromSegmentResponseSchema = z
   .object({
     apolloAudienceId: z.string().openapi({ description: "Persisted apollo-audience id. human-service stores ONLY this pointer." }),
-    filters: SearchFiltersSchema.openapi({ description: "The confirmed faithful Apollo filter object." }),
+    filters: ApolloNativeSearchFiltersSchema.openapi({ description: "The confirmed Apollo-native filter object." }),
     count: z.number().int().openapi({ description: "Live match-count snapshot for the confirmed filters." }),
   })
   .openapi("SuggestFromSegmentResponse");
@@ -1141,7 +1119,7 @@ const SuggestFromSegmentResponseSchema = z
 const AudienceResponseSchema = z
   .object({
     apolloAudienceId: z.string(),
-    filters: SearchFiltersSchema,
+    filters: ApolloNativeSearchFiltersSchema,
     count: z.number().int(),
     status: z.string().openapi({ description: '"confirmed" or "exhausted".' }),
     createdAt: z.string(),
