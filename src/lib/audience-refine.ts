@@ -139,8 +139,15 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
       {
         message,
         systemPrompt,
-        provider: "anthropic",
-        model: "sonnet",
+        // Google (Gemini) JSON mode, NOT Anthropic. chat-service requires a strict
+        // `responseSchema` for Anthropic JSON mode (output_config.format), and a
+        // strict Anthropic schema must list EVERY property as required with
+        // additionalProperties:false — incompatible with the SPARSE Apollo filter
+        // object the model emits (it picks a few of ~18 optional filters). Gemini
+        // JSON mode needs no schema and returns free-form JSON, validated by the
+        // Zod guards below. (chat-service owns the LLM cost either way.)
+        provider: "google",
+        model: "flash",
         responseFormat: "json",
         temperature: 0.2,
         maxTokens: 2000,
