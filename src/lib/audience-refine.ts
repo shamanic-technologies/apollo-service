@@ -18,15 +18,15 @@ import { toApolloSearchParams } from "./transform.js";
 import { searchPeople } from "./apollo-client.js";
 import { SearchFiltersSchema } from "../schemas.js";
 
-/** A "good" B2B audience lands in this count band. Guidance for the model — it
- * decides; Apollo serves at most 50,000 records via pagination. */
-const TARGET_MIN = 25;
-const TARGET_MAX = 50_000;
+/** A "good" B2B audience lands in this count band. The server enforces it for
+ * `confirm`; Apollo serves at most 50,000 records via pagination. */
+const TARGET_MIN = 1_000;
+const TARGET_MAX = 100_000;
 const MAX_REFINE_ITERATIONS = 6;
 
 export interface RefineIteration {
   iteration: number;
-  action: "test" | "confirm" | "invalid";
+  action: "test" | "confirm" | "invalid" | "rejected_confirm";
   filters: Record<string, unknown> | null;
   count: number | null;
   reasoning: string;
@@ -78,8 +78,8 @@ function buildSystemPrompt(catalog: string): string {
     catalog,
     "=== END FILTERS ===",
     "",
-    `Goal: a focused audience whose match count is roughly ${TARGET_MIN}–${TARGET_MAX}.`,
-    "Too many (>50000, Apollo's hard cap) → add/tighten filters. Too few or zero → loosen or drop filters.",
+    "Goal: a focused audience whose match count is roughly 1,000-100,000.",
+    "Too many (>100000) -> add/tighten filters. Too few or zero -> loosen or drop filters.",
     "",
     "Each turn, reply with ONLY a JSON object (no prose, no code fences):",
     '{ "action": "test" | "confirm", "filters": { ...faithful filters... }, "reasoning": "<one short line>" }',
@@ -119,14 +119,20 @@ function pickBest(history: RefineIteration[]): { filters: Record<string, unknown
       h.action !== "invalid" && h.filters !== null && h.count !== null,
   );
   if (valid.length === 0) return null;
-  const inBand = valid.filter((h) => h.count >= TARGET_MIN && h.count <= TARGET_MAX);
+  const inBand = valid.filter((h) => isInTargetBand(h.count));
   if (inBand.length > 0) {
     // Broadest coverage within band.
     return inBand.reduce((a, b) => (b.count > a.count ? b : a));
   }
+  const positive = valid.filter((h) => h.count > 0);
+  if (positive.length === 0) return null;
   // Otherwise closest to the band (distance to nearest edge).
   const dist = (c: number) => (c < TARGET_MIN ? TARGET_MIN - c : c - TARGET_MAX);
-  return valid.reduce((a, b) => (dist(b.count) < dist(a.count) ? b : a));
+  return positive.reduce((a, b) => (dist(b.count) < dist(a.count) ? b : a));
+}
+
+function isInTargetBand(count: number): boolean {
+  return count >= TARGET_MIN && count <= TARGET_MAX;
 }
 
 export async function refineAudience(input: RefineInput): Promise<RefineResult> {
@@ -186,18 +192,24 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
     const validFilters = filterCheck.data as Record<string, unknown>;
     const count = await dryRunCount(input.apolloApiKey, validFilters);
 
-    if (action === "confirm") {
+    if (action === "confirm" && isInTargetBand(count)) {
       trace.push({ iteration: i, action: "confirm", filters: validFilters, count, reasoning: reasoning ?? "" });
       return { filters: validFilters, count, status: "confirmed", trace };
     }
 
-    trace.push({ iteration: i, action: "test", filters: validFilters, count, reasoning: reasoning ?? "" });
+    trace.push({
+      iteration: i,
+      action: action === "confirm" ? "rejected_confirm" : "test",
+      filters: validFilters,
+      count,
+      reasoning: reasoning ?? "",
+    });
   }
 
   // Exhausted the iteration budget without a confirm — keep the best tried set.
   const best = pickBest(trace);
   if (!best) {
-    throw new Error("[apollo-service][refineAudience] no valid filter set was produced after refinement");
+    throw new Error("[apollo-service][refineAudience] no positive-match filter set was produced after refinement");
   }
   return { filters: best.filters, count: best.count, status: "exhausted", trace };
 }
