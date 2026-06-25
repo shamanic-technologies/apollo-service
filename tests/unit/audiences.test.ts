@@ -293,7 +293,7 @@ describe("Apollo audience endpoints", () => {
     // The escalation nudge fires on the 2nd+ turn once a < 1,000 count is on record.
     const secondTurnMsg = mockChatComplete.mock.calls[1][0].message as string;
     expect(secondTurnMsg).toContain("BELOW the 1,000 floor");
-    expect(secondTurnMsg).toContain("DROP the least-defining constraint");
+    expect(secondTurnMsg).toContain("DROP the constraint YOU judge least important");
   });
 
   it("invalid model output does not consume the 6 real-attempt budget", async () => {
