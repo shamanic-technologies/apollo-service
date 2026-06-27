@@ -492,6 +492,12 @@ const LegacySearchFilterAliasesSchema = z.object({
   qKeywords: z.string().optional(),
   personLocations: z.array(z.string().min(1)).optional(),
   personSeniorities: z.array(z.enum(VALID_SENIORITIES)).optional(),
+  // NOTE: contactEmailStatus is a PHANTOM pre-filter on People Search. Apollo's
+  // search teaser does NOT verify emails, so ["verified"] does not meaningfully
+  // narrow search results to deliverable contacts — verification only happens at
+  // ENRICH time (/enrich applies withVerifiedEmailOnly, the real SMTP-verified
+  // gate). Kept for API faithfulness, but callers must NOT treat it as a
+  // guarantee of verified emails in /search or /search/next output.
   contactEmailStatus: z.array(z.enum(VALID_EMAIL_STATUSES)).optional(),
   qOrganizationDomains: z.array(z.string().min(1)).optional(),
   currentlyUsingAnyOfTechnologyUids: z.array(z.string().min(1)).optional(),
@@ -618,21 +624,24 @@ registry.registerPath({
 export const SearchNextRequestSchema = z
   .object({
     searchParams: SearchFiltersSchema.optional().openapi({
-      description: "Search filters. On first call, provide filters to create a cursor at page 1. On subsequent calls, omit to continue from the last page. If provided and different from the stored filters, the cursor resets to page 1.",
+      description: "Search filters. Provide them to create or resume the cursor for THIS exact filter set. Re-passing the same filters resumes from the stored page (never resets to page 1); a different filter set gets its own cursor and walks its own pool. Omit to resume the campaign's most recently used, non-exhausted cursor.",
     }),
   })
   .openapi("SearchNextRequest", {
-    description: "Request body for server-managed search pagination. The cursor is keyed by (orgId, x-campaign-id header).",
+    description: "Request body for server-managed search pagination. The cursor is keyed by (orgId, x-campaign-id header, searchParams) — one cursor per distinct filter set, so multiple filter sets for one campaign no longer evict each other.",
   });
 
 const SearchNextResponseSchema = z
   .object({
     people: z.array(PersonSchema).openapi({ description: "People returned for this page. Empty array when done=true." }),
-    done: z.boolean().openapi({ description: "True when all pages have been exhausted. No more results to fetch." }),
+    done: z.boolean().openapi({ description: "True ONLY when every page of this filter set's pool has been walked (true pool exhaustion). A page that returns few/no servable people is NOT exhaustion — done stays false and the caller must keep pulling. Do not stop on an empty/low-yield page while done=false." }),
     totalEntries: z.number().openapi({ description: "Total number of people matching the search filters across all pages." }),
+    page: z.number().openapi({ description: "The page number just fetched (1-based)." }),
+    totalPages: z.number().openapi({ description: "Total pages for this filter set's pool, clamped to Apollo's reachable window (500). exhaustion happens when the next page would exceed this." }),
+    hasMore: z.boolean().openapi({ description: "Convenience inverse of done — true when more pages remain to fetch for this filter set." }),
   })
   .openapi("SearchNextResponse", {
-    description: "One page of search results with pagination state.",
+    description: "One page of search results with pagination state. Distinguish true pool-exhaustion (done=true) from a low-yield page (done=false, hasMore=true).",
   });
 
 registry.registerPath({
@@ -640,7 +649,7 @@ registry.registerPath({
   path: "/search/next",
   summary: "Get next page of search results for a campaign",
   description:
-    "Server-managed pagination. First call with searchParams creates a cursor at page 1. Subsequent calls (with or without searchParams) return the next page. Each call returns one page of 100 people and advances the cursor. done=true is set only when the next page is past Apollo's totalPages — transient mid-stream empty pages do not exhaust the cursor. If searchParams differ from the stored cursor, pagination resets to page 1.",
+    "Server-managed pagination keyed by (org, campaign, filter set). First call with a filter set creates a cursor at page 1; re-passing the SAME filter set resumes it (no reset). A different filter set gets its OWN cursor and walks its own pool — filter sets for one campaign no longer evict each other. Each call returns one page of 100 people and advances that filter set's cursor. done=true is set only when the next page is past Apollo's totalPages (true pool exhaustion); transient mid-stream empty / low-yield pages do NOT exhaust the cursor (done stays false, hasMore=true — keep pulling).",
   request: {
     headers: runContextHeaders,
     body: {

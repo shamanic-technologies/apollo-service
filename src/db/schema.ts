@@ -1,4 +1,5 @@
 import { pgTable, uuid, text, timestamp, uniqueIndex, index, integer, decimal, jsonb, boolean } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 // Apollo people search results
 export const apolloPeopleSearches = pgTable(
@@ -164,6 +165,11 @@ export const apolloSearchCursors = pgTable(
     featureSlug: text("feature_slug"),
     workflowSlug: text("workflow_slug"),
     searchParams: jsonb("search_params").notNull(),
+    // Deterministic hash of searchParams (DB-computed so it always matches
+    // Postgres' canonical jsonb serialization). Backs the per-filter-set unique
+    // index so each distinct filter set for a campaign gets its OWN cursor
+    // instead of evicting the others to page 1.
+    paramsHash: text("params_hash").generatedAlwaysAs(sql`md5(search_params::text)`),
     currentPage: integer("current_page").notNull().default(1),
     totalEntries: integer("total_entries").notNull().default(0),
     exhausted: boolean("exhausted").notNull().default(false),
@@ -171,7 +177,7 @@ export const apolloSearchCursors = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex("idx_cursors_org_campaign").on(table.orgId, table.campaignId),
+    uniqueIndex("idx_cursors_org_campaign_params").on(table.orgId, table.campaignId, table.paramsHash),
     index("idx_cursors_campaign").on(table.campaignId),
   ]
 );
