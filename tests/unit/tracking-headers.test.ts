@@ -71,6 +71,9 @@ vi.mock("../../src/db/index.js", () => ({
         }
         return {
           returning: vi.fn().mockResolvedValue([{ id: "record-1" }]),
+          onConflictDoNothing: vi.fn().mockReturnValue({
+            returning: vi.fn().mockResolvedValue([{ id: "record-1" }]),
+          }),
         };
       }),
     })),

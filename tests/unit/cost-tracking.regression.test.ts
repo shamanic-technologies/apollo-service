@@ -54,6 +54,9 @@ vi.mock("../../src/db/index.js", () => ({
     insert: vi.fn().mockReturnValue({
       values: vi.fn().mockReturnValue({
         returning: (...args: unknown[]) => mockInsertReturning(...args),
+        onConflictDoNothing: vi.fn().mockReturnValue({
+          returning: (...args: unknown[]) => mockInsertReturning(...args),
+        }),
       }),
     }),
     update: vi.fn().mockReturnValue({
