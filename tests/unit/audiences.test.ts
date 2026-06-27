@@ -100,7 +100,7 @@ describe("Apollo audience endpoints", () => {
     state.inserted = null;
     state.selectRow = undefined;
     mockDecryptKey.mockResolvedValue({ key: "apollo-key", keySource: "platform" });
-    mockSearchPeople.mockResolvedValue({ total_entries: 4200, people: [] });
+    mockSearchPeople.mockResolvedValue({ total_entries: 42000, people: [] });
     mockChatComplete.mockResolvedValue({
       json: { action: "confirm", filters: CONFIRMED_FILTERS, reasoning: "good fit" },
       content: "",
@@ -120,7 +120,7 @@ describe("Apollo audience endpoints", () => {
 
     expect(res.body.apolloAudienceId).toBe("aud-1");
     expect(res.body.filters).toEqual(CONFIRMED_FILTERS);
-    expect(res.body.count).toBe(4200);
+    expect(res.body.count).toBe(42000);
     expect(mockChatComplete).toHaveBeenCalledTimes(1);
     // Refine LLM goes through Google (Gemini) JSON mode, NOT Anthropic: chat-service
     // requires a strict responseSchema for Anthropic JSON, incompatible with the
@@ -133,7 +133,7 @@ describe("Apollo audience endpoints", () => {
     expect(mockSearchPeople).toHaveBeenCalledWith("apollo-key", expect.objectContaining({ per_page: 1 }));
     // Stored row carries the faithful filters + count snapshot.
     expect(state.inserted.filters).toEqual(CONFIRMED_FILTERS);
-    expect(state.inserted.count).toBe(4200);
+    expect(state.inserted.count).toBe(42000);
     expect(state.inserted.status).toBe("confirmed");
   });
 
@@ -198,7 +198,7 @@ describe("Apollo audience endpoints", () => {
       });
     mockSearchPeople
       .mockResolvedValueOnce({ total_entries: 90000, people: [] }) // test result
-      .mockResolvedValueOnce({ total_entries: 4200, people: [] }); // confirm result
+      .mockResolvedValueOnce({ total_entries: 42000, people: [] }); // confirm result
 
     const res = await request(app)
       .post("/audiences/suggest-from-segment")
@@ -207,7 +207,7 @@ describe("Apollo audience endpoints", () => {
       .expect(200);
 
     expect(mockChatComplete).toHaveBeenCalledTimes(2);
-    expect(res.body.count).toBe(4200);
+    expect(res.body.count).toBe(42000);
     expect(res.body.filters).toEqual(CONFIRMED_FILTERS);
   });
 
@@ -225,7 +225,7 @@ describe("Apollo audience endpoints", () => {
       });
     mockSearchPeople
       .mockResolvedValueOnce({ total_entries: 0, people: [] })
-      .mockResolvedValueOnce({ total_entries: 1321, people: [] });
+      .mockResolvedValueOnce({ total_entries: 42000, people: [] });
 
     const res = await request(app)
       .post("/audiences/suggest-from-segment")
@@ -234,9 +234,9 @@ describe("Apollo audience endpoints", () => {
       .expect(200);
 
     expect(mockChatComplete).toHaveBeenCalledTimes(2);
-    expect(res.body.count).toBe(1321);
+    expect(res.body.count).toBe(42000);
     expect(res.body.filters).toEqual(inBandFilters);
-    expect(state.inserted.count).toBe(1321);
+    expect(state.inserted.count).toBe(42000);
   });
 
   it("does not persist an audience when every tried filter set has zero matches", async () => {
@@ -256,7 +256,7 @@ describe("Apollo audience endpoints", () => {
     expect(state.inserted).toBeNull();
   });
 
-  it("prompts the model with a hard >= 1,000 floor and relaxation order", async () => {
+  it("prompts the model with a hard >= 20,000 floor and relaxation order", async () => {
     await request(app)
       .post("/audiences/suggest-from-segment")
       .set(HEADERS)
@@ -267,13 +267,13 @@ describe("Apollo audience endpoints", () => {
     // Refine loop runs on flash (Gemini 2.5 Flash) with thinking fully off.
     expect(opts.model).toBe("flash");
     expect(opts.disableThinking).toBe(true);
-    expect(opts.systemPrompt).toContain("AT LEAST 1,000");
+    expect(opts.systemPrompt).toContain("AT LEAST 20,000");
     expect(opts.systemPrompt).toContain("NEVER confirm");
     expect(opts.systemPrompt).toContain("SHEDDING THE HIGHEST-VOLUME-COST");
   });
 
-  it("keeps testing past a < 1,000 set, relaxing until it crosses the floor, then confirms", async () => {
-    // Three narrow sets all < 1,000, then a relaxed set that crosses 1,000 and confirms.
+  it("keeps testing past a < 20,000 set, relaxing until it crosses the floor, then confirms", async () => {
+    // Three narrow sets all < 20,000, then a relaxed set that crosses 20,000 and confirms.
     mockChatComplete
       .mockResolvedValueOnce({ json: { action: "test", filters: { personTitles: ["Head of Sales"], revenueRange: ["10000000,100000000"] }, reasoning: "narrow" }, content: "", tokensInput: 1, tokensOutput: 1, model: "m" })
       .mockResolvedValueOnce({ json: { action: "test", filters: { personTitles: ["Head of Sales"], organizationNumEmployeesRanges: ["50,500"] }, reasoning: "drop revenue" }, content: "", tokensInput: 1, tokensOutput: 1, model: "m" })
@@ -281,7 +281,7 @@ describe("Apollo audience endpoints", () => {
     mockSearchPeople
       .mockResolvedValueOnce({ total_entries: 136, people: [] })
       .mockResolvedValueOnce({ total_entries: 480, people: [] })
-      .mockResolvedValueOnce({ total_entries: 12500, people: [] });
+      .mockResolvedValueOnce({ total_entries: 25000, people: [] });
 
     const res = await request(app)
       .post("/audiences/suggest-from-segment")
@@ -290,12 +290,12 @@ describe("Apollo audience endpoints", () => {
       .expect(200);
 
     expect(mockChatComplete).toHaveBeenCalledTimes(3);
-    expect(res.body.count).toBe(12500);
+    expect(res.body.count).toBe(25000);
     expect(state.inserted.status).toBe("confirmed");
 
-    // The escalation nudge fires on the 2nd+ turn once a < 1,000 count is on record.
+    // The escalation nudge fires on the 2nd+ turn once a < 20,000 count is on record.
     const secondTurnMsg = mockChatComplete.mock.calls[1][0].message as string;
-    expect(secondTurnMsg).toContain("BELOW the 1,000 floor");
+    expect(secondTurnMsg).toContain("BELOW the 20,000 floor");
     expect(secondTurnMsg).toContain("SHED the highest-volume-cost constraint");
   });
 
