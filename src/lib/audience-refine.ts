@@ -19,11 +19,13 @@ import { searchPeople } from "./apollo-client.js";
 import { SearchFiltersSchema } from "../schemas.js";
 
 /** A "good" B2B audience lands in this count band. The server enforces it for
- * `confirm`; Apollo serves at most 50,000 records via pagination. */
-const TARGET_MIN = 1_000;
-const TARGET_MAX = 100_000;
+ * `confirm`. The band is sized on Apollo's free dry-run COUNT, not on served
+ * records (Apollo paginates at most 50,000 — irrelevant here, the loop only
+ * reads counts). */
+const TARGET_MIN = 20_000;
+const TARGET_MAX = 200_000;
 /** Real dry-run attempts (each consumes a live count). The loop relaxes
- * constraints across these to cross the 1,000 floor. */
+ * constraints across these to cross the 20,000 floor. */
 const MAX_REAL_ATTEMPTS = 6;
 /** Extra budget for unusable model output (malformed decision JSON or filters
  * rejected by the faithful schema). These do NOT consume a real attempt — a
@@ -100,30 +102,30 @@ function buildSystemPrompt(catalog: string): string {
     "  or q_organization_keyword_tags when no enum value fits. Do not let one",
     "  filter (e.g. keywords) absorb a constraint another filter expresses better.",
     "",
-    "PRIMARY GOAL: produce an audience with AT LEAST 1,000 matches (ideal band 1,000-100,000).",
-    "An audience under 1,000 is a FAILURE unless 1,000 is genuinely unreachable. NEVER confirm",
-    "a set whose count is below 1,000.",
+    "PRIMARY GOAL: produce an audience with AT LEAST 20,000 matches (ideal band 20,000-200,000).",
+    "An audience under 20,000 is a FAILURE unless 20,000 is genuinely unreachable. NEVER confirm",
+    "a set whose count is below 20,000.",
     "",
     "RELAX by SHEDDING THE HIGHEST-VOLUME-COST, LOWEST-SIGNAL CONSTRAINTS FIRST. When a filter set",
-    "returns < 1,000 you MUST loosen and test again — relax in THIS order:",
+    "returns < 20,000 you MUST loosen and test again — relax in THIS order:",
     "  1. Free-text q_keywords and technology UIDs FIRST. They crush the match count for very little",
     "     targeting value (q_keywords=\"SaaS\" returns ~86 matches; q_organization_keyword_tags=",
     "     [\"software\"] returns ~128,274). Express any non-taxonomy sector/vertical with",
     "     q_organization_keyword_tags, NOT q_keywords — only fall back to q_keywords/technology",
     "     when the request needs that precision.",
-    "  2. THEN, only if still below 1,000, loosen ONE secondary qualifier.",
+    "  2. THEN, only if still below 20,000, loosen ONE secondary qualifier.",
     "PRESERVE the user's DEFINING firmographics & demographics — revenue range, employee range, job",
     "titles, industry / keyword tags, geography, seniority. These are what the user cares about MOST.",
     "Drop one of THESE only as a LAST resort, and only the single least-defining one. NEVER volunteer",
     "to drop revenue or headcount before the keyword/technology constraints are gone.",
     "",
-    "Too many (> 100,000) -> add back / tighten constraints toward the request.",
+    "Too many (> 200,000) -> add back / tighten constraints toward the request.",
     "",
     "Each turn, reply with ONLY a JSON object (no prose, no code fences):",
     '{ "action": "test" | "confirm", "filters": { ...faithful filters... }, "reasoning": "<one short line>" }',
     '- "test": you want the live count for this filter set before deciding.',
-    '- "confirm": this set is good (count >= 1,000 and <= 100,000) — stop and persist it.',
-    "Only confirm when the count is >= 1,000. If you still cannot reach 1,000 after relaxing every",
+    '- "confirm": this set is good (count >= 20,000 and <= 200,000) — stop and persist it.',
+    "Only confirm when the count is >= 20,000. If you still cannot reach 20,000 after relaxing every",
     "non-essential constraint, spend your LAST turn testing your BROADEST set that still honors the",
     "core of the request, so the closest-possible audience is captured.",
   ].join("\n");
@@ -154,7 +156,7 @@ function buildUserMessage(
   }
   lines.push("");
 
-  // Escalate when the most recent real count is still below the 1,000 floor:
+  // Escalate when the most recent real count is still below the 20,000 floor:
   // tell the model exactly how many tests remain and force a constraint drop.
   const lastValid = [...history]
     .reverse()
@@ -162,10 +164,10 @@ function buildUserMessage(
   const remaining = MAX_REAL_ATTEMPTS - realAttemptsUsed;
   if (lastValid && lastValid.count < TARGET_MIN) {
     lines.push(
-      `Latest count ${lastValid.count} is BELOW the 1,000 floor. You have ${remaining} test(s) left. ` +
+      `Latest count ${lastValid.count} is BELOW the 20,000 floor. You have ${remaining} test(s) left. ` +
         "SHED the highest-volume-cost constraint NOW — drop q_keywords / technology UIDs FIRST " +
         "(swap a sector to q_organization_keyword_tags if not already), and PRESERVE revenue, " +
-        "employee range, titles, industry, geography, seniority. Test a broader set. Do NOT confirm below 1,000.",
+        "employee range, titles, industry, geography, seniority. Test a broader set. Do NOT confirm below 20,000.",
     );
     if (remaining <= 1) {
       lines.push(
@@ -174,7 +176,7 @@ function buildUserMessage(
       );
     }
   } else {
-    lines.push("Refine further (action \"test\") or finalize (action \"confirm\", only if count >= 1,000).");
+    lines.push("Refine further (action \"test\") or finalize (action \"confirm\", only if count >= 20,000).");
   }
   return lines.join("\n");
 }
