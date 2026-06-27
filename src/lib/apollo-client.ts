@@ -48,7 +48,8 @@ export interface ApolloSearchParams {
   q_organization_keyword_tags?: string[];
   organization_locations?: string[];
   organization_num_employees_ranges?: string[];
-  q_organization_industry_tag_ids?: string[];
+  organization_industries?: string[];
+  organization_industry_tag_ids?: string[];
   q_keywords?: string;
   person_locations?: string[];
   person_seniorities?: string[];
