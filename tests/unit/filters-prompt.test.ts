@@ -119,6 +119,15 @@ describe("buildFiltersPrompt(ApolloNativeSearchFiltersSchema)", () => {
     }
   });
 
+  it("renders organization_industries with the Apollo industry taxonomy enum", () => {
+    const block = prompt.split(/\n(?=- )/).find((b) => b.startsWith("- organization_industries:"));
+    expect(block).toBeDefined();
+    expect(block).toMatch(/^- organization_industries: string\[\]$/m);
+    expect(block).toMatch(/enum: .*biotechnology/);
+    expect(block).toMatch(/enum: .*medical devices/);
+    expect(block).toMatch(/enum: .*pharmaceuticals/);
+  });
+
   it("includes description and ex line for every field", () => {
     for (const fieldName of Object.keys(ApolloNativeSearchFiltersSchema.shape)) {
       const blocks = prompt.split(/\n(?=- )/).filter((b) => b.startsWith(`- ${fieldName}:`));

@@ -3,6 +3,7 @@ import {
   extendZodWithOpenApi,
   OpenAPIRegistry,
 } from "@asteasolutions/zod-to-openapi";
+import { APOLLO_INDUSTRY_VALUES } from "./lib/reference-cache.js";
 
 extendZodWithOpenApi(z);
 
@@ -67,6 +68,8 @@ const VALID_SENIORITIES = [
   "head",
   "intern",
 ] as const;
+
+const ApolloIndustryValueSchema = z.enum(APOLLO_INDUSTRY_VALUES);
 
 // Apollo people-search range params are `{min, max}` objects with integer
 // bounds (see CLAUDE.md "Apollo range filters are {min,max} objects"). Both
@@ -348,6 +351,11 @@ export const ApolloNativeSearchFiltersSchema = z
       description: "Filter by organization HQ location.",
       example: ["United States", "California, US"],
     }),
+    organization_industries: z.array(ApolloIndustryValueSchema).optional().openapi({
+      description:
+        "Filter by Apollo's native employer industry taxonomy. Use lowercase values from this enum when the user's industry maps cleanly to Apollo; for niche sectors with no enum value, use q_organization_keyword_tags instead.",
+      example: ["pharmaceuticals", "biotechnology", "medical devices"],
+    }),
     q_organization_domains_list: z.array(z.string().min(1)).optional().openapi({
       description: "Restrict to people at these company domains. Do not include www, @, or protocol.",
       example: ["apollo.io", "google.com"],
@@ -468,6 +476,7 @@ export const ApolloNativeSearchFiltersSchema = z
       example: ["intern", "assistant"],
     }),
   })
+  .strict()
   .openapi("SearchFilters", {
     description: "Apollo People API Search filters using Apollo-native field names. All filters are combined using AND. Start broad and narrow down to avoid empty results.",
   });
@@ -509,10 +518,12 @@ const LegacySearchFilterAliasesSchema = z.object({
   organizationJobPostedAtRange: DateRangeSchema.optional(),
   personTotalYoeRange: IntRangeSchema.optional(),
   personDaysInCurrentTitleRange: IntRangeSchema.optional(),
-});
+  organization_industry_tag_ids: z.array(z.string().min(1)).optional(),
+}).strict();
 
 export const SearchFiltersSchema = ApolloNativeSearchFiltersSchema
   .merge(LegacySearchFilterAliasesSchema)
+  .strict()
   .openapi("SearchFiltersRuntime", {
     description:
       "Runtime Apollo People API Search filters. New callers should use Apollo-native field names; camelCase fields are deprecated compatibility aliases.",
@@ -978,7 +989,10 @@ registry.registerPath({
 // ─── GET /reference/industries ───────────────────────────────────────────────
 
 const IndustrySchema = z
-  .object({ name: z.string() })
+  .object({
+    name: z.string(),
+    value: ApolloIndustryValueSchema,
+  })
   .openapi("Industry");
 
 const IndustriesResponseSchema = z

@@ -51,6 +51,36 @@ describe("SearchFiltersSchema — faithful Apollo vocabulary", () => {
     const r = SearchFiltersSchema.safeParse({ organization_num_employees_ranges: ["11,20", "21,50"] });
     expect(r.success).toBe(true);
   });
+
+  it("rejects unknown filter names instead of silently stripping them", () => {
+    const r = SearchFiltersSchema.safeParse({
+      person_seniorities: ["c_suite"],
+      invented_industry_filter: ["software"],
+    });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues.some((issue) => issue.code === "unrecognized_keys")).toBe(true);
+    }
+  });
+
+  it("accepts Apollo's native industry-name filter from the fixed taxonomy", () => {
+    const r = SearchFiltersSchema.safeParse({
+      organization_industries: ["pharmaceuticals", "biotechnology", "medical devices"],
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it("rejects non-taxonomy industry names so the builder retries or falls back to keyword tags", () => {
+    const r = SearchFiltersSchema.safeParse({ organization_industries: ["cro"] });
+    expect(r.success).toBe(false);
+  });
+
+  it("rejects the dead q-prefixed industry tag-id spelling", () => {
+    const r = SearchFiltersSchema.safeParse({
+      q_organization_industry_tag_ids: ["5567cd4773696439b10b0000"],
+    });
+    expect(r.success).toBe(false);
+  });
 });
 
 describe("toApolloSearchParams — faithful mapping", () => {
@@ -94,5 +124,21 @@ describe("toApolloSearchParams — faithful mapping", () => {
     expect(out.person_titles).toEqual(["Founder"]);
     expect(out.q_organization_domains_list).toEqual(["apollo.io"]);
     expect(out.include_similar_titles).toBe(false);
+  });
+
+  it("maps native industry names to Apollo's lowercase organization_industries filter", () => {
+    const out = toApolloSearchParams({
+      organization_industries: ["Pharmaceuticals", "Biotechnology", "Medical Devices"],
+    });
+    expect(out.organization_industries).toEqual(["pharmaceuticals", "biotechnology", "medical devices"]);
+  });
+
+  it("maps real industry tag-id filters and the legacy camelCase alias to Apollo's non-q parameter name", () => {
+    const out = toApolloSearchParams({
+      organization_industry_tag_ids: ["5567cd4773696439b10b0000"],
+      qOrganizationIndustryTagIds: ["5567cd4773696439b10b1111"],
+    });
+    expect(out.organization_industry_tag_ids).toEqual(["5567cd4773696439b10b0000"]);
+    expect(out).not.toHaveProperty("q_organization_industry_tag_ids");
   });
 });
