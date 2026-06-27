@@ -12,7 +12,6 @@ import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment,
 import { assertKeySource } from "../lib/validators.js";
 import { SearchNextRequestSchema, SearchDryRunRequestSchema, EnrichRequestSchema, StatsRequestSchema, ApolloNativeSearchFiltersSchema } from "../schemas.js";
 import { buildFiltersPrompt, computeFiltersPromptVersion, APOLLO_UNDOCUMENTED_FILTERS_ENCART } from "../lib/filters-prompt.js";
-import { deepEqual } from "../lib/deep-equal.js";
 import { traceEvent } from "../lib/trace-event.js";
 // Waterfall disabled 2026-05-28 — see src/lib/waterfall.ts header for revive.
 // import {
@@ -348,9 +347,33 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
 });
 
 /**
+ * Find the cursor row for an exact (org, campaign, filter-set) tuple.
+ * Matches searchParams via Postgres jsonb equality — key-order-insensitive and
+ * array-order-sensitive, identical to the params_hash unique index semantics.
+ */
+async function findCursorForParams(
+  orgId: string,
+  campaignId: string,
+  params: Record<string, unknown>,
+): Promise<typeof apolloSearchCursors.$inferSelect | undefined> {
+  const [row] = await db
+    .select()
+    .from(apolloSearchCursors)
+    .where(
+      and(
+        eq(apolloSearchCursors.orgId, orgId),
+        eq(apolloSearchCursors.campaignId, campaignId),
+        sql`${apolloSearchCursors.searchParams} = ${JSON.stringify(params)}::jsonb`,
+      ),
+    )
+    .limit(1);
+  return row;
+}
+
+/**
  * POST /search/next - Server-managed pagination for campaign searches.
- * First call with searchParams starts a new search cursor.
- * Subsequent calls return the next batch of unseen people.
+ * First call with a filter set starts a new cursor; re-passing the same filter
+ * set resumes it. Each distinct filter set for a campaign walks its own pool.
  */
 router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
@@ -385,74 +408,92 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
 
     const { key: apolloApiKey } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/search/next" }, tracking);
 
-    // Look up existing cursor for this campaign
-    const [existingCursor] = await db
-      .select()
-      .from(apolloSearchCursors)
-      .where(
-        and(
-          eq(apolloSearchCursors.orgId, req.orgId!),
-          eq(apolloSearchCursors.campaignId, campaignId)
-        )
-      )
-      .limit(1);
-
-    // Determine search params and cursor state
+    // Resolve the cursor for THIS filter set. The cursor is keyed by
+    // (org, campaign, searchParams): each distinct filter set a campaign uses
+    // gets its OWN cursor and deep-walks its own pool independently. Re-passing
+    // the SAME filters resumes from the stored page — it never resets to page 1,
+    // and a different filter set never evicts another's cursor. (Before this fix
+    // the cursor was keyed by campaign alone, so multiple filter sets for one
+    // campaign thrashed a single cursor row back to page 1 — #129/#131 lineage.)
     let cursorSearchParams: Record<string, unknown>;
     let currentPage: number;
     let isExhausted = false;
-    let cursorId: string | undefined = existingCursor?.id;
+    let cursorId: string | undefined;
+    let cursorTotalEntries = 0;
 
     if (searchParams) {
-      if (!existingCursor) {
-        // Create new cursor
-        const [newCursor] = await db.insert(apolloSearchCursors).values({
-          orgId: req.orgId!,
-          campaignId,
-          audienceId,
-          brandIds,
-          featureSlug,
-          workflowSlug,
-          searchParams: searchParams as Record<string, unknown>,
-          currentPage: 1,
-          totalEntries: 0,
-          exhausted: false,
-        }).returning();
-        cursorId = newCursor.id;
-        cursorSearchParams = searchParams as Record<string, unknown>;
-        currentPage = 1;
-      } else if (!deepEqual(existingCursor.searchParams, searchParams)) {
-        // Params changed — reset cursor
-        await db
-          .update(apolloSearchCursors)
-          .set({
-            searchParams: searchParams as Record<string, unknown>,
+      const params = searchParams as Record<string, unknown>;
+      const matched = await findCursorForParams(req.orgId!, campaignId, params);
+
+      if (matched) {
+        cursorId = matched.id;
+        cursorSearchParams = matched.searchParams as Record<string, unknown>;
+        currentPage = matched.currentPage;
+        isExhausted = matched.exhausted;
+        cursorTotalEntries = matched.totalEntries;
+      } else {
+        // First time this filter set is seen for this campaign — start a fresh
+        // cursor at page 1. onConflictDoNothing covers the race where a
+        // concurrent request inserts the same (org, campaign, params) first.
+        const [inserted] = await db
+          .insert(apolloSearchCursors)
+          .values({
+            orgId: req.orgId!,
+            campaignId,
+            audienceId,
+            brandIds,
+            featureSlug,
+            workflowSlug,
+            searchParams: params,
             currentPage: 1,
             totalEntries: 0,
             exhausted: false,
-            updatedAt: new Date(),
           })
-          .where(eq(apolloSearchCursors.id, existingCursor.id));
-        cursorSearchParams = searchParams as Record<string, unknown>;
-        currentPage = 1;
-      } else {
-        // Same params — use existing cursor position
-        cursorSearchParams = existingCursor.searchParams as Record<string, unknown>;
-        currentPage = existingCursor.currentPage;
-        isExhausted = existingCursor.exhausted;
+          .onConflictDoNothing()
+          .returning();
+
+        if (inserted) {
+          cursorId = inserted.id;
+          currentPage = 1;
+        } else {
+          // Lost the race — re-select the winner's row.
+          const winner = await findCursorForParams(req.orgId!, campaignId, params);
+          cursorId = winner?.id;
+          currentPage = winner?.currentPage ?? 1;
+          isExhausted = winner?.exhausted ?? false;
+          cursorTotalEntries = winner?.totalEntries ?? 0;
+        }
+        cursorSearchParams = params;
       }
     } else {
-      // No searchParams — must have existing cursor
-      if (!existingCursor) {
+      // No searchParams — resume the most recently used, non-exhausted cursor
+      // for this campaign. A campaign can now have multiple cursors (one per
+      // filter set); the most-recently-updated open one is the active walk.
+      const [resume] = await db
+        .select()
+        .from(apolloSearchCursors)
+        .where(
+          and(
+            eq(apolloSearchCursors.orgId, req.orgId!),
+            eq(apolloSearchCursors.campaignId, campaignId),
+            eq(apolloSearchCursors.exhausted, false),
+          ),
+        )
+        .orderBy(desc(apolloSearchCursors.updatedAt))
+        .limit(1);
+
+      if (!resume) {
         await updateRun(searchRun.id, "completed", identity);
         return res.status(400).json({
           type: "validation",
           error: "No search cursor found for this campaign. Provide searchParams to start a new search.",
         });
       }
-      cursorSearchParams = existingCursor.searchParams as Record<string, unknown>;
-      currentPage = existingCursor.currentPage;
-      isExhausted = existingCursor.exhausted;
+      cursorId = resume.id;
+      cursorSearchParams = resume.searchParams as Record<string, unknown>;
+      currentPage = resume.currentPage;
+      isExhausted = resume.exhausted;
+      cursorTotalEntries = resume.totalEntries;
     }
 
     // If already exhausted — or the cursor has advanced past Apollo's reachable
@@ -466,10 +507,17 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
           .where(eq(apolloSearchCursors.id, cursorId));
       }
       await updateRun(searchRun.id, "completed", identity);
+      const exhaustedTotalPages = Math.min(
+        Math.ceil(cursorTotalEntries / DEFAULT_PER_PAGE),
+        APOLLO_MAX_REACHABLE_PAGE,
+      );
       return res.json({
         people: [],
         done: true,
-        totalEntries: existingCursor?.totalEntries ?? 0,
+        totalEntries: cursorTotalEntries,
+        page: currentPage,
+        totalPages: exhaustedTotalPages,
+        hasMore: false,
       });
     }
 
@@ -541,6 +589,12 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
       people: transformedPeople,
       done,
       totalEntries,
+      // page just fetched; totalPages for this filter set; hasMore lets the
+      // caller distinguish "pool exhausted" (done=true) from "more pages remain"
+      // (done=false, keep pulling) — a low-yield page is NOT exhaustion.
+      page: currentPage,
+      totalPages,
+      hasMore: !done,
     });
   } catch (error) {
     console.error("[Apollo Service][POST /search/next] ERROR:", error);

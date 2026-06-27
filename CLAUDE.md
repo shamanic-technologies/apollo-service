@@ -80,6 +80,34 @@ cleanly. The 500-page cap is Apollo's documented ceiling — it is NOT an artifi
 limit to be removed (a prior "no artificial cap" test made that mistake and caused
 prod 422→500s, #129).
 
+## `/search/next` cursor is keyed PER FILTER SET, never by campaign alone
+
+The `apollo_search_cursors` row is keyed by **(org_id, campaign_id, params_hash)**
+— `params_hash` is a DB-GENERATED column (`md5(search_params::text)`) so it always
+matches Postgres' canonical jsonb serialization (key-order-insensitive,
+array-order-sensitive). The unique index is `idx_cursors_org_campaign_params`. This
+means each distinct filter set a campaign uses gets its OWN cursor and deep-walks
+its own pool independently; re-passing the SAME filters resumes from the stored
+page (jsonb-equality lookup in `findCursorForParams`); a different filter set gets a
+NEW cursor instead of evicting the others. **DO NOT revert to a campaign-only
+unique constraint** (`idx_cursors_org_campaign`): before this fix one campaign that
+emitted multiple filter sets thrashed a single cursor back to page 1 on every param
+change, so it never read past page ~7 and campaigns auto-stopped on a FALSE "no more
+leads" with most of the pool unfetched. The route NEVER resets a cursor to page 1
+on a param change — that reset branch was deleted. New cursor inserts use
+`onConflictDoNothing()` + re-select to resolve the concurrent same-params race.
+
+The response carries `done` (true ONLY when all pages of THIS filter set are
+walked = true pool exhaustion), plus `page` / `totalPages` / `hasMore` so the caller
+distinguishes exhaustion from a low-yield page (a page with few/no servable people
+is NOT exhaustion — keep pulling while `hasMore=true`). Note `contactEmailStatus`
+(`["verified"]`) is a PHANTOM pre-filter on People Search — Apollo's search teaser
+does not verify emails; verification only happens at ENRICH time
+(`withVerifiedEmailOnly`), so a low email-yield per page is expected and must not be
+read as exhaustion. The DEEPER root cause of multiple filter sets per campaign is a
+caller (workflow) regenerating filters per run — fixed long-term by the stable
+audience path (human-service `serve-next` + `apollo_audiences`), not here.
+
 ## Apollo range filters are `{min,max}` objects, NOT strings
 
 Apollo people-search **range** params are JSON objects `{ min, max }` with

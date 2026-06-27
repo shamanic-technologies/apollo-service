@@ -38,12 +38,19 @@ vi.mock("../../src/middleware/auth.js", () => ({
 let mockCursor: Record<string, unknown> | null = null;
 const mockInsertReturning = vi.fn();
 const mockUpdateSet = vi.fn();
+// Every cursor lookup (findCursorForParams via .where().limit(), and the
+// no-params resume via .where().orderBy().limit()) resolves through this fn so
+// tests can queue per-call responses (e.g. the onConflict race).
+const mockCursorLookup = vi.fn();
 
 vi.mock("../../src/db/index.js", () => ({
   db: {
     insert: vi.fn().mockReturnValue({
       values: vi.fn().mockReturnValue({
         returning: (...args: unknown[]) => mockInsertReturning(...args),
+        onConflictDoNothing: vi.fn().mockReturnValue({
+          returning: (...args: unknown[]) => mockInsertReturning(...args),
+        }),
       }),
     }),
     update: vi.fn().mockReturnValue({
@@ -52,18 +59,16 @@ vi.mock("../../src/db/index.js", () => ({
         return { where: vi.fn().mockResolvedValue(undefined) };
       },
     }),
-    select: vi.fn().mockImplementation(() => {
-      return {
-        from: vi.fn().mockImplementation(() => ({
-          where: vi.fn().mockImplementation(() => {
-            // Cursor query — has .limit()
-            return {
-              limit: vi.fn().mockResolvedValue(mockCursor ? [mockCursor] : []),
-            };
-          }),
+    select: vi.fn().mockImplementation(() => ({
+      from: vi.fn().mockImplementation(() => ({
+        where: vi.fn().mockImplementation(() => ({
+          limit: (...args: unknown[]) => mockCursorLookup(...args),
+          orderBy: vi.fn().mockImplementation(() => ({
+            limit: (...args: unknown[]) => mockCursorLookup(...args),
+          })),
         })),
-      };
-    }),
+      })),
+    })),
     query: {
       apolloPeopleSearches: { findMany: vi.fn().mockResolvedValue([]) },
       apolloPeopleEnrichments: { findMany: vi.fn().mockResolvedValue([]) },
@@ -83,6 +88,10 @@ vi.mock("../../src/db/schema.js", () => ({
     id: { name: "id" },
     orgId: { name: "org_id" },
     campaignId: { name: "campaign_id" },
+    searchParams: { name: "search_params" },
+    paramsHash: { name: "params_hash" },
+    exhausted: { name: "exhausted" },
+    updatedAt: { name: "updated_at" },
   },
 }));
 
@@ -145,6 +154,7 @@ describe("POST /search/next", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     mockCursor = null;
+    mockCursorLookup.mockImplementation(() => Promise.resolve(mockCursor ? [mockCursor] : []));
     mockInsertReturning.mockResolvedValue([{ id: "record-1" }]);
 
     mockSearchPeople.mockResolvedValue({
@@ -229,18 +239,14 @@ describe("POST /search/next", () => {
     expect(mockSearchPeople).not.toHaveBeenCalled();
   });
 
-  // ─── Param change resets cursor ────────────────────────────────────────────
+  // ─── New filter set → own cursor at page 1, NEVER resets/evicts ────────────
 
-  it("resets cursor when searchParams differ from stored", async () => {
-    mockCursor = {
-      id: "cursor-1",
-      orgId: "org-internal-123",
-      campaignId: "campaign-1",
-      searchParams: { personTitles: ["CTO"] }, // different from what we'll send
-      currentPage: 5,
-      totalEntries: 200,
-      exhausted: false,
-    };
+  it("creates a NEW cursor at page 1 for an unseen filter set (no match) — never resets an existing one", async () => {
+    // The bug this fixes: a campaign that sends multiple distinct filter sets
+    // used to thrash ONE cursor (campaign-keyed) back to page 1 on every param
+    // change. Now an unseen filter set just gets its own fresh cursor; nothing
+    // is reset. mockCursor=null → findCursorForParams returns no match → insert.
+    mockCursor = null;
 
     await request(app)
       .post("/search/next")
@@ -251,13 +257,14 @@ describe("POST /search/next", () => {
       .send({ searchParams: SEARCH_PARAMS })
       .expect(200);
 
-    // Should reset and call Apollo with page 1
+    // Inserts a fresh cursor and fetches page 1 for the new filter set
+    expect(mockInsertReturning).toHaveBeenCalled();
     expect(mockSearchPeople).toHaveBeenCalledWith(
       "fake-apollo-key",
       expect.objectContaining({ page: 1 })
     );
-    // Should update cursor to reset
-    expect(mockUpdateSet).toHaveBeenCalledWith(
+    // No reset-to-page-1 update is ever issued (the reset branch is gone)
+    expect(mockUpdateSet).not.toHaveBeenCalledWith(
       expect.objectContaining({ currentPage: 1, exhausted: false })
     );
   });
@@ -680,5 +687,98 @@ describe("POST /search/next", () => {
     expect(res.body.error).toContain("runs-service PATCH failed: 503");
 
     errorSpy.mockRestore();
+  });
+
+  // ─── Exhaustion-vs-low-yield signal (page / totalPages / hasMore) ─────────
+
+  it("exposes page/totalPages/hasMore=true when more pages remain (done=false)", async () => {
+    // 250 entries / 100 → 3 totalPages. Reading page 2 → nextPage 3, not > 3 → not done.
+    mockCursor = {
+      id: "cursor-1",
+      orgId: "org-internal-123",
+      campaignId: "campaign-1",
+      searchParams: SEARCH_PARAMS,
+      currentPage: 2,
+      totalEntries: 250,
+      exhausted: false,
+    };
+
+    const res = await request(app)
+      .post("/search/next")
+      .set("X-API-Key", "test-key")
+      .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
+      .send({})
+      .expect(200);
+
+    expect(res.body.done).toBe(false);
+    expect(res.body.hasMore).toBe(true);
+    expect(res.body.page).toBe(2);
+    expect(res.body.totalPages).toBe(3);
+  });
+
+  it("exposes page/totalPages/hasMore=false on the exhausted early-return", async () => {
+    mockCursor = {
+      id: "cursor-1",
+      orgId: "org-internal-123",
+      campaignId: "campaign-1",
+      searchParams: SEARCH_PARAMS,
+      currentPage: 10,
+      totalEntries: 200,
+      exhausted: true,
+    };
+
+    const res = await request(app)
+      .post("/search/next")
+      .set("X-API-Key", "test-key")
+      .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
+      .send({})
+      .expect(200);
+
+    expect(res.body.done).toBe(true);
+    expect(res.body.hasMore).toBe(false);
+    expect(res.body.page).toBe(10);
+    expect(res.body.totalPages).toBe(2); // ceil(200/100)
+    expect(mockSearchPeople).not.toHaveBeenCalled();
+  });
+
+  // ─── Concurrent insert race (onConflictDoNothing → re-select winner) ───────
+
+  it("re-selects the winner's cursor when a concurrent insert wins the race", async () => {
+    // findCursorForParams (1st) → no match; insert loses the unique race
+    // (onConflictDoNothing returns []); re-select (2nd) → winner at page 7.
+    mockCursor = null;
+    mockCursorLookup
+      .mockResolvedValueOnce([]) // 1st lookup: no existing cursor
+      .mockResolvedValueOnce([
+        {
+          id: "winner-cursor",
+          orgId: "org-internal-123",
+          campaignId: "campaign-1",
+          searchParams: SEARCH_PARAMS,
+          currentPage: 7,
+          totalEntries: 5000,
+          exhausted: false,
+        },
+      ]); // 2nd lookup: the winner the concurrent request inserted
+    mockInsertReturning.mockResolvedValueOnce([]); // our insert lost the race
+
+    await request(app)
+      .post("/search/next")
+      .set("X-API-Key", "test-key")
+      .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
+      .send({ searchParams: SEARCH_PARAMS })
+      .expect(200);
+
+    // Resumes the winner's page 7, not a fresh page 1
+    expect(mockSearchPeople).toHaveBeenCalledWith(
+      "fake-apollo-key",
+      expect.objectContaining({ page: 7 })
+    );
   });
 });
