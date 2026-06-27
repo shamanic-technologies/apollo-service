@@ -70,6 +70,12 @@ function cleanRange<T extends number | string>(
 export function toApolloSearchParams(sp: Record<string, unknown>): ApolloSearchParams {
   const pick = <T>(native: string, legacy?: string): T | undefined =>
     (sp[native] ?? (legacy ? sp[legacy] : undefined)) as T | undefined;
+  const lowerStringArray = (values: unknown): string[] | undefined =>
+    Array.isArray(values)
+      ? values
+          .filter((value): value is string => typeof value === "string")
+          .map((value) => value.toLowerCase())
+      : undefined;
 
   const revenueNative =
     cleanRange<number>(sp.revenue_range) ??
@@ -80,7 +86,9 @@ export function toApolloSearchParams(sp: Record<string, unknown>): ApolloSearchP
     q_organization_keyword_tags: sp.q_organization_keyword_tags as string[] | undefined,
     organization_locations: pick<string[]>("organization_locations", "organizationLocations"),
     organization_num_employees_ranges: pick<string[]>("organization_num_employees_ranges", "organizationNumEmployeesRanges"),
-    q_organization_industry_tag_ids: sp.q_organization_industry_tag_ids as string[] | undefined,
+    organization_industries: lowerStringArray(sp.organization_industries),
+    organization_industry_tag_ids:
+      pick<string[]>("organization_industry_tag_ids", "qOrganizationIndustryTagIds"),
     q_keywords: pick<string>("q_keywords", "qKeywords"),
     person_locations: pick<string[]>("person_locations", "personLocations"),
     person_seniorities: pick<string[]>("person_seniorities", "personSeniorities"),
