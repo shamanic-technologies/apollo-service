@@ -145,6 +145,9 @@ describe("transformApolloPerson", () => {
     expect(result.organizationIndustry).toBe("Technology");
     expect(result.organizationSize).toBe("250");
     expect(result.organizationRevenueUsd).toBe("50000000");
+    // Frozen wire key: numeric USD annual revenue (human-service reads this exact key)
+    expect(result.organizationAnnualRevenue).toBe(50000000);
+    expect(typeof result.organizationAnnualRevenue).toBe("number");
 
     // Organization branding & descriptions
     expect(result.organizationWebsiteUrl).toBe("https://acme.com");
@@ -498,10 +501,26 @@ describe("transformCachedEnrichment", () => {
     expect(result.organizationId).toBe("org-1");
     expect(result.organizationRawAddress).toBe("123 Market St, San Francisco, CA 94105");
 
+    // Frozen wire key: stored decimal organization_revenue_usd → numeric USD
+    expect(result.organizationAnnualRevenue).toBe(50000000);
+    expect(typeof result.organizationAnnualRevenue).toBe("number");
+
     // Raw reconstructed from responseRaw
     expect(result.raw).toBeDefined();
     expect((result.raw as { personal_emails: string[] }).personal_emails).toEqual([
       "john.personal@gmail.com",
     ]);
+  });
+
+  it("organizationAnnualRevenue is null when stored revenue is absent", () => {
+    const row = {
+      apolloPersonId: "no-rev",
+      firstName: "Jane",
+      organizationRevenueUsd: null,
+      responseRaw: null,
+    } as unknown as Parameters<typeof transformCachedEnrichment>[1];
+
+    const result = transformCachedEnrichment("no-rev", row);
+    expect(result.organizationAnnualRevenue).toBeNull();
   });
 });
