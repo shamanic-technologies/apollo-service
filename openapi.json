@@ -1211,6 +1211,11 @@
             "type": "string",
             "nullable": true
           },
+          "organizationAnnualRevenue": {
+            "type": "number",
+            "nullable": true,
+            "description": "Organization annual revenue in USD (numeric). Sourced from the stored organization_revenue_usd; null when absent."
+          },
           "organizationWebsiteUrl": {
             "type": "string",
             "nullable": true

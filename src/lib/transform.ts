@@ -189,6 +189,7 @@ export function transformApolloPerson(person: ApolloPerson) {
     organizationIndustry: org?.industry,
     organizationSize: org?.estimated_num_employees?.toString(),
     organizationRevenueUsd: org?.annual_revenue?.toString(),
+    organizationAnnualRevenue: org?.annual_revenue ?? null,
     organizationWebsiteUrl: org?.website_url,
     organizationLogoUrl: org?.logo_url,
     organizationShortDescription: org?.short_description,
@@ -342,6 +343,8 @@ export function transformCachedEnrichment(
     organizationIndustry: row.organizationIndustry,
     organizationSize: row.organizationSize,
     organizationRevenueUsd: row.organizationRevenueUsd,
+    organizationAnnualRevenue:
+      row.organizationRevenueUsd != null ? Number(row.organizationRevenueUsd) : null,
     organizationWebsiteUrl: row.organizationWebsiteUrl,
     organizationLogoUrl: row.organizationLogoUrl,
     organizationShortDescription: row.organizationShortDescription,

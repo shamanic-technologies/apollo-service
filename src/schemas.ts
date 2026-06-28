@@ -212,6 +212,10 @@ export const PersonSchema = z
     organizationIndustry: z.string().nullable().optional(),
     organizationSize: z.string().nullable().optional(),
     organizationRevenueUsd: z.string().nullable().optional(),
+    organizationAnnualRevenue: z.number().nullable().optional().openapi({
+      description:
+        "Organization annual revenue in USD (numeric). Sourced from the stored organization_revenue_usd; null when absent.",
+    }),
     organizationWebsiteUrl: z.string().nullable().optional(),
     organizationLogoUrl: z.string().nullable().optional(),
     organizationShortDescription: z.string().nullable().optional(),
