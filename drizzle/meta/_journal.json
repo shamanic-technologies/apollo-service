@@ -155,6 +155,13 @@
       "when": 1779235200000,
       "tag": "0021_cursor_key_by_params",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1779321600000,
+      "tag": "0022_add_time_zone",
+      "breakpoints": true
     }
   ]
 }

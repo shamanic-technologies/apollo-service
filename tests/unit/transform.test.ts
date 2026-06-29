@@ -16,6 +16,7 @@ const fullPerson: ApolloPerson = {
   city: "San Francisco",
   state: "California",
   country: "United States",
+  time_zone: "America/Los_Angeles",
   seniority: "c_suite",
   departments: ["executive"],
   subdepartments: ["c_suite"],
@@ -112,6 +113,7 @@ describe("transformApolloPerson", () => {
     expect(result.city).toBe("San Francisco");
     expect(result.state).toBe("California");
     expect(result.country).toBe("United States");
+    expect(result.timeZone).toBe("America/Los_Angeles");
     expect(result.seniority).toBe("c_suite");
     expect(result.departments).toEqual(["executive"]);
     expect(result.subdepartments).toEqual(["c_suite"]);
@@ -240,6 +242,8 @@ describe("transformApolloPerson", () => {
     expect(result.personalEmails).toBeUndefined();
     expect(result.mobilePhone).toBeUndefined();
     expect(result.phoneNumbers).toBeUndefined();
+    // Absent Apollo time_zone → null (backward-compatible).
+    expect(result.timeZone).toBeNull();
   });
 
   it("should handle null email gracefully", () => {
@@ -286,6 +290,7 @@ describe("toEnrichmentDbValues", () => {
     expect(result.phoneNumbers).toHaveLength(1);
     expect(result.organizationId).toBe("org-1");
     expect(result.organizationRawAddress).toBe("123 Market St, San Francisco, CA 94105");
+    expect(result.timeZone).toBe("America/Los_Angeles");
   });
 
   it("should handle missing organization", () => {
@@ -305,6 +310,8 @@ describe("toEnrichmentDbValues", () => {
     expect(result.organizationName).toBeUndefined();
     expect(result.organizationLogoUrl).toBeUndefined();
     expect(result.organizationFundingEvents).toBeUndefined();
+    // Absent Apollo time_zone → null (backward-compatible).
+    expect(result.timeZone).toBeNull();
   });
 
   it("should default responseRaw.organization to empty object when missing", () => {
@@ -420,6 +427,7 @@ describe("transformCachedEnrichment", () => {
       city: "San Francisco",
       state: "California",
       country: "United States",
+      timeZone: "America/Los_Angeles",
       seniority: "c_suite",
       departments: ["executive"],
       subdepartments: ["c_suite"],
@@ -489,6 +497,7 @@ describe("transformCachedEnrichment", () => {
     expect(result.id).toBe("abc123");
     expect(result.firstName).toBe("John");
     expect(result.organizationLogoUrl).toBe("https://acme.com/logo.png");
+    expect(result.timeZone).toBe("America/Los_Angeles");
     expect(result.seniority).toBe("c_suite");
     expect(result.organizationFundingEvents).toHaveLength(1);
     expect(result.organizationCurrentTechnologies).toHaveLength(1);

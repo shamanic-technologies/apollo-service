@@ -71,6 +71,8 @@ export const apolloPeopleEnrichments = pgTable(
     city: text("city"),
     state: text("state"),
     country: text("country"),
+    // Recipient IANA timezone (e.g. "America/New_York") for local-time send.
+    timeZone: text("time_zone"),
     seniority: text("seniority"),
     departments: jsonb("departments"),
     subdepartments: jsonb("subdepartments"),
