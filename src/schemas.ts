@@ -193,6 +193,11 @@ export const PersonSchema = z
     city: z.string().nullable().optional(),
     state: z.string().nullable().optional(),
     country: z.string().nullable().optional(),
+    timeZone: z.string().nullable().optional().openapi({
+      description:
+        "Recipient's IANA timezone (e.g. \"America/New_York\"), sourced from Apollo's person time_zone. Null when Apollo has none. Carried downstream to schedule cold-email sends in the prospect's local business hours.",
+      example: "America/New_York",
+    }),
     seniority: z.string().nullable().optional(),
     departments: z.array(z.string()).nullable().optional(),
     subdepartments: z.array(z.string()).nullable().optional(),
@@ -838,6 +843,11 @@ const EnrichmentRecordSchema = z
     city: z.string().nullable().optional(),
     state: z.string().nullable().optional(),
     country: z.string().nullable().optional(),
+    timeZone: z.string().nullable().optional().openapi({
+      description:
+        "Recipient's IANA timezone (e.g. \"America/New_York\") for local-time send. Null when Apollo has none.",
+      example: "America/New_York",
+    }),
     seniority: z.string().nullable().optional(),
     departments: z.array(z.string()).nullable().optional(),
     subdepartments: z.array(z.string()).nullable().optional(),
