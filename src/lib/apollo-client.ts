@@ -203,6 +203,9 @@ export interface ApolloPerson {
   city?: string;
   state?: string;
   country?: string;
+  // Recipient IANA timezone (e.g. "America/New_York"), already IANA in Apollo's
+  // response; null/absent when Apollo has none. Drives local-time cold-email send.
+  time_zone?: string | null;
   // Role info
   seniority?: string;
   departments?: string[];

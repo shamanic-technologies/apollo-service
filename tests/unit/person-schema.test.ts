@@ -14,6 +14,7 @@ const apolloPerson: ApolloPerson = {
   linkedin_url: "https://linkedin.com/in/alice",
   personal_emails: ["alice@gmail.com"],
   mobile_phone: "+1-555-0123",
+  time_zone: "America/New_York",
   phone_numbers: [
     { raw_number: "+1-555-0123", sanitized_number: "+15550123", type: "mobile" },
   ],
@@ -39,6 +40,7 @@ describe("PersonSchema with full Apollo coverage", () => {
     expect(parsed.phoneNumbers).toHaveLength(1);
     expect(parsed.organizationId).toBe("org-99");
     expect(parsed.organizationRawAddress).toBe("1 Main St");
+    expect(parsed.timeZone).toBe("America/New_York");
     expect(parsed.raw).toBeDefined();
   });
 });

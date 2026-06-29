@@ -154,6 +154,8 @@ export function transformApolloPerson(person: ApolloPerson) {
     city: person.city,
     state: person.state,
     country: person.country,
+    // Recipient IANA timezone for local-time send (downstream → instantly-service).
+    timeZone: person.time_zone ?? null,
     seniority: person.seniority,
     departments: person.departments,
     subdepartments: person.subdepartments,
@@ -248,6 +250,8 @@ export function toEnrichmentDbValues(person: ApolloPerson) {
     city: person.city,
     state: person.state,
     country: person.country,
+    // Recipient IANA timezone for local-time send (persisted so cache hits keep it).
+    timeZone: person.time_zone ?? null,
     seniority: person.seniority,
     departments: person.departments,
     subdepartments: person.subdepartments,
@@ -326,6 +330,8 @@ export function transformCachedEnrichment(
     city: row.city,
     state: row.state,
     country: row.country,
+    // Recipient IANA timezone for local-time send (downstream → instantly-service).
+    timeZone: row.timeZone,
     seniority: row.seniority,
     departments: row.departments,
     subdepartments: row.subdepartments,
