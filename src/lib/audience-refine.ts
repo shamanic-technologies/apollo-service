@@ -18,14 +18,17 @@ import { toApolloSearchParams } from "./transform.js";
 import { searchPeople } from "./apollo-client.js";
 import { SearchFiltersSchema } from "../schemas.js";
 
-/** A "good" B2B audience lands in this count band. The server enforces it for
- * `confirm`. The band is sized on Apollo's free dry-run COUNT, not on served
- * records (Apollo paginates at most 50,000 — irrelevant here, the loop only
- * reads counts). */
-const TARGET_MIN = 20_000;
-const TARGET_MAX = 200_000;
-/** Real dry-run attempts (each consumes a live count). The loop relaxes
- * constraints across these to cross the 20,000 floor. */
+/** Ambition, NOT a hard floor. We WANT large audiences, so the loop aims to
+ * reach at least this many matches — but ONLY by faithful widening (loosening
+ * the model's OWN constraints), never by adding filters the request didn't ask
+ * for. If the largest FAITHFUL filter set genuinely lands below this (a real
+ * niche — e.g. US chiropractors), that smaller faithful audience is accepted;
+ * we never fabricate reach by betraying the request. The count is Apollo's free
+ * dry-run COUNT, not served records (Apollo paginates at most 50,000 — the loop
+ * only reads counts). */
+const AMBITION_MIN = 20_000;
+/** Real dry-run attempts (each consumes a live count). The loop uses these to
+ * try faithfully-broader sets while it is still below the ambition. */
 const MAX_REAL_ATTEMPTS = 6;
 /** Extra budget for unusable model output (malformed decision JSON or filters
  * rejected by the faithful schema). These do NOT consume a real attempt — a
@@ -76,58 +79,56 @@ const RefineDecisionSchema = z.object({
 
 function buildSystemPrompt(catalog: string): string {
   return [
-    "You are apollo-service's audience builder. Convert a natural-language B2B segment",
-    "into a faithful Apollo People Search filter set, then refine it using live match counts.",
+    "You are apollo-service's audience builder. Turn a natural-language B2B segment into an",
+    "Apollo People Search filter set. Use your judgment and common sense — you are smart, act it.",
     "",
-    "You MUST only use the filter fields below, with Apollo's exact accepted values.",
-    "Do NOT invent field names or values. Omit a field rather than guess. All filters AND together.",
+    "Only use the filter fields below, with Apollo's exact accepted values. Do not invent field",
+    "names or values; omit a field rather than guess. All filters AND together.",
     "",
     "=== AVAILABLE FILTERS (faithful Apollo vocabulary) ===",
     catalog,
     "=== END FILTERS ===",
     "",
-    "BUILD GUIDANCE:",
-    "- For an INDUSTRY that exists in Apollo's organization_industries enum (pharmaceuticals,",
-    "  biotechnology, medical devices, computer software, etc.), use organization_industries.",
-    "  Industry is a defining firmographic; do not absorb it into generic keywords.",
-    "- For a SECTOR / VERTICAL with no clean Apollo industry enum value (CRO, contract research",
-    "  organization, B2B SaaS, fintech, etc.), use q_organization_keyword_tags, NOT the free-text",
-    "  q_keywords. q_keywords is the single harshest volume killer (orders of magnitude fewer",
-    "  matches) and should only be used when the request needs that exact-phrase precision.",
-    "- When the request targets a ROLE, set includeSimilarTitles=true so equivalent titles are",
-    "  matched too, unless the request is explicitly title-exact.",
-    "- Map every concrete constraint the request states to its OWN structured filter: a revenue band",
-    "  -> revenue_range, an employee/headcount band -> organization_num_employees_ranges, a hiring signal",
-    "  -> organization_num_jobs_range, an industry -> organization_industries when in Apollo's enum",
-    "  or q_organization_keyword_tags when no enum value fits. Do not let one",
-    "  filter (e.g. keywords) absorb a constraint another filter expresses better.",
+    "YOUR JOB, IN ONE SENTENCE:",
+    "Among all filter sets that FAITHFULLY match what the person asked for, pick the one that",
+    "yields the LARGEST audience. Faithful first, largest second. Never trade faithfulness for size.",
     "",
-    "PRIMARY GOAL: produce an audience with AT LEAST 20,000 matches (ideal band 20,000-200,000).",
-    "An audience under 20,000 is a FAILURE unless 20,000 is genuinely unreachable. NEVER confirm",
-    "a set whose count is below 20,000.",
+    "BE FAITHFUL — read the request and respect it, to the letter:",
+    "- They give a revenue range -> keep it, don't widen it.",
+    "- They give job titles -> target those titles AND their obvious equivalents (a \"VP Sales\" also",
+    "  means \"Head of Sales\" / \"Sales Director\" — that's what includeSimilarTitles is for; set it",
+    "  true for role targeting unless they ask for exact titles). What you do NOT do is swap in a",
+    "  BROADER, off-topic title (never \"clinic owner\" for a request about chiropractors).",
+    "- They name a profession/vertical (e.g. \"chiropractor\") -> target THAT. Do NOT add a generic",
+    "  \"healthcare\" / \"medical practice\" / \"wellness\" keyword on top — that betrays the request.",
+    "- They say a geography (e.g. US) -> give that geography. Never worldwide when they said US.",
+    "- Read HOW loose they are: \"around\", \"roughly\", \"and similar\", \"-ish\" -> you may widen in that",
+    "  spirit. A strict, specific request -> stay tight.",
     "",
-    "RELAX by SHEDDING THE HIGHEST-VOLUME-COST, LOWEST-SIGNAL CONSTRAINTS FIRST. When a filter set",
-    "returns < 20,000 you MUST loosen and test again — relax in THIS order:",
-    "  1. Free-text q_keywords and technology UIDs FIRST. They crush the match count for very little",
-    "     targeting value (q_keywords=\"SaaS\" returns ~86 matches; q_organization_keyword_tags=",
-    "     [\"software\"] returns ~128,274). Express any non-taxonomy sector/vertical with",
-    "     q_organization_keyword_tags, NOT q_keywords — only fall back to q_keywords/technology",
-    "     when the request needs that precision.",
-    "  2. THEN, only if still below 20,000, loosen ONE secondary qualifier.",
-    "PRESERVE the user's DEFINING firmographics & demographics — revenue range, employee range, job",
-    "titles, industry / keyword tags, geography, seniority. These are what the user cares about MOST.",
-    "Drop one of THESE only as a LAST resort, and only the single least-defining one. NEVER volunteer",
-    "to drop revenue or headcount before the keyword/technology constraints are gone.",
+    "KEYWORDS ARE YOUR MOST DANGEROUS TOOL — use them consciously, rarely:",
+    "- A keyword group ANDs with everything else, so adding a keyword can ONLY shrink the audience.",
+    "  If the job titles already capture the profession (\"Chiropractor\"), adding a \"chiropractic\"",
+    "  keyword is a REDUNDANT filter that just removes people for nothing. Don't.",
+    "- Free-text q_keywords is the single harshest volume killer (q_keywords=\"SaaS\" ~86 matches vs",
+    "  q_organization_keyword_tags=[\"software\"] ~128,274). Prefer a structured filter",
+    "  (organization_industries when Apollo has the enum value, else q_organization_keyword_tags)",
+    "  and only reach for q_keywords/technology UIDs when the request truly needs that precision.",
+    "- Add a keyword ONLY when no structured filter (title, industry, seniority, geography) already",
+    "  expresses the idea.",
     "",
-    "Too many (> 200,000) -> add back / tighten constraints toward the request.",
+    "AIM BIG, BUT STAY FAITHFUL:",
+    "- We want reach — aim for a large audience (ideally at least ~20,000 matches).",
+    "- Reach that ambition by LOOSENING YOUR OWN over-constraints — drop a redundant keyword, turn on",
+    "  includeSimilarTitles, remove a filter the request never asked for. NEVER by adding a broader,",
+    "  off-topic filter (that inflates the count with the wrong people).",
+    "- If the largest FAITHFUL set still lands below the ambition (a genuine niche — e.g. US",
+    "  chiropractors), that is fine: keep the faithful set. A smaller true audience beats a big fake",
+    "  one. Do not manufacture size by betraying the request.",
     "",
     "Each turn, reply with ONLY a JSON object (no prose, no code fences):",
     '{ "action": "test" | "confirm", "filters": { ...faithful filters... }, "reasoning": "<one short line>" }',
     '- "test": you want the live count for this filter set before deciding.',
-    '- "confirm": this set is good (count >= 20,000 and <= 200,000) — stop and persist it.',
-    "Only confirm when the count is >= 20,000. If you still cannot reach 20,000 after relaxing every",
-    "non-essential constraint, spend your LAST turn testing your BROADEST set that still honors the",
-    "core of the request, so the closest-possible audience is captured.",
+    '- "confirm": this is your largest FAITHFUL set — stop and persist it.',
   ].join("\n");
 }
 
@@ -156,52 +157,45 @@ function buildUserMessage(
   }
   lines.push("");
 
-  // Escalate when the most recent real count is still below the 20,000 floor:
-  // tell the model exactly how many tests remain and force a constraint drop.
+  // Below the ambition and still have budget: nudge the model to try a
+  // FAITHFULLY-broader set — by loosening its OWN constraints, never by adding
+  // off-topic filters. Once no faithful widening is left, it confirms its
+  // largest faithful set (which may be below the ambition — that's allowed).
   const lastValid = [...history]
     .reverse()
     .find((h): h is RefineIteration & { count: number } => h.action !== "invalid" && h.count !== null);
   const remaining = MAX_REAL_ATTEMPTS - realAttemptsUsed;
-  if (lastValid && lastValid.count < TARGET_MIN) {
+  if (lastValid && lastValid.count < AMBITION_MIN) {
     lines.push(
-      `Latest count ${lastValid.count} is BELOW the 20,000 floor. You have ${remaining} test(s) left. ` +
-        "SHED the highest-volume-cost constraint NOW — drop q_keywords / technology UIDs FIRST " +
-        "(swap a sector to q_organization_keyword_tags if not already), and PRESERVE revenue, " +
-        "employee range, titles, industry, geography, seniority. Test a broader set. Do NOT confirm below 20,000.",
+      `Latest faithful count is ${lastValid.count}, below the ~20,000 we aim for. You have ${remaining} test(s) left. ` +
+        "Try a FAITHFULLY-broader set: drop a redundant keyword (one the job titles already cover), " +
+        "turn on includeSimilarTitles, or remove a constraint the request never asked for. Do NOT add a " +
+        "broader, off-topic filter (no generic \"healthcare\"/\"wellness\" keyword, no worldwide) — that betrays " +
+        "the request. If you cannot widen without betraying it, confirm your largest faithful set as-is.",
     );
     if (remaining <= 1) {
       lines.push(
-        "This is your LAST test — submit your BROADEST set that still honors the core of the " +
-          "request, to capture the closest-possible audience.",
+        "This is your LAST test — submit the LARGEST set that still faithfully matches the request.",
       );
     }
   } else {
-    lines.push("Refine further (action \"test\") or finalize (action \"confirm\", only if count >= 20,000).");
+    lines.push("Refine further (action \"test\") or finalize (action \"confirm\") with your largest faithful set.");
   }
   return lines.join("\n");
 }
 
-/** Pick the best tried filter set when the loop exhausts without a confirm. */
+/** The largest faithful set tried (every tried set is faithful — the schema
+ * validated it and the model only proposes on-request filters). Objective =
+ * max count among positive-match sets. Used both when the loop exhausts and as
+ * a guardrail so an early `confirm` never returns a set smaller than one we've
+ * already seen. */
 function pickBest(history: RefineIteration[]): { filters: Record<string, unknown>; count: number } | null {
-  const valid = history.filter(
+  const positive = history.filter(
     (h): h is RefineIteration & { filters: Record<string, unknown>; count: number } =>
-      h.action !== "invalid" && h.filters !== null && h.count !== null,
+      h.action !== "invalid" && h.filters !== null && h.count !== null && h.count > 0,
   );
-  if (valid.length === 0) return null;
-  const inBand = valid.filter((h) => isInTargetBand(h.count));
-  if (inBand.length > 0) {
-    // Broadest coverage within band.
-    return inBand.reduce((a, b) => (b.count > a.count ? b : a));
-  }
-  const positive = valid.filter((h) => h.count > 0);
   if (positive.length === 0) return null;
-  // Otherwise closest to the band (distance to nearest edge).
-  const dist = (c: number) => (c < TARGET_MIN ? TARGET_MIN - c : c - TARGET_MAX);
-  return positive.reduce((a, b) => (dist(b.count) < dist(a.count) ? b : a));
-}
-
-function isInTargetBand(count: number): boolean {
-  return count >= TARGET_MIN && count <= TARGET_MAX;
+  return positive.reduce((a, b) => (b.count > a.count ? b : a));
 }
 
 export async function refineAudience(input: RefineInput): Promise<RefineResult> {
@@ -280,13 +274,18 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
     const validFilters = filterCheck.data as Record<string, unknown>;
     const count = await dryRunCount(input.apolloApiKey, validFilters);
 
-    if (action === "confirm" && isInTargetBand(count)) {
+    if (action === "confirm" && count > 0) {
+      // Trust the model's confirm: it is the fidelity arbiter and the prompt asks
+      // it to confirm its LARGEST faithful set. Any positive-match faithful set is
+      // acceptable — no count floor. (A deliberate narrowing from a broader tested
+      // set is intentional: the broader one was less faithful.)
       trace.push({ iteration: step, action: "confirm", filters: validFilters, count, reasoning: reasoning ?? "" });
       return { filters: validFilters, count, status: "confirmed", trace };
     }
 
     trace.push({
       iteration: step,
+      // A confirm with zero matches is unusable — treat it as a test and keep going.
       action: action === "confirm" ? "rejected_confirm" : "test",
       filters: validFilters,
       count,

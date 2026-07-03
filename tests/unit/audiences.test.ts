@@ -256,7 +256,7 @@ describe("Apollo audience endpoints", () => {
     expect(state.inserted).toBeNull();
   });
 
-  it("prompts the model with a hard >= 20,000 floor and relaxation order", async () => {
+  it("prompts the model with the faithful-then-largest objective, no forced floor", async () => {
     await request(app)
       .post("/audiences/suggest-from-segment")
       .set(HEADERS)
@@ -267,17 +267,23 @@ describe("Apollo audience endpoints", () => {
     // Refine loop runs on flash (Gemini 2.5 Flash) with thinking fully off.
     expect(opts.model).toBe("flash");
     expect(opts.disableThinking).toBe(true);
-    expect(opts.systemPrompt).toContain("AT LEAST 20,000");
-    expect(opts.systemPrompt).toContain("NEVER confirm");
-    expect(opts.systemPrompt).toContain("SHEDDING THE HIGHEST-VOLUME-COST");
+    // Objective: largest FAITHFUL set; ambition of ~20,000 but faithfulness wins.
+    expect(opts.systemPrompt).toContain("LARGEST audience");
+    expect(opts.systemPrompt).toContain("Never trade faithfulness for size");
+    expect(opts.systemPrompt).toContain("at least ~20,000");
+    // Faithfulness examples that kill the healthcare-dilution / worldwide bugs.
+    expect(opts.systemPrompt).toContain("healthcare");
+    // The old carcan is GONE — no "FAILURE below" language that forced betrayal.
+    expect(opts.systemPrompt).not.toContain("is a FAILURE");
+    expect(opts.systemPrompt).not.toContain("NEVER confirm");
   });
 
-  it("keeps testing past a < 20,000 set, relaxing until it crosses the floor, then confirms", async () => {
-    // Three narrow sets all < 20,000, then a relaxed set that crosses 20,000 and confirms.
+  it("nudges toward a FAITHFULLY-broader set below the ambition, then confirms it", async () => {
+    // Two narrow faithful sets below ~20,000, then a faithfully-broader set the model confirms.
     mockChatComplete
-      .mockResolvedValueOnce({ json: { action: "test", filters: { personTitles: ["Head of Sales"], revenueRange: ["10000000,100000000"] }, reasoning: "narrow" }, content: "", tokensInput: 1, tokensOutput: 1, model: "m" })
-      .mockResolvedValueOnce({ json: { action: "test", filters: { personTitles: ["Head of Sales"], organizationNumEmployeesRanges: ["50,500"] }, reasoning: "drop revenue" }, content: "", tokensInput: 1, tokensOutput: 1, model: "m" })
-      .mockResolvedValueOnce({ json: { action: "confirm", filters: { personTitles: ["Head of Sales"] }, reasoning: "broaden, drop headcount" }, content: "", tokensInput: 1, tokensOutput: 1, model: "m" });
+      .mockResolvedValueOnce({ json: { action: "test", filters: { personTitles: ["Head of Sales"], qKeywords: "SaaS" }, reasoning: "narrow" }, content: "", tokensInput: 1, tokensOutput: 1, model: "m" })
+      .mockResolvedValueOnce({ json: { action: "test", filters: { personTitles: ["Head of Sales"], organizationNumEmployeesRanges: ["50,500"] }, reasoning: "drop keyword" }, content: "", tokensInput: 1, tokensOutput: 1, model: "m" })
+      .mockResolvedValueOnce({ json: { action: "confirm", filters: { personTitles: ["Head of Sales"] }, reasoning: "broadest faithful" }, content: "", tokensInput: 1, tokensOutput: 1, model: "m" });
     mockSearchPeople
       .mockResolvedValueOnce({ total_entries: 136, people: [] })
       .mockResolvedValueOnce({ total_entries: 480, people: [] })
@@ -286,17 +292,40 @@ describe("Apollo audience endpoints", () => {
     const res = await request(app)
       .post("/audiences/suggest-from-segment")
       .set(HEADERS)
-      .send({ name: "n", description: "Heads of Sales at SaaS 50-500 $10-100M", brandId: null })
+      .send({ name: "n", description: "Heads of Sales at SaaS 50-500", brandId: null })
       .expect(200);
 
     expect(mockChatComplete).toHaveBeenCalledTimes(3);
     expect(res.body.count).toBe(25000);
     expect(state.inserted.status).toBe("confirmed");
 
-    // The escalation nudge fires on the 2nd+ turn once a < 20,000 count is on record.
+    // The nudge fires on the 2nd+ turn once a below-ambition count is on record,
+    // steering toward FAITHFUL widening (never off-topic filters).
     const secondTurnMsg = mockChatComplete.mock.calls[1][0].message as string;
-    expect(secondTurnMsg).toContain("BELOW the 20,000 floor");
-    expect(secondTurnMsg).toContain("SHED the highest-volume-cost constraint");
+    expect(secondTurnMsg).toContain("below the ~20,000 we aim for");
+    expect(secondTurnMsg).toContain("FAITHFULLY-broader set");
+    expect(secondTurnMsg).not.toContain("FAILURE");
+  });
+
+  it("confirms and persists a genuinely niche faithful audience below the ambition", async () => {
+    // US chiropractors ~ a few thousand: a faithful set below ~20,000 must be
+    // ACCEPTED as-is, never rejected or inflated with off-topic keywords.
+    mockChatComplete.mockResolvedValueOnce({
+      json: { action: "confirm", filters: { personTitles: ["Chiropractor"], personLocations: ["United States"] }, reasoning: "faithful niche" },
+      content: "", tokensInput: 1, tokensOutput: 1, model: "m",
+    });
+    mockSearchPeople.mockResolvedValueOnce({ total_entries: 3850, people: [] });
+
+    const res = await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "US Chiropractors", description: "Licensed chiropractors in the US", brandId: null })
+      .expect(200);
+
+    expect(mockChatComplete).toHaveBeenCalledTimes(1);
+    expect(res.body.count).toBe(3850);
+    expect(res.body.filters).toEqual({ personTitles: ["Chiropractor"], personLocations: ["United States"] });
+    expect(state.inserted.status).toBe("confirmed");
   });
 
   it("invalid model output does not consume the 6 real-attempt budget", async () => {

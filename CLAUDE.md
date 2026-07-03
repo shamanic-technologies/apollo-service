@@ -29,21 +29,41 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
   not in human-service. It calls **chat-service** for the LLM (chat-service owns
   the LLM cost — apollo-service declares NONE for it) and uses the FREE Apollo
   dry-run (per_page=1, zero credits) for live count feedback.
-- **Refine-prompt priority discipline — NEVER name the user's defining firmographics
-  as "least important / droppable".** The relaxation guidance in `buildSystemPrompt` /
-  `buildUserMessage` must NOT seed the model with examples like "drop a revenue or
-  headcount band" — naming a constraint as low-priority biases the LLM to discard
-  exactly the filters the user cares about MOST. The user's defining filters
-  (revenue range, employee/headcount range, job titles, industry/keyword tags,
-  geography, seniority) are PRESERVED to last resort; relaxation sheds the
-  highest-volume-cost / lowest-signal constraints FIRST — free-text `q_keywords` +
-  technology UIDs (`q_keywords="SaaS"` → ~86 vs `q_organization_keyword_tags=["software"]`
-  → ~128k). Build guidance also: prefer `q_organization_keyword_tags` over `q_keywords`
-  for a sector, default `includeSimilarTitles=true` for role targeting, and map each
-  stated constraint to its own structured filter (revenue→`revenueRange`,
-  headcount→`organizationNumEmployeesRanges`, hiring→`organization_num_jobs_range`).
-  (Cost 2026-06-25: prompt example "a revenue or headcount band" made the builder drop
-  revenue + reach for the volume-killer `q_keywords` → 14–67-match audiences. v0.24.13.)
+- **Refine-prompt objective — "largest audience AMONG the faithful sets", faithful
+  first, size second. NO hard count floor.** `buildSystemPrompt` / `buildUserMessage`
+  optimize ONE thing: among all filter sets that faithfully match the request, keep the
+  one with the biggest dry-run count. Faithfulness is the hard constraint; size is the
+  objective inside it — never traded away. Concrete rules baked into the prompt:
+  - **Be faithful.** Respect the stated revenue range, job titles (+ obvious
+    equivalents via `includeSimilarTitles`), profession, industry, geography, seniority
+    — as given. Never swap in a BROADER off-topic filter: no generic `healthcare` /
+    `medical practice` / `wellness` keyword for a "chiropractor" request, no
+    `clinic owner` for chiropractors, no worldwide when US was asked. Read the request's
+    LOOSENESS too ("around" / "roughly" / "and similar" → may widen; strict → stay tight).
+  - **Keywords are the most dangerous tool** — a keyword group ANDs with everything, so
+    it can ONLY shrink. NEVER add a keyword that duplicates a concept the job titles
+    already capture (title `Chiropractor` + keyword `chiropractic` = redundant, removes
+    people for nothing). And `q_keywords` is the harshest volume killer (`q_keywords="SaaS"`
+    → ~86 vs `q_organization_keyword_tags=["software"]` → ~128k) — prefer a structured
+    filter, reach for `q_keywords`/tech UIDs only when the request needs that precision.
+  - **`AMBITION_MIN` (~20,000) is an AMBITION, not a floor.** We want reach, so the loop
+    AIMS for a large audience — but reaches it ONLY by loosening the model's OWN
+    over-constraints (drop a redundant keyword, enable `includeSimilarTitles`, remove a
+    filter the request never stated), NEVER by adding a broader off-topic filter. If the
+    largest FAITHFUL set genuinely lands below the ambition (real niche — US
+    chiropractors ≈ a few thousand), that smaller faithful audience is CONFIRMED as-is.
+    `confirm` accepts any positive-match faithful set; `pickBest` (exhaust fallback) =
+    max count among faithful sets.
+  - **DO NOT reintroduce the hard floor.** A prior design forced `count >= 20,000`
+    ("under 20,000 is a FAILURE / NEVER confirm below") — that MADE the model inflate
+    audiences with off-topic keywords (`healthcare` piled onto chiropractic → wrong
+    people) or pile redundant keywords that only shrank. The floor forced the model to
+    betray the request. Removed 2026-07-03 — keep it removed.
+  (Costs: 2026-06-25 prompt example "drop a revenue or headcount band" made the builder
+  drop revenue + reach for volume-killer `q_keywords` → 14–67-match audiences, v0.24.13.
+  2026-07-03 the 20k floor inflated a "chiropractic clinics" audience with `health care`
+  and shrank "US chiropractors" with a redundant `chiropractic` keyword — floor deleted,
+  objective rewritten to faithful-first / largest-among-faithful.)
 - **Endpoints:** `POST /audiences/suggest-from-segment`, `GET /audiences/{id}`,
   `POST /audiences/{id}/dry-run`. A serve-next-by-audience-id endpoint is a
   later wave (designed with human-service) — do NOT build it here yet.
