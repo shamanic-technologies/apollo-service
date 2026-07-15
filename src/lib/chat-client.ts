@@ -12,6 +12,8 @@
  * cost locally; it just calls chat-service and passes the relevant headers.
  */
 
+import { fetchWithRetry } from "./fetch-retry.js";
+
 export type ChatProvider = "google" | "anthropic";
 export type ChatModel = "flash" | "flash-lite" | "flash-pro" | "pro" | "sonnet" | "haiku" | "opus";
 
@@ -109,7 +111,13 @@ export async function chatComplete(
     ...(!isPlatform && params.maxTokens !== undefined && { maxTokens: params.maxTokens }),
   };
 
-  const res = await fetch(`${baseUrl()}${path}`, {
+  // Transient connect/socket drops to chat-service (UND_ERR_SOCKET /
+  // "other side closed" / ECONNRESET on a reused-then-closed keep-alive socket
+  // or a Neon cold-start sibling) are retried with bounded backoff. A completed
+  // HTTP response — including a 5xx — is NOT retried; it is a real answer and is
+  // handled below. A chat completion is idempotent, so retrying a thrown connect
+  // error is write-safe.
+  const res = await fetchWithRetry(`${baseUrl()}${path}`, {
     method: "POST",
     headers: isPlatform ? buildPlatformHeaders() : buildHeaders(tracking),
     body: JSON.stringify(body),
