@@ -105,4 +105,60 @@ describe("chatComplete endpoint routing", () => {
       /POST \/internal\/platform-complete returned 502: boom/,
     );
   });
+
+  it("retries a transient UND_ERR_SOCKET / 'other side closed' drop, then succeeds", async () => {
+    // First call throws the sibling connection-drop transient; retry succeeds.
+    const socketDrop = Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" }),
+    });
+    let calls = 0;
+    const fetchMock = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) throw socketDrop;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => OK_RESPONSE,
+        text: async () => JSON.stringify(OK_RESPONSE),
+      };
+    }) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await chatComplete(PARAMS, { orgId: "org-1", runId: "run-1" });
+    expect(res.model).toBe("claude-sonnet");
+    expect(calls).toBe(2);
+  });
+
+  it("does NOT retry a completed 5xx HTTP response (real answer, fails loud once)", async () => {
+    let calls = 0;
+    const fetchMock = vi.fn(async () => {
+      calls += 1;
+      return { ok: false, status: 503, json: async () => ({}), text: async () => "unavailable" };
+    }) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(chatComplete(PARAMS, { orgId: "org-1", runId: "run-1" })).rejects.toThrow(
+      /returned 503: unavailable/,
+    );
+    // A returned Response is never retried — exactly one call.
+    expect(calls).toBe(1);
+  });
+
+  it("propagates a persistent transient failure after exhausting retries (fail loud)", async () => {
+    const socketDrop = Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
+    });
+    let calls = 0;
+    const fetchMock = vi.fn(async () => {
+      calls += 1;
+      throw socketDrop;
+    }) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(chatComplete(PARAMS, { orgId: "org-1", runId: "run-1" })).rejects.toThrow(
+      /fetch failed/,
+    );
+    // Initial attempt + 3 bounded retries.
+    expect(calls).toBe(4);
+  });
 });
