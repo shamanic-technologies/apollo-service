@@ -459,7 +459,7 @@
                 "unavailable"
               ]
             },
-            "description": "Filter by email verification status. Valid values: verified, unverified, likely to engage, unavailable.",
+            "description": "Filter by email verification status. Valid values: verified, unverified, likely to engage, unavailable. NOTE: this service FORCES contact_email_status:['verified'] on every Apollo people-search (count, serve, refine) — verified-only is the standard, so any value passed here is overridden. See VERIFIED_EMAIL_STATUS in apollo-client.",
             "example": [
               "verified"
             ]
@@ -1694,7 +1694,7 @@
                 "unavailable"
               ]
             },
-            "description": "Filter by email verification status. Valid values: verified, unverified, likely to engage, unavailable.",
+            "description": "Filter by email verification status. Valid values: verified, unverified, likely to engage, unavailable. NOTE: this service FORCES contact_email_status:['verified'] on every Apollo people-search (count, serve, refine) — verified-only is the standard, so any value passed here is overridden. See VERIFIED_EMAIL_STATUS in apollo-client.",
             "example": [
               "verified"
             ]
@@ -3528,7 +3528,7 @@
                 "unavailable"
               ]
             },
-            "description": "Filter by email verification status. Valid values: verified, unverified, likely to engage, unavailable.",
+            "description": "Filter by email verification status. Valid values: verified, unverified, likely to engage, unavailable. NOTE: this service FORCES contact_email_status:['verified'] on every Apollo people-search (count, serve, refine) — verified-only is the standard, so any value passed here is overridden. See VERIFIED_EMAIL_STATUS in apollo-client.",
             "example": [
               "verified"
             ]

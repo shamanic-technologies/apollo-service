@@ -104,6 +104,29 @@ snapshots), so a missing snapshot does not affect boot. Do NOT write to the
 journal/sql via a hooked shell redirect (`>`) — use the editor or `python3`
 direct file write (RTK truncation gotcha).
 
+## Verified-email is the standard for EVERY Apollo people operation
+
+This service only ever contacts people with an Apollo SMTP-**verified** email
+(non-verified results are dropped at enrichment via `withVerifiedEmailOnly`). So
+"verified-email only" is the STANDARD for every people-search it performs — the
+count/dry-run, the serve/`search/next` pagination, AND the audience refine/creation
+sizing loop. `searchPeople` (`src/lib/apollo-client.ts`) FORCES
+`contact_email_status:["verified"]` on the request body of EVERY people-search,
+overriding any caller-supplied value (`VERIFIED_EMAIL_STATUS`). Do NOT bypass this
+by calling Apollo people-search outside `searchPeople`.
+
+- **Apollo People Search HONORS this filter — it is NOT phantom.** Verified live
+  2026-07-21 on `mixed_people/api_search`: `Chiropractor + United States` = 16,220
+  total → 4,068 with `["verified"]` (~25% verified-reachable). An earlier note here
+  called it a phantom pre-filter; that was wrong — the count really drops. So a fresh
+  count/dry-run on an existing audience filter returns the verified-reachable number,
+  not the demographic total (which fixes the inflated "remaining to contact").
+- **Refine band is calibrated to the verified scale.** Because the loop's dry-runs are
+  now verified-only, their counts are ~1/3 of the old demographic totals, so
+  `AMBITION_MIN` (`src/lib/audience-refine.ts`) is **7,000**, not 20,000. Do NOT bump it
+  back — a 20,000 ambition on verified-scale counts would make the loop over-relax the
+  filters chasing an unreachable band and produce broader, looser audiences.
+
 ## Apollo pagination hard cap (DO NOT remove the cursor clamp)
 
 Apollo People Search serves at most **50,000 records** via pagination
@@ -135,11 +158,10 @@ on a param change — that reset branch was deleted. New cursor inserts use
 The response carries `done` (true ONLY when all pages of THIS filter set are
 walked = true pool exhaustion), plus `page` / `totalPages` / `hasMore` so the caller
 distinguishes exhaustion from a low-yield page (a page with few/no servable people
-is NOT exhaustion — keep pulling while `hasMore=true`). Note `contactEmailStatus`
-(`["verified"]`) is a PHANTOM pre-filter on People Search — Apollo's search teaser
-does not verify emails; verification only happens at ENRICH time
-(`withVerifiedEmailOnly`), so a low email-yield per page is expected and must not be
-read as exhaustion. The DEEPER root cause of multiple filter sets per campaign is a
+is NOT exhaustion — keep pulling while `hasMore=true`). Every people-search now
+FORCES `contact_email_status:["verified"]` (see "Verified-email is the standard"
+below), so the pool served is already the verified-reachable subset and per-page
+email-yield is high. The DEEPER root cause of multiple filter sets per campaign is a
 caller (workflow) regenerating filters per run — fixed long-term by the stable
 audience path (human-service `serve-next` + `apollo_audiences`), not here.
 
