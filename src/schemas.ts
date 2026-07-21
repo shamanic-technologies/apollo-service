@@ -370,7 +370,7 @@ export const ApolloNativeSearchFiltersSchema = z
       example: ["apollo.io", "google.com"],
     }),
     contact_email_status: z.array(z.enum(VALID_EMAIL_STATUSES)).optional().openapi({
-      description: "Filter by email verification status. Valid values: verified, unverified, likely to engage, unavailable.",
+      description: "Filter by email verification status. Valid values: verified, unverified, likely to engage, unavailable. NOTE: this service FORCES contact_email_status:['verified'] on every Apollo people-search (count, serve, refine) — verified-only is the standard, so any value passed here is overridden. See VERIFIED_EMAIL_STATUS in apollo-client.",
       example: ["verified"],
     }),
     organization_ids: z.array(z.string().min(1)).optional().openapi({
@@ -501,12 +501,12 @@ const LegacySearchFilterAliasesSchema = z.object({
   qKeywords: z.string().optional(),
   personLocations: z.array(z.string().min(1)).optional(),
   personSeniorities: z.array(z.enum(VALID_SENIORITIES)).optional(),
-  // NOTE: contactEmailStatus is a PHANTOM pre-filter on People Search. Apollo's
-  // search teaser does NOT verify emails, so ["verified"] does not meaningfully
-  // narrow search results to deliverable contacts — verification only happens at
-  // ENRICH time (/enrich applies withVerifiedEmailOnly, the real SMTP-verified
-  // gate). Kept for API faithfulness, but callers must NOT treat it as a
-  // guarantee of verified emails in /search or /search/next output.
+  // NOTE: Apollo's People Search HONORS contact_email_status — it is NOT a
+  // phantom filter. Verified live 2026-07-21: "Chiropractor + US" 16,220 total
+  // → 4,068 with ["verified"] (~25%). This service now FORCES ["verified"] on
+  // every people-search (searchPeople, see VERIFIED_EMAIL_STATUS), so counts +
+  // serve pagination reflect the reachable pool. This alias field is kept for
+  // API faithfulness but is OVERRIDDEN — verified-only is the standard.
   contactEmailStatus: z.array(z.enum(VALID_EMAIL_STATUSES)).optional(),
   qOrganizationDomains: z.array(z.string().min(1)).optional(),
   currentlyUsingAnyOfTechnologyUids: z.array(z.string().min(1)).optional(),
