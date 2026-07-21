@@ -261,6 +261,24 @@ export interface ApolloMatchResponse {
 export const APOLLO_PLACEHOLDER_EMAIL = "email_not_unlocked@domain.com";
 
 /**
+ * The ONLY email status this service will ever act on. Apollo SMTP-verified
+ * ("verified") emails are the sole reachable pool — every other status is
+ * dropped at enrichment (`withVerifiedEmailOnly`). So verified-only is the
+ * STANDARD for every people-search this service performs: the count/dry-run,
+ * the serve pagination, and the audience-refine sizing loop. `searchPeople`
+ * FORCES this on the request body (overriding any caller-supplied
+ * `contact_email_status`), so a count reflects the actually-contactable
+ * audience — not the demographic total — and pagination stops walking people
+ * we can never email.
+ *
+ * This is NOT a phantom filter: Apollo's People Search teaser honors it and
+ * cuts the total. Verified live 2026-07-21 on `mixed_people/api_search`:
+ * "Chiropractor + United States" = 16,220 total → 4,068 with
+ * contact_email_status:["verified"] (~25% verified-reachable).
+ */
+export const VERIFIED_EMAIL_STATUS = ["verified"] as const;
+
+/**
  * True only when Apollo SMTP-confirmed the email (`email_status === "verified"`).
  * Apollo bills 1 credit ONLY for verified emails; every other status it returns —
  * extrapolated (UI "Guessed"), unverified, catch_all, update_required, user_managed,
@@ -306,6 +324,11 @@ export async function searchPeople(
     },
     body: JSON.stringify({
       ...params,
+      // Verified-email-only is the STANDARD for every people-search (count,
+      // serve, refine). FORCE it here — overriding any caller value — so a
+      // count reflects the reachable pool and pagination never walks people we
+      // cannot email. See VERIFIED_EMAIL_STATUS.
+      contact_email_status: [...VERIFIED_EMAIL_STATUS],
       page: params.page || 1,
       per_page: params.per_page || 25,
     }),

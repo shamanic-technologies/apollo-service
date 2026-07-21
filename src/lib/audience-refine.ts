@@ -25,8 +25,16 @@ import { SearchFiltersSchema } from "../schemas.js";
  * niche — e.g. US chiropractors), that smaller faithful audience is accepted;
  * we never fabricate reach by betraying the request. The count is Apollo's free
  * dry-run COUNT, not served records (Apollo paginates at most 50,000 — the loop
- * only reads counts). */
-const AMBITION_MIN = 20_000;
+ * only reads counts).
+ *
+ * CALIBRATED TO THE VERIFIED-REACHABLE SCALE. Every dry-run now forces
+ * contact_email_status:["verified"] (see apollo-client VERIFIED_EMAIL_STATUS),
+ * so the counts the loop reads are the actually-contactable pool — roughly a
+ * third of the old demographic total (verified rate ~25-33%). The ambition was
+ * ~20,000 on the OLD unfiltered counts; on the verified scale that is ~7,000.
+ * Do NOT bump it back to 20,000 — that would make the loop over-relax the
+ * filters chasing an unreachable band and produce broader, looser audiences. */
+const AMBITION_MIN = 7_000;
 /** Real dry-run attempts (each consumes a live count). The loop uses these to
  * try faithfully-broader sets while it is still below the ambition. */
 const MAX_REAL_ATTEMPTS = 6;
@@ -117,7 +125,9 @@ function buildSystemPrompt(catalog: string): string {
     "  expresses the idea.",
     "",
     "AIM BIG, BUT STAY FAITHFUL:",
-    "- We want reach — aim for a large audience (ideally at least ~20,000 matches).",
+    "- We want reach — aim for a large audience (ideally at least ~7,000 matches).",
+    "  (Counts are the VERIFIED-EMAIL-REACHABLE pool — only people we can actually",
+    "  contact — so a healthy audience here is smaller than a raw demographic total.)",
     "- Reach that ambition by LOOSENING YOUR OWN over-constraints — drop a redundant keyword, turn on",
     "  includeSimilarTitles, remove a filter the request never asked for. NEVER by adding a broader,",
     "  off-topic filter (that inflates the count with the wrong people).",
@@ -167,7 +177,7 @@ function buildUserMessage(
   const remaining = MAX_REAL_ATTEMPTS - realAttemptsUsed;
   if (lastValid && lastValid.count < AMBITION_MIN) {
     lines.push(
-      `Latest faithful count is ${lastValid.count}, below the ~20,000 we aim for. You have ${remaining} test(s) left. ` +
+      `Latest faithful count is ${lastValid.count}, below the ~7,000 we aim for. You have ${remaining} test(s) left. ` +
         "Try a FAITHFULLY-broader set: drop a redundant keyword (one the job titles already cover), " +
         "turn on includeSimilarTitles, or remove a constraint the request never asked for. Do NOT add a " +
         "broader, off-topic filter (no generic \"healthcare\"/\"wellness\" keyword, no worldwide) — that betrays " +

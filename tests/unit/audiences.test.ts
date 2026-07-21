@@ -267,10 +267,14 @@ describe("Apollo audience endpoints", () => {
     // Refine loop runs on flash (Gemini 2.5 Flash) with thinking fully off.
     expect(opts.model).toBe("flash");
     expect(opts.disableThinking).toBe(true);
-    // Objective: largest FAITHFUL set; ambition of ~20,000 but faithfulness wins.
+    // Objective: largest FAITHFUL set; ambition recalibrated to the verified
+    // scale (~7,000, not 20,000) but faithfulness wins.
     expect(opts.systemPrompt).toContain("LARGEST audience");
     expect(opts.systemPrompt).toContain("Never trade faithfulness for size");
-    expect(opts.systemPrompt).toContain("at least ~20,000");
+    expect(opts.systemPrompt).toContain("at least ~7,000");
+    // Counts are the verified-reachable pool — ambition must NOT read as 20,000.
+    expect(opts.systemPrompt).not.toContain("~20,000");
+    expect(opts.systemPrompt).toContain("VERIFIED-EMAIL-REACHABLE");
     // Faithfulness examples that kill the healthcare-dilution / worldwide bugs.
     expect(opts.systemPrompt).toContain("healthcare");
     // The old carcan is GONE — no "FAILURE below" language that forced betrayal.
@@ -302,9 +306,33 @@ describe("Apollo audience endpoints", () => {
     // The nudge fires on the 2nd+ turn once a below-ambition count is on record,
     // steering toward FAITHFUL widening (never off-topic filters).
     const secondTurnMsg = mockChatComplete.mock.calls[1][0].message as string;
-    expect(secondTurnMsg).toContain("below the ~20,000 we aim for");
+    expect(secondTurnMsg).toContain("below the ~7,000 we aim for");
     expect(secondTurnMsg).toContain("FAITHFULLY-broader set");
     expect(secondTurnMsg).not.toContain("FAILURE");
+  });
+
+  it("recalibrated band: a count in the OLD in-band range (8,000) now triggers the widen nudge", async () => {
+    // 8,000 was comfortably above the OLD 20,000-scaled expectation only if the
+    // band were unchanged — with the verified-scale band (~7,000) 8,000 is above
+    // ambition and must NOT nudge, while a below-7,000 count MUST. Prove the band
+    // moved: 5,000 (below new band) nudges; had the band stayed 20,000 the message
+    // would still say 20,000.
+    mockChatComplete
+      .mockResolvedValueOnce({ json: { action: "test", filters: { personTitles: ["Chiropractor"], personLocations: ["United States"] }, reasoning: "niche" }, content: "", tokensInput: 1, tokensOutput: 1, model: "m" })
+      .mockResolvedValueOnce({ json: { action: "confirm", filters: { personTitles: ["Chiropractor"], personLocations: ["United States"], includeSimilarTitles: true }, reasoning: "broadest faithful" }, content: "", tokensInput: 1, tokensOutput: 1, model: "m" });
+    mockSearchPeople
+      .mockResolvedValueOnce({ total_entries: 5000, people: [] })
+      .mockResolvedValueOnce({ total_entries: 6800, people: [] });
+
+    await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "US Chiropractors", description: "Licensed chiropractors in the US", brandId: null })
+      .expect(200);
+
+    const secondTurnMsg = mockChatComplete.mock.calls[1][0].message as string;
+    expect(secondTurnMsg).toContain("below the ~7,000 we aim for");
+    expect(secondTurnMsg).not.toContain("20,000");
   });
 
   it("confirms and persists a genuinely niche faithful audience below the ambition", async () => {
