@@ -1,15 +1,24 @@
 /**
- * Agentic "NL segment → faithful Apollo filters" refinement loop.
+ * Agentic "NL segment → Apollo filters" refinement loop.
  *
  * This logic moved OUT of human-service INTO apollo-service: given a segment
- * name + self-contained description, iterate faithful Apollo People-Search
- * filter sets, use the FREE dry-run as live count feedback, and let the model
- * decide test/confirm/exhausted. The confirmed faithful filters + a count
+ * name + self-contained description, iterate Apollo People-Search filter sets,
+ * use the FREE dry-run as live count feedback, and let the model explore
+ * alternative encodings of the SAME target. The winning filter set + a count
  * snapshot are persisted by the caller (POST /audiences/suggest-from-segment).
  *
  * The LLM call goes through chat-service (which owns the LLM cost). The dry-run
  * Apollo people-search (per_page=1) consumes NO Apollo credits, so this loop
  * declares no cost of its own — same as POST /search/dry-run.
+ *
+ * OBJECTIVE (see CLAUDE.md "MECE invariant + max volume among MECE"):
+ * the loop is NOT steered by size. Every round the model must hold ONE
+ * invariant — the filter set is MECE with respect to the DESCRIBED target
+ * (adds nobody who should not be there, leaves out nobody who should be there)
+ * — and among the sets that hold it, the largest count wins. Selection is
+ * DETERMINISTIC in code (max count among both-flags-false iterations), not the
+ * model's `confirm`. There is NO count floor, ambition, or target band; a size
+ * threshold is exactly what pressures the model into breaking MECE.
  */
 
 import { z } from "zod";
@@ -18,30 +27,30 @@ import { toApolloSearchParams } from "./transform.js";
 import { searchPeople } from "./apollo-client.js";
 import { SearchFiltersSchema } from "../schemas.js";
 
-/** Ambition, NOT a hard floor. We WANT large audiences, so the loop aims to
- * reach at least this many matches — but ONLY by faithful widening (loosening
- * the model's OWN constraints), never by adding filters the request didn't ask
- * for. If the largest FAITHFUL filter set genuinely lands below this (a real
- * niche — e.g. US chiropractors), that smaller faithful audience is accepted;
- * we never fabricate reach by betraying the request. The count is Apollo's free
- * dry-run COUNT, not served records (Apollo paginates at most 50,000 — the loop
- * only reads counts).
- *
- * CALIBRATED TO THE VERIFIED-REACHABLE SCALE. Every dry-run now forces
- * contact_email_status:["verified"] (see apollo-client VERIFIED_EMAIL_STATUS),
- * so the counts the loop reads are the actually-contactable pool — roughly a
- * third of the old demographic total (verified rate ~25-33%). The ambition was
- * ~20,000 on the OLD unfiltered counts; on the verified scale that is ~7,000.
- * Do NOT bump it back to 20,000 — that would make the loop over-relax the
- * filters chasing an unreachable band and produce broader, looser audiences. */
-const AMBITION_MIN = 7_000;
 /** Real dry-run attempts (each consumes a live count). The loop uses these to
- * try faithfully-broader sets while it is still below the ambition. */
+ * test alternative encodings of the same target and to retry a filter VALUE
+ * that returned 0 (dead value, live concept). */
 const MAX_REAL_ATTEMPTS = 6;
 /** Extra budget for unusable model output (malformed decision JSON or filters
  * rejected by the faithful schema). These do NOT consume a real attempt — a
- * Gemini hiccup must not eat the relaxation budget. */
+ * Gemini hiccup must not eat the exploration budget. */
 const MAX_INVALID_RETRIES = 3;
+/** A `confirm` is only accepted once this many DISTINCT filter sets have been
+ * dry-run. Comparing two encodings of the same target is the act that surfaces
+ * an off-target leak (a set that quietly dropped a stated constraint looks
+ * perfectly fine on its own — it just returns a suspiciously large count). */
+const MIN_ENCODINGS_BEFORE_CONFIRM = 2;
+
+/** Nielsen Digital Ad Ratings vocabulary: "off-target" delivery vs the
+ * unreached portion of the target. Both false = the set is MECE. */
+export interface TargetFitJudgement {
+  /** The set matches people OUTSIDE the described target. */
+  reachesOffTarget: boolean;
+  offTargetReason: string | null;
+  /** The set excludes people INSIDE the described target. */
+  leavesTargetUnreached: boolean;
+  unreachedReason: string | null;
+}
 
 export interface RefineIteration {
   iteration: number;
@@ -50,6 +59,17 @@ export interface RefineIteration {
   count: number | null;
   reasoning: string;
   validationErrors?: string[];
+  /** Judgement of THIS iteration's filter set. `null` only on `invalid` rows —
+   * there is no usable filter set to judge. Both `false` = selectable. */
+  reachesOffTarget: boolean | null;
+  offTargetReason: string | null;
+  leavesTargetUnreached: boolean | null;
+  unreachedReason: string | null;
+  /** Later rounds may RE-JUDGE this iteration (count known, an alternative
+   * encoding available for contrast — a much less biased act than grading your
+   * own proposal before seeing its count). Newest revision wins and is mirrored
+   * onto the flat fields above; the full history stays here. */
+  revisions?: Array<TargetFitJudgement & { atIteration: number }>;
 }
 
 export interface RefineInput {
@@ -78,11 +98,22 @@ export async function dryRunCount(
   return result.total_entries ?? result.pagination?.total_entries ?? 0;
 }
 
-/** Model decision schema for one refine turn. */
-const RefineDecisionSchema = z.object({
+const TargetFitSchema = z.object({
+  reachesOffTarget: z.boolean(),
+  offTargetReason: z.string().nullable().optional(),
+  leavesTargetUnreached: z.boolean(),
+  unreachedReason: z.string().nullable().optional(),
+});
+
+/** Model decision schema for one refine turn. The two booleans are REQUIRED —
+ * a decision that does not grade its own proposal is unusable output, not a
+ * default-to-clean. */
+const RefineDecisionSchema = TargetFitSchema.extend({
   action: z.enum(["test", "confirm"]),
   filters: z.record(z.string(), z.unknown()),
   reasoning: z.string().optional(),
+  /** Re-judgements of EARLIER iterations, by 1-based `iteration` number. */
+  revisions: z.array(TargetFitSchema.extend({ iteration: z.number().int() })).optional(),
 });
 
 function buildSystemPrompt(catalog: string): string {
@@ -93,53 +124,80 @@ function buildSystemPrompt(catalog: string): string {
     "Only use the filter fields below, with Apollo's exact accepted values. Do not invent field",
     "names or values; omit a field rather than guess. All filters AND together.",
     "",
-    "=== AVAILABLE FILTERS (faithful Apollo vocabulary) ===",
+    "=== AVAILABLE FILTERS (Apollo vocabulary) ===",
     catalog,
     "=== END FILTERS ===",
     "",
-    "YOUR JOB, IN ONE SENTENCE:",
-    "Among all filter sets that FAITHFULLY match what the person asked for, pick the one that",
-    "yields the LARGEST audience. Faithful first, largest second. Never trade faithfulness for size.",
+    "THE INVARIANT — every filter set you propose must be MECE with respect to the described target:",
+    "- we do not add people who should not be there",
+    "- we do not leave out people who should be there",
     "",
-    "BE FAITHFUL — read the request and respect it, to the letter:",
-    "- They give a revenue range -> keep it, don't widen it.",
-    "- They give job titles -> target those titles AND their obvious equivalents (a \"VP Sales\" also",
-    "  means \"Head of Sales\" / \"Sales Director\" — that's what includeSimilarTitles is for; set it",
-    "  true for role targeting unless they ask for exact titles). What you do NOT do is swap in a",
-    "  BROADER, off-topic title (never \"clinic owner\" for a request about chiropractors).",
-    "- They name a profession/vertical (e.g. \"chiropractor\") -> target THAT. Do NOT add a generic",
-    "  \"healthcare\" / \"medical practice\" / \"wellness\" keyword on top — that betrays the request.",
-    "- They say a geography (e.g. US) -> give that geography. Never worldwide when they said US.",
-    "- Read HOW loose they are: \"around\", \"roughly\", \"and similar\", \"-ish\" -> you may widen in that",
-    "  spirit. A strict, specific request -> stay tight.",
+    "MECE is measured against the DESCRIBED target — what the description actually states, no more",
+    "and no less. If the description names a sector, profession, geography, size or revenue band,",
+    "the set must carry it. If the description names no sector, a set with no sector constraint is",
+    "correct — inventing a constraint the description never stated leaves the target unreached.",
+    "Read how loose the wording is: \"around\", \"roughly\", \"and similar\" widen the described target;",
+    "strict, specific wording keeps it tight.",
     "",
-    "KEYWORDS ARE YOUR MOST DANGEROUS TOOL — use them consciously, rarely:",
-    "- A keyword group ANDs with everything else, so adding a keyword can ONLY shrink the audience.",
-    "  If the job titles already capture the profession (\"Chiropractor\"), adding a \"chiropractic\"",
-    "  keyword is a REDUNDANT filter that just removes people for nothing. Don't.",
-    "- Free-text q_keywords is the single harshest volume killer (q_keywords=\"SaaS\" ~86 matches vs",
-    "  q_organization_keyword_tags=[\"software\"] ~128,274). Prefer a structured filter",
-    "  (organization_industries when Apollo has the enum value, else q_organization_keyword_tags)",
-    "  and only reach for q_keywords/technology UIDs when the request truly needs that precision.",
-    "- Add a keyword ONLY when no structured filter (title, industry, seniority, geography) already",
-    "  expresses the idea.",
+    "THE OBJECTIVE — among the filter sets that hold the invariant, maximize volume.",
+    "Two filter sets that describe the SAME target can return very different volumes, not because",
+    "one is less correct, but because Apollo's index coverage differs by mechanism (an industry",
+    "enum vs employer keyword tags vs free-text keywords vs titles). So maximizing volume among",
+    "equally-correct sets is FREE — no fidelity is traded. You pick the mechanism; there is no",
+    "preferred one.",
     "",
-    "AIM BIG, BUT STAY FAITHFUL:",
-    "- We want reach — aim for a large audience (ideally at least ~7,000 matches).",
-    "  (Counts are the VERIFIED-EMAIL-REACHABLE pool — only people we can actually",
-    "  contact — so a healthy audience here is smaller than a raw demographic total.)",
-    "- Reach that ambition by LOOSENING YOUR OWN over-constraints — drop a redundant keyword, turn on",
-    "  includeSimilarTitles, remove a filter the request never asked for. NEVER by adding a broader,",
-    "  off-topic filter (that inflates the count with the wrong people).",
-    "- If the largest FAITHFUL set still lands below the ambition (a genuine niche — e.g. US",
-    "  chiropractors), that is fine: keep the faithful set. A smaller true audience beats a big fake",
-    "  one. Do not manufacture size by betraying the request.",
+    "WHY YOU GET SEVERAL ROUNDS — use them for exactly two things:",
+    "1. Test whether an Apollo value actually WORKS. A non-functional value returns 0 matches.",
+    "   A 0 means \"this word does not work\", NOT \"this constraint is superfluous\" — try another",
+    "   value, or another mechanism, for the SAME concept. Never drop the concept.",
+    "2. Test DIFFERENT filter sets that should describe the SAME audience. Apollo's grammar allows",
+    "   several encodings of one targeting intent; find the one where the index is richest.",
     "",
     "Each turn, reply with ONLY a JSON object (no prose, no code fences):",
-    '{ "action": "test" | "confirm", "filters": { ...faithful filters... }, "reasoning": "<one short line>" }',
+    "{",
+    '  "action": "test" | "confirm",',
+    '  "filters": { ...filters... },',
+    '  "reasoning": "<one short line>",',
+    '  "reachesOffTarget": true | false,',
+    '  "offTargetReason": "<short why>" | null,',
+    '  "leavesTargetUnreached": true | false,',
+    '  "unreachedReason": "<short why>" | null,',
+    '  "revisions": [ { "iteration": <n>, "reachesOffTarget": …, "offTargetReason": …, "leavesTargetUnreached": …, "unreachedReason": … } ]',
+    "}",
     '- "test": you want the live count for this filter set before deciding.',
-    '- "confirm": this is your largest FAITHFUL set — stop and persist it.',
+    '- "confirm": you are done exploring. It does NOT mean "use this set" — the winning set is',
+    "  chosen by count among every set you judged MECE, so grade honestly rather than strategically.",
+    "- The four judgement fields grade the filter set in THIS message: reachesOffTarget = it matches",
+    "  people outside the described target; leavesTargetUnreached = it excludes people inside it.",
+    "  Give the matching reason when a flag is true, null when it is false. Both are REQUIRED.",
+    '- "revisions" (optional): re-judge an EARLIER iteration now that you know its count and have an',
+    "  alternative encoding to compare it against. You graded that set before seeing any of that.",
+    "  Re-grade it honestly. Omit the key when you have nothing to revise.",
   ].join("\n");
+}
+
+/** Order-insensitive identity of a filter set, so "did I already try this
+ * encoding?" is not fooled by key order. */
+function encodingKey(filters: Record<string, unknown>): string {
+  return JSON.stringify(filters, Object.keys(filters).sort());
+}
+
+function distinctEncodings(history: RefineIteration[]): number {
+  const seen = new Set<string>();
+  for (const h of history) {
+    if (h.action === "invalid" || h.filters === null) continue;
+    seen.add(encodingKey(h.filters));
+  }
+  return seen.size;
+}
+
+function judgementLine(h: RefineIteration): string {
+  const off = h.reachesOffTarget ? `reachesOffTarget=true (${h.offTargetReason ?? "no reason given"})` : "reachesOffTarget=false";
+  const un = h.leavesTargetUnreached
+    ? `leavesTargetUnreached=true (${h.unreachedReason ?? "no reason given"})`
+    : "leavesTargetUnreached=false";
+  const revised = h.revisions?.length ? ` [re-judged at iteration ${h.revisions[h.revisions.length - 1]!.atIteration}]` : "";
+  return `${off}, ${un}${revised}`;
 }
 
 function buildUserMessage(
@@ -151,73 +209,128 @@ function buildUserMessage(
     `Segment name: ${input.name}`,
     `Segment description: ${input.description}`,
     "",
+    // The invariant is restated EVERY round, independent of any count. A
+    // threshold-gated nudge is what let a set with a dropped sector constraint
+    // sail through unexamined once it was "big enough".
+    "THE INVARIANT — your filter set must be MECE with respect to the described target:",
+    "- we do not add people who should not be there",
+    "- we do not leave out people who should be there",
+    "Among the sets that hold it, the biggest count wins.",
+    "",
   ];
+
   if (history.length === 0) {
-    lines.push("No filter sets tried yet. Propose your first filter set with action \"test\".");
+    lines.push('No filter sets tried yet. Propose your first filter set with action "test".');
     return lines.join("\n");
   }
 
   lines.push("Filter sets tried so far (most recent last):");
   for (const h of history) {
     if (h.action === "invalid") {
-      lines.push(`- INVALID (rejected by schema): ${JSON.stringify(h.filters)} — errors: ${(h.validationErrors ?? []).join("; ")}`);
+      lines.push(
+        `- #${h.iteration} INVALID (rejected by schema): ${JSON.stringify(h.filters)} — errors: ${(h.validationErrors ?? []).join("; ")}`,
+      );
     } else {
-      lines.push(`- count=${h.count} for filters=${JSON.stringify(h.filters)}`);
+      lines.push(`- #${h.iteration} count=${h.count} filters=${JSON.stringify(h.filters)} — ${judgementLine(h)}`);
     }
   }
   lines.push("");
 
-  // Below the ambition and still have budget: nudge the model to try a
-  // FAITHFULLY-broader set — by loosening its OWN constraints, never by adding
-  // off-topic filters. Once no faithful widening is left, it confirms its
-  // largest faithful set (which may be below the ambition — that's allowed).
   const lastValid = [...history]
     .reverse()
     .find((h): h is RefineIteration & { count: number } => h.action !== "invalid" && h.count !== null);
-  const remaining = MAX_REAL_ATTEMPTS - realAttemptsUsed;
-  if (lastValid && lastValid.count < AMBITION_MIN) {
+
+  if (lastValid && lastValid.count === 0) {
     lines.push(
-      `Latest faithful count is ${lastValid.count}, below the ~7,000 we aim for. You have ${remaining} test(s) left. ` +
-        "Try a FAITHFULLY-broader set: drop a redundant keyword (one the job titles already cover), " +
-        "turn on includeSimilarTitles, or remove a constraint the request never asked for. Do NOT add a " +
-        "broader, off-topic filter (no generic \"healthcare\"/\"wellness\" keyword, no worldwide) — that betrays " +
-        "the request. If you cannot widen without betraying it, confirm your largest faithful set as-is.",
+      "The last set returned 0 matches. Apollo applied the filter and matched nobody, so a VALUE in " +
+        "that set does not work — it is NOT a signal that the constraint is superfluous. Keep every " +
+        "concept the description states and re-encode the failing one: another accepted value, or " +
+        "another mechanism for the same idea. Do not drop the concept.",
     );
-    if (remaining <= 1) {
-      lines.push(
-        "This is your LAST test — submit the LARGEST set that still faithfully matches the request.",
-      );
-    }
-  } else {
-    lines.push("Refine further (action \"test\") or finalize (action \"confirm\") with your largest faithful set.");
+    lines.push("");
   }
+
+  const encodings = distinctEncodings(history);
+  if (encodings < MIN_ENCODINGS_BEFORE_CONFIRM) {
+    lines.push(
+      `Only ${encodings} distinct encoding tried. Before you can confirm, test at least one ALTERNATIVE ` +
+        "encoding of the SAME target (a different mechanism for one of the stated concepts) so the two " +
+        "can be compared — that comparison is what reveals a set that quietly dropped a constraint.",
+    );
+    lines.push("");
+  }
+
+  lines.push(
+    `You have ${MAX_REAL_ATTEMPTS - realAttemptsUsed} test(s) left. Propose another encoding (action "test"), ` +
+      'or finish exploring (action "confirm"). Re-judge any earlier iteration through "revisions" if seeing ' +
+      "its count next to an alternative changes your read of it.",
+  );
   return lines.join("\n");
 }
 
-/** The largest faithful set tried (every tried set is faithful — the schema
- * validated it and the model only proposes on-request filters). Objective =
- * max count among positive-match sets. Used both when the loop exhausts and as
- * a guardrail so an early `confirm` never returns a set smaller than one we've
- * already seen. */
+/** Apply a round's `revisions` onto earlier iterations: newest judgement wins on
+ * the flat fields, full history kept under `revisions`. A revision pointing at an
+ * unknown or unjudgeable iteration is model noise — logged, never silently
+ * merged into another row. */
+function applyRevisions(
+  trace: RefineIteration[],
+  revisions: z.infer<typeof RefineDecisionSchema>["revisions"] & {},
+  atIteration: number,
+): void {
+  for (const rev of revisions) {
+    const target = trace.find((h) => h.iteration === rev.iteration);
+    if (!target || target.action === "invalid") {
+      console.warn(
+        `[apollo-service][refineAudience] revision at iteration ${atIteration} targets unknown/unjudgeable iteration ${rev.iteration} — ignored`,
+      );
+      continue;
+    }
+    const judgement: TargetFitJudgement = {
+      reachesOffTarget: rev.reachesOffTarget,
+      offTargetReason: rev.offTargetReason ?? null,
+      leavesTargetUnreached: rev.leavesTargetUnreached,
+      unreachedReason: rev.unreachedReason ?? null,
+    };
+    target.revisions = [...(target.revisions ?? []), { ...judgement, atIteration }];
+    target.reachesOffTarget = judgement.reachesOffTarget;
+    target.offTargetReason = judgement.offTargetReason;
+    target.leavesTargetUnreached = judgement.leavesTargetUnreached;
+    target.unreachedReason = judgement.unreachedReason;
+  }
+}
+
+/** DETERMINISTIC final selection: the biggest count among the iterations judged
+ * MECE — both flags false after any later-round revision — and matching at least
+ * one person. The model's `confirm` only ends exploration; it does not pick.
+ *
+ * A tried set is NOT automatically eligible: the Zod schema validated its
+ * VOCABULARY (field names + accepted values), never its fit to the described
+ * target. Fit is exactly what the two flags carry. */
 function pickBest(history: RefineIteration[]): { filters: Record<string, unknown>; count: number } | null {
-  const positive = history.filter(
+  const mece = history.filter(
     (h): h is RefineIteration & { filters: Record<string, unknown>; count: number } =>
-      h.action !== "invalid" && h.filters !== null && h.count !== null && h.count > 0,
+      h.action !== "invalid" &&
+      h.filters !== null &&
+      h.count !== null &&
+      h.count > 0 &&
+      h.reachesOffTarget === false &&
+      h.leavesTargetUnreached === false,
   );
-  if (positive.length === 0) return null;
-  return positive.reduce((a, b) => (b.count > a.count ? b : a));
+  if (mece.length === 0) return null;
+  return mece.reduce((a, b) => (b.count > a.count ? b : a));
 }
 
 export async function refineAudience(input: RefineInput): Promise<RefineResult> {
   const systemPrompt = buildSystemPrompt(input.filtersPromptCatalog);
   const trace: RefineIteration[] = [];
 
-  // Two separate budgets: MAX_REAL_ATTEMPTS live dry-runs (the relaxation budget),
-  // plus MAX_INVALID_RETRIES extra turns for unusable model output that must NOT
-  // eat a real attempt. `step` numbers the trace rows in order.
+  // Two separate budgets: MAX_REAL_ATTEMPTS live dry-runs (the exploration
+  // budget), plus MAX_INVALID_RETRIES extra turns for unusable model output that
+  // must NOT eat a real attempt. `step` numbers the trace rows in order.
   let realAttempts = 0;
   let invalidRetries = 0;
   let step = 0;
+  let doneExploring = false;
 
   while (realAttempts < MAX_REAL_ATTEMPTS) {
     step += 1;
@@ -255,14 +368,22 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
         action: "invalid",
         filters: (res.json?.filters as Record<string, unknown>) ?? null,
         count: null,
-        reasoning: "model decision did not match {action, filters}",
+        reasoning: "model decision did not match {action, filters, target-fit flags}",
         validationErrors: parsed.error.issues.map((e) => `${e.path.join(".")}: ${e.message}`),
+        reachesOffTarget: null,
+        offTargetReason: null,
+        leavesTargetUnreached: null,
+        unreachedReason: null,
       });
       if (invalidRetries > MAX_INVALID_RETRIES) break;
       continue;
     }
 
-    const { action, filters, reasoning } = parsed.data;
+    const { action, filters, reasoning, revisions } = parsed.data;
+
+    // A later round may re-judge earlier iterations — apply before this round's
+    // own row lands, so a revision can never target the row being written.
+    if (revisions?.length) applyRevisions(trace, revisions, step);
 
     // Validate the proposed filters against our faithful vocabulary.
     const filterCheck = SearchFiltersSchema.safeParse(filters);
@@ -274,7 +395,18 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
       ];
       // Schema-invalid filters — burns the retry budget, NOT a real attempt.
       invalidRetries += 1;
-      trace.push({ iteration: step, action: "invalid", filters, count: null, reasoning: reasoning ?? "", validationErrors });
+      trace.push({
+        iteration: step,
+        action: "invalid",
+        filters,
+        count: null,
+        reasoning: reasoning ?? "",
+        validationErrors,
+        reachesOffTarget: null,
+        offTargetReason: null,
+        leavesTargetUnreached: null,
+        unreachedReason: null,
+      });
       if (invalidRetries > MAX_INVALID_RETRIES) break;
       continue;
     }
@@ -284,29 +416,42 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
     const validFilters = filterCheck.data as Record<string, unknown>;
     const count = await dryRunCount(input.apolloApiKey, validFilters);
 
-    if (action === "confirm" && count > 0) {
-      // Trust the model's confirm: it is the fidelity arbiter and the prompt asks
-      // it to confirm its LARGEST faithful set. Any positive-match faithful set is
-      // acceptable — no count floor. (A deliberate narrowing from a broader tested
-      // set is intentional: the broader one was less faithful.)
-      trace.push({ iteration: step, action: "confirm", filters: validFilters, count, reasoning: reasoning ?? "" });
-      return { filters: validFilters, count, status: "confirmed", trace };
-    }
+    // A confirm before a second encoding has been tried is premature: without a
+    // contrast set there is nothing to compare against, and a set that silently
+    // dropped a stated constraint looks fine on its own.
+    const encodingsWithThisOne = new Set([
+      ...trace.filter((h) => h.action !== "invalid" && h.filters !== null).map((h) => encodingKey(h.filters!)),
+      encodingKey(validFilters),
+    ]).size;
+    const prematureConfirm = action === "confirm" && encodingsWithThisOne < MIN_ENCODINGS_BEFORE_CONFIRM;
 
     trace.push({
       iteration: step,
-      // A confirm with zero matches is unusable — treat it as a test and keep going.
-      action: action === "confirm" ? "rejected_confirm" : "test",
+      action: action === "confirm" && prematureConfirm ? "rejected_confirm" : action,
       filters: validFilters,
       count,
       reasoning: reasoning ?? "",
+      reachesOffTarget: parsed.data.reachesOffTarget,
+      offTargetReason: parsed.data.offTargetReason ?? null,
+      leavesTargetUnreached: parsed.data.leavesTargetUnreached,
+      unreachedReason: parsed.data.unreachedReason ?? null,
     });
+
+    if (action === "confirm" && !prematureConfirm) {
+      doneExploring = true;
+      break;
+    }
   }
 
-  // Exhausted the attempt budget without a confirm — keep the best tried set.
+  // Selection is ours, not the model's: the biggest MECE-judged set wins,
+  // whichever round produced it. No MECE-judged set at all → fail loud. The
+  // caller (human-service) runs per-segment builds under Promise.allSettled, so
+  // losing one bad segment is correct — better no audience than a false one.
   const best = pickBest(trace);
   if (!best) {
-    throw new Error("[apollo-service][refineAudience] no positive-match filter set was produced after refinement");
+    throw new Error(
+      "[apollo-service][refineAudience] no filter set was judged MECE with the described target (both reachesOffTarget and leavesTargetUnreached false) with at least one match",
+    );
   }
-  return { filters: best.filters, count: best.count, status: "exhausted", trace };
+  return { filters: best.filters, count: best.count, status: doneExploring ? "confirmed" : "exhausted", trace };
 }
