@@ -29,41 +29,76 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
   not in human-service. It calls **chat-service** for the LLM (chat-service owns
   the LLM cost — apollo-service declares NONE for it) and uses the FREE Apollo
   dry-run (per_page=1, zero credits) for live count feedback.
-- **Refine-prompt objective — "largest audience AMONG the faithful sets", faithful
-  first, size second. NO hard count floor.** `buildSystemPrompt` / `buildUserMessage`
-  optimize ONE thing: among all filter sets that faithfully match the request, keep the
-  one with the biggest dry-run count. Faithfulness is the hard constraint; size is the
-  objective inside it — never traded away. Concrete rules baked into the prompt:
-  - **Be faithful.** Respect the stated revenue range, job titles (+ obvious
-    equivalents via `includeSimilarTitles`), profession, industry, geography, seniority
-    — as given. Never swap in a BROADER off-topic filter: no generic `healthcare` /
-    `medical practice` / `wellness` keyword for a "chiropractor" request, no
-    `clinic owner` for chiropractors, no worldwide when US was asked. Read the request's
-    LOOSENESS too ("around" / "roughly" / "and similar" → may widen; strict → stay tight).
-  - **Keywords are the most dangerous tool** — a keyword group ANDs with everything, so
-    it can ONLY shrink. NEVER add a keyword that duplicates a concept the job titles
-    already capture (title `Chiropractor` + keyword `chiropractic` = redundant, removes
-    people for nothing). And `q_keywords` is the harshest volume killer (`q_keywords="SaaS"`
-    → ~86 vs `q_organization_keyword_tags=["software"]` → ~128k) — prefer a structured
-    filter, reach for `q_keywords`/tech UIDs only when the request needs that precision.
-  - **`AMBITION_MIN` (~20,000) is an AMBITION, not a floor.** We want reach, so the loop
-    AIMS for a large audience — but reaches it ONLY by loosening the model's OWN
-    over-constraints (drop a redundant keyword, enable `includeSimilarTitles`, remove a
-    filter the request never stated), NEVER by adding a broader off-topic filter. If the
-    largest FAITHFUL set genuinely lands below the ambition (real niche — US
-    chiropractors ≈ a few thousand), that smaller faithful audience is CONFIRMED as-is.
-    `confirm` accepts any positive-match faithful set; `pickBest` (exhaust fallback) =
-    max count among faithful sets.
-  - **DO NOT reintroduce the hard floor.** A prior design forced `count >= 20,000`
-    ("under 20,000 is a FAILURE / NEVER confirm below") — that MADE the model inflate
-    audiences with off-topic keywords (`healthcare` piled onto chiropractic → wrong
-    people) or pile redundant keywords that only shrank. The floor forced the model to
-    betray the request. Removed 2026-07-03 — keep it removed.
-  (Costs: 2026-06-25 prompt example "drop a revenue or headcount band" made the builder
-  drop revenue + reach for volume-killer `q_keywords` → 14–67-match audiences, v0.24.13.
-  2026-07-03 the 20k floor inflated a "chiropractic clinics" audience with `health care`
-  and shrank "US chiropractors" with a redundant `chiropractic` keyword — floor deleted,
-  objective rewritten to faithful-first / largest-among-faithful.)
+- **Refine-loop objective — the MECE invariant + max volume AMONG the MECE sets.
+  The loop is NOT steered by size. There is NO floor, ambition or target band.**
+  Every round the model must hold ONE invariant, restated in EVERY user message
+  regardless of the count — the proposed filter set is **MECE with respect to the
+  DESCRIBED target**:
+  - we do not add people who should not be there
+  - we do not leave out people who should be there
+
+  Among the sets that hold it, the biggest dry-run count wins. This is free, not a
+  trade: two filter sets describing the SAME target can return very different volumes
+  purely because Apollo's index coverage differs by mechanism (industry enum vs
+  `q_organization_keyword_tags` vs `q_keywords` vs titles), so maximizing volume among
+  equally-correct sets costs no fidelity.
+  - **Why the loop has rounds — exactly two reasons.** (1) Test whether an Apollo VALUE
+    actually works: a non-functional value returns **0**, and a 0 means "this word does
+    not work", NOT "this constraint is superfluous" → retry the SAME concept with another
+    value or another mechanism, never drop the concept. (2) Test DIFFERENT filter sets
+    that should describe the SAME audience, and keep the one where the index is richest.
+  - **The prompt prescribes NO mechanism.** `buildSystemPrompt` deliberately contains no
+    "prefer X over Y" keyword rules, no banned-keyword list, no volume-killer figures, no
+    "add a keyword only if no structured filter expresses the idea". Those four
+    instructions were REMOVED 2026-07-28 and must NOT come back in any form — they are
+    what made the model drop a stated sector (see the cost note below). The model picks
+    its own mechanism per case; the invariant is the only constraint. Removal is the fix,
+    not a replacement rule. (The appended `APOLLO_UNDOCUMENTED_FILTERS_ENCART` keeps the
+    verified Apollo count FACTS — those are observed engine behaviour, not fidelity rules.)
+  - **Per-round self-judgement + a revision channel.** Each decision JSON carries four
+    fields describing the set it proposes — `reachesOffTarget` / `offTargetReason`
+    (matches people outside the described target) and `leavesTargetUnreached` /
+    `unreachedReason` (excludes people inside it). Names follow Nielsen Digital Ad Ratings
+    vocabulary; keep them. They land on every `RefineIteration` (so they persist in the
+    bronze `refine_trace`) and are echoed back into the next round's input. A later round
+    MAY re-judge an earlier iteration via `revisions[]` — the proposer grades its own set
+    before knowing the count and is biased toward clean flags, whereas re-judging with the
+    count known and an alternative encoding for contrast is a far less biased act. Newest
+    revision wins on the flat fields; the full history stays under `revisions`.
+  - **Selection is DETERMINISTIC in code, not the model's `confirm`.** `pickBest` = max
+    `count` among iterations with BOTH flags `false` (after revisions) and `count > 0`.
+    `action:"confirm"` only means "I am done exploring" — it does not pick the set. No
+    both-flags-false iteration → **throw** (fail loud, no audience persisted): human-service
+    runs per-segment builds under `Promise.allSettled`, so losing one bad segment is correct.
+    A `confirm` is also REJECTED until at least `MIN_ENCODINGS_BEFORE_CONFIRM` (2) distinct
+    filter sets have been dry-run — comparing encodings is the act that surfaces a leak.
+  - **DO NOT reintroduce any size steering.** Not a hard floor, not an "ambition", not a
+    target band, not a below-N widen nudge. Every one of them pressures the model to break
+    MECE, and the repo has now paid for BOTH symmetric failures. `MAX_REAL_ATTEMPTS` stays 6.
+  - **MECE is measured against the DESCRIBED target — it never mandates a sector.** A
+    description that states no sector ("Solo Founders >$100k Revenue", "HR Heads Singapore
+    Mid-Market") is correctly served by a sector-free filter set; inventing a constraint the
+    description never stated is `leavesTargetUnreached`, not diligence.
+
+  (Costs — the loop oscillated between the two symmetric failures because the objective was
+  always expressed in SIZE. 2026-06-25: prompt example "drop a revenue or headcount band"
+  made the builder drop revenue + reach for `q_keywords` → 14–67-match audiences (v0.24.13,
+  #163/#178, over-narrow). 2026-07-03: the hard 20k floor inflated a "chiropractic clinics"
+  audience with `health care` — floor deleted, objective rewritten to faithful-first
+  (#184/#197/#202). 2026-07-28: that size-driven correction produced
+  `Multi-Practitioner Clinic Directors US` — `{personTitles:["Chiropractor","Clinic Director",
+  "Owner"], personLocations:["United States"], includeSimilarTitles:true,
+  organizationNumEmployeesRanges:["11,50"]}`, **no sector constraint at all**, count
+  **82,522** = every US small-business owner in any industry, while the description said
+  "chiropractic and wellness clinics". Its `refine_trace` had 2 iterations: one test at
+  82,522, then a confirm on the identical set. 82,522 was already above `AMBITION_MIN`
+  (7,000) at iteration 1, so the only feedback branch that existed — the below-ambition
+  widen nudge — never fired, and nothing in the loop ever measured FIDELITY. The model was
+  also following four prompt instructions at once: the healthcare/medical-practice/**wellness**
+  keyword ban (the description literally said "wellness"), the redundant-keyword example, the
+  `q_keywords` volume-killer figures, and "add a keyword only if no structured filter expresses
+  the idea". It did not hallucinate. Fix = this section: MECE invariant + max-volume-among-MECE,
+  size steering deleted, mechanism rules deleted, selection moved into code.)
 - **Endpoints:** `POST /audiences/suggest-from-segment`, `GET /audiences/{id}`,
   `POST /audiences/{id}/dry-run`. A serve-next-by-audience-id endpoint is a
   later wave (designed with human-service) — do NOT build it here yet.
@@ -121,11 +156,12 @@ by calling Apollo people-search outside `searchPeople`.
   called it a phantom pre-filter; that was wrong — the count really drops. So a fresh
   count/dry-run on an existing audience filter returns the verified-reachable number,
   not the demographic total (which fixes the inflated "remaining to contact").
-- **Refine band is calibrated to the verified scale.** Because the loop's dry-runs are
-  now verified-only, their counts are ~1/3 of the old demographic totals, so
-  `AMBITION_MIN` (`src/lib/audience-refine.ts`) is **7,000**, not 20,000. Do NOT bump it
-  back — a 20,000 ambition on verified-scale counts would make the loop over-relax the
-  filters chasing an unreachable band and produce broader, looser audiences.
+- **The refine loop has NO band to calibrate — `AMBITION_MIN` is GONE (2026-07-28).**
+  It used to be recalibrated 20,000 → 7,000 when the dry-runs became verified-only
+  (counts are ~1/3 of the demographic total). That whole axis was deleted: the loop is
+  steered by the MECE invariant + max volume among MECE, never by a count threshold.
+  So the verified-only change now affects only what a count MEANS (the contactable pool),
+  not any accept/reject decision. Do NOT re-derive a band from the verified scale.
 
 ## Apollo pagination hard cap (DO NOT remove the cursor clamp)
 
@@ -232,15 +268,17 @@ deprecated); auth header `x-api-key`. RTK truncates `curl` JSON — probe with
 Python `urllib` (see `/tmp/apollo_probe*.py` pattern from the 2026-06-25 sweep).
 Publish only `>0`-confirmed slugs in enums; never list a guessed slug.
 
-**Keywords are the harshest volume killer — use them CONSCIOUSLY, don't ban them.**
-Verified: `q_keywords="SaaS"` → 86 vs `q_organization_keyword_tags=["software"]` →
-128,274 (1,490×). `q_keywords` + technology UIDs stay fully available (use them when
-the request truly needs that precision) but they crush the count, so the prompt
-must make the model aware of the trade-off and PREFER keyword-tags/industry for a
-sector — never hard-ban keyword/tech. The refine loop's relaxation order sheds
-`q_keywords` + technology UIDs FIRST (most volume per constraint). This is why the
-audience builder produced 14–67-match audiences before — it had no industry filter
-and fell back to `q_keywords` unknowingly.
+**Keywords crush volume — a verified FACT about the Apollo engine, NOT a rule for the
+refine prompt.** Verified: `q_keywords="SaaS"` → 86 vs
+`q_organization_keyword_tags=["software"]` → 128,274 (1,490×), same intent. This lives in
+`APOLLO_UNDOCUMENTED_FILTERS_ENCART` (and thus in `/search/filters-prompt`) as observed
+engine behaviour that any caller LLM should know. It is NOT a prescription in the
+refine-loop system prompt: the "prefer keyword-tags over `q_keywords`" / "never add a
+redundant keyword" rules were REMOVED 2026-07-28 (they helped the model justify dropping a
+stated sector — see the refine-objective section). `q_keywords` + technology UIDs are
+always available; the model picks its mechanism and the MECE invariant is the only
+constraint. There is no relaxation ORDER anymore — the loop explores alternative encodings
+of the same target, it does not shed constraints in a ranked sequence.
 
 **Verified 2026-06-25 — undocumented TARGETING filters People Search also honors
 (same baseline `CEO + United States` = 521,875).** The headline is the
