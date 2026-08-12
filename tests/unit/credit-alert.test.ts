@@ -86,9 +86,17 @@ describe("Apollo credit-exhaustion staff alert", () => {
     expect(calls).toHaveLength(1);
     const body = JSON.parse(calls[0][1].body as string);
     expect(body.eventType).toBe(PROVIDER_CREDITS_EXHAUSTED_EVENT);
+    // The producer requires non-empty provider + reason, and renders detail.
     expect(body.metadata.provider).toBe("apollo");
-    expect(body.metadata.apolloStatus).toBe("402");
-    expect(body.metadata.apolloBody).toContain("out of credits");
+    expect(body.metadata.reason).toContain("402");
+    expect(body.metadata.detail).toContain("people/match (enrich)");
+    expect(body.metadata.detail).toContain("HTTP 402");
+    expect(body.metadata.detail).toContain("out of credits");
+    // orgId is filled in by the producer from x-org-id — we must not supply it.
+    expect(body.metadata.orgId).toBeUndefined();
+    // A staff-only event rejects any caller-supplied recipient.
+    expect(body.recipientEmail).toBeUndefined();
+    expect(body.bccEmails).toBeUndefined();
   });
 
   it("alerts and still throws when Apollo answers 429", async () => {
@@ -115,7 +123,7 @@ describe("Apollo credit-exhaustion staff alert", () => {
     expect(calls).toHaveLength(1);
     const body = JSON.parse(calls[0][1].body as string);
     expect(body.metadata.reason).toContain(APOLLO_PLACEHOLDER_EMAIL);
-    expect(body.metadata.apolloStatus).toBeUndefined();
+    expect(body.metadata.detail).not.toContain("HTTP");
   });
 
   it("alerts on the sentinel via people/match too", async () => {

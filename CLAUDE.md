@@ -122,9 +122,14 @@ Apollo HTTP call goes through (`src/lib/apollo-client.ts`).
 - **transactional-email-service owns the send** (`POST /platform-send`): it holds
   the hardcoded internal staff recipient list, the template, the send's run/cost,
   AND the rate bound. apollo-service declares NO cost for it — same relationship
-  as with chat-service for LLM spend. The `eventType` string
-  (`PROVIDER_CREDITS_EXHAUSTED_EVENT`) is the PRODUCER's contract: keep it
-  byte-equal to its deployed OpenAPI or the send 400s.
+  as with chat-service for LLM spend. The payload is the PRODUCER's contract, not
+  ours: `eventType: "provider_credits_exhausted"`, `metadata.provider` +
+  `metadata.reason` REQUIRED non-empty (400 otherwise), `metadata.detail` the
+  optional free-form room for the raw upstream status/body — and those three are
+  exactly what its staff template renders, so anything else we invent is stored
+  and never displayed. `metadata.orgId` is filled in from `x-org-id`; do not send
+  it. `recipientEmail`/`bccEmails` are rejected outright (staff-only delivery).
+  Re-read its deployed OpenAPI before changing any of this.
 - **Zero throttle state on this side, by design.** The alert is deduped per org
   per calendar day inside transactional-email-service, so a run that hits the
   wall on thousands of consecutive people cannot mail-bomb. Do NOT add a local

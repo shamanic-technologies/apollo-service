@@ -87,6 +87,19 @@ export interface CreditAlertDetail {
   apolloBody?: string;
 }
 
+/**
+ * Fold the raw upstream evidence into the single free-form `detail` the staff
+ * template renders. The template shows `provider`, `reason`, `orgId` and
+ * `detail` — anything else we invent here would be stored but never displayed,
+ * so the operation and the HTTP status belong inside these two strings.
+ */
+function buildDetail(detail: CreditAlertDetail): string {
+  const parts = [`operation: ${detail.operation}`];
+  if (detail.apolloStatus !== undefined) parts.push(`HTTP ${detail.apolloStatus}`);
+  if (detail.apolloBody) parts.push(detail.apolloBody.slice(0, MAX_BODY_CHARS));
+  return parts.join("\n");
+}
+
 /** Keep the staff email readable and the payload small. */
 const MAX_BODY_CHARS = 500;
 
@@ -124,13 +137,13 @@ export async function sendApolloCreditsExhaustedAlert(
       eventType: PROVIDER_CREDITS_EXHAUSTED_EVENT,
       ...(identity.brandIds?.length && { brandIds: identity.brandIds }),
       ...(identity.campaignId && { campaignId: identity.campaignId }),
+      // `provider` and `reason` are REQUIRED non-empty by the producer (400
+      // otherwise — a staff alert with blanks where the facts belong is not
+      // actionable). `orgId` is filled in from x-org-id, so we do not send it.
       metadata: {
         provider: "apollo",
-        service: "apollo-service",
-        operation: detail.operation,
         reason: detail.reason,
-        ...(detail.apolloStatus !== undefined && { apolloStatus: String(detail.apolloStatus) }),
-        ...(detail.apolloBody && { apolloBody: detail.apolloBody.slice(0, MAX_BODY_CHARS) }),
+        detail: buildDetail(detail),
       },
     }),
   });
