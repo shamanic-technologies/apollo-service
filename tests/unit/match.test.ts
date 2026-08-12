@@ -231,7 +231,7 @@ describe("POST /match", () => {
       .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" })
       .expect(200);
 
-    expect(mockMatchPersonByName).toHaveBeenCalledWith("fake-apollo-key", "John", "Doe", "acme.com", undefined);
+    expect(mockMatchPersonByName).toHaveBeenCalledWith("fake-apollo-key", "John", "Doe", "acme.com", undefined, expect.objectContaining({ orgId: expect.any(String) }));
     expect(res.body.person).toBeDefined();
     expect(res.body.person.firstName).toBe("John");
     expect(res.body.person.email).toBe("john@acme.com");

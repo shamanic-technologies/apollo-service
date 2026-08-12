@@ -13,6 +13,7 @@ import { assertKeySource } from "../lib/validators.js";
 import { SearchNextRequestSchema, SearchDryRunRequestSchema, EnrichRequestSchema, StatsRequestSchema, ApolloNativeSearchFiltersSchema } from "../schemas.js";
 import { buildFiltersPrompt, computeFiltersPromptVersion, APOLLO_UNDOCUMENTED_FILTERS_ENCART } from "../lib/filters-prompt.js";
 import { traceEvent } from "../lib/trace-event.js";
+import { toCreditAlertIdentity } from "../lib/credit-alert.js";
 // Waterfall disabled 2026-05-28 — see src/lib/waterfall.ts header for revive.
 // import {
 //   WATERFALL_MAX_CREDITS,
@@ -92,7 +93,7 @@ router.post("/search/dry-run", serviceAuth, async (req: AuthenticatedRequest, re
       page: 1,
       per_page: 1,
     };
-    const result = await searchPeople(apolloApiKey, apolloParams);
+    const result = await searchPeople(apolloApiKey, apolloParams, toCreditAlertIdentity(req));
     const totalEntries = result.total_entries ?? result.pagination?.total_entries ?? 0;
 
     res.json({ totalEntries, validationErrors: [] });
@@ -260,7 +261,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       const recheck = await findCachedEnrichmentByPersonId(apolloPersonId);
       if (recheck) return { kind: "cached", record: recheck.record, negative: recheck.negative };
 
-      const result = await enrichPerson(apolloApiKey, apolloPersonId, webhookUrl);
+      const result = await enrichPerson(apolloApiKey, apolloPersonId, webhookUrl, toCreditAlertIdentity(req));
       // Treat any non-verified email as no email (not billed, not cached, not returned).
       const person = result.person ? withVerifiedEmailOnly(result.person) : result.person;
 
@@ -527,7 +528,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
       page: currentPage,
       per_page: DEFAULT_PER_PAGE,
     };
-    const result = await searchPeople(apolloApiKey, apolloParams);
+    const result = await searchPeople(apolloApiKey, apolloParams, toCreditAlertIdentity(req));
     const totalEntries = result.total_entries ?? result.pagination?.total_entries ?? 0;
     const people = result.people ?? [];
 
