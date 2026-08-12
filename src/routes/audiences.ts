@@ -6,6 +6,7 @@ import { serviceAuth, orgAuth, AuthenticatedRequest } from "../middleware/auth.j
 import { decryptKey } from "../lib/keys-client.js";
 import { buildFiltersPrompt, APOLLO_UNDOCUMENTED_FILTERS_ENCART } from "../lib/filters-prompt.js";
 import { refineAudience, dryRunCount } from "../lib/audience-refine.js";
+import { toCreditAlertIdentity } from "../lib/credit-alert.js";
 import { SuggestFromSegmentRequestSchema, ApolloNativeSearchFiltersSchema } from "../schemas.js";
 
 const router = Router();
@@ -141,7 +142,7 @@ router.post("/audiences/:apolloAudienceId/dry-run", serviceAuth, async (req: Aut
       { brandIds: row.brandId ? [row.brandId] : req.brandIds, featureSlug: req.featureSlug, workflowSlug: req.workflowSlug },
     );
 
-    const count = await dryRunCount(apolloApiKey, row.filters as Record<string, unknown>);
+    const count = await dryRunCount(apolloApiKey, row.filters as Record<string, unknown>, toCreditAlertIdentity(req));
 
     await db
       .update(apolloAudiences)

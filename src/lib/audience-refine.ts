@@ -24,6 +24,7 @@
 import { z } from "zod";
 import { chatComplete, type ChatTrackingHeaders } from "./chat-client.js";
 import { toApolloSearchParams } from "./transform.js";
+import { toCreditAlertIdentity, type CreditAlertIdentity } from "./credit-alert.js";
 import { searchPeople } from "./apollo-client.js";
 import { SearchFiltersSchema } from "../schemas.js";
 
@@ -92,9 +93,10 @@ export interface RefineResult {
 export async function dryRunCount(
   apolloApiKey: string,
   filters: Record<string, unknown>,
+  alertIdentity?: CreditAlertIdentity,
 ): Promise<number> {
   const apolloParams = { ...toApolloSearchParams(filters), page: 1, per_page: 1 };
-  const result = await searchPeople(apolloApiKey, apolloParams);
+  const result = await searchPeople(apolloApiKey, apolloParams, alertIdentity);
   return result.total_entries ?? result.pagination?.total_entries ?? 0;
 }
 
@@ -414,7 +416,7 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
     // A valid filter set we can dry-run — this consumes one real attempt.
     realAttempts += 1;
     const validFilters = filterCheck.data as Record<string, unknown>;
-    const count = await dryRunCount(input.apolloApiKey, validFilters);
+    const count = await dryRunCount(input.apolloApiKey, validFilters, toCreditAlertIdentity(input.tracking));
 
     // A confirm before a second encoding has been tried is premature: without a
     // contrast set there is nothing to compare against, and a set that silently

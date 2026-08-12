@@ -219,7 +219,8 @@ describe("POST /search/next", () => {
     // Should call Apollo with page 3
     expect(mockSearchPeople).toHaveBeenCalledWith(
       "fake-apollo-key",
-      expect.objectContaining({ page: 3, per_page: 100 })
+      expect.objectContaining({ page: 3, per_page: 100 }),
+      expect.objectContaining({ orgId: expect.any(String) })
     );
   });
 
@@ -261,7 +262,8 @@ describe("POST /search/next", () => {
     expect(mockInsertReturning).toHaveBeenCalled();
     expect(mockSearchPeople).toHaveBeenCalledWith(
       "fake-apollo-key",
-      expect.objectContaining({ page: 1 })
+      expect.objectContaining({ page: 1 }),
+      expect.objectContaining({ orgId: expect.any(String) })
     );
     // No reset-to-page-1 update is ever issued (the reset branch is gone)
     expect(mockUpdateSet).not.toHaveBeenCalledWith(
@@ -294,7 +296,8 @@ describe("POST /search/next", () => {
     // Should use existing page 4, not reset to 1
     expect(mockSearchPeople).toHaveBeenCalledWith(
       "fake-apollo-key",
-      expect.objectContaining({ page: 4 })
+      expect.objectContaining({ page: 4 }),
+      expect.objectContaining({ orgId: expect.any(String) })
     );
   });
 
@@ -621,7 +624,8 @@ describe("POST /search/next", () => {
     // Should use existing page 5, NOT reset to page 1
     expect(mockSearchPeople).toHaveBeenCalledWith(
       "fake-apollo-key",
-      expect.objectContaining({ page: 5 })
+      expect.objectContaining({ page: 5 }),
+      expect.objectContaining({ orgId: expect.any(String) })
     );
     // Should NOT call updateSet to reset cursor
     expect(mockUpdateSet).not.toHaveBeenCalledWith(
@@ -778,7 +782,8 @@ describe("POST /search/next", () => {
     // Resumes the winner's page 7, not a fresh page 1
     expect(mockSearchPeople).toHaveBeenCalledWith(
       "fake-apollo-key",
-      expect.objectContaining({ page: 7 })
+      expect.objectContaining({ page: 7 }),
+      expect.objectContaining({ orgId: expect.any(String) })
     );
   });
 });

@@ -1,4 +1,5 @@
 import type { EmailStatus } from "../schemas.js";
+import { reportApolloCreditsExhausted, type CreditAlertIdentity } from "./credit-alert.js";
 
 const APOLLO_API_BASE = "https://api.apollo.io/api/v1";
 
@@ -309,12 +310,59 @@ export function withVerifiedEmailOnly(person: ApolloPerson): ApolloPerson {
 
 
 /**
+ * HTTP statuses Apollo returns when the account cannot pay for the call:
+ * 402 (payment required), 403 (plan/credit gate), 429 (quota exhausted — Apollo
+ * uses it for both rate limiting and credit limits, so it is worth surfacing).
+ * Every other non-2xx is a normal API error and raises no alert.
+ */
+const APOLLO_CREDIT_DENIED_STATUSES = new Set([402, 403, 429]);
+
+/**
+ * Raise the staff alert when a rejected Apollo response looks like credit
+ * exhaustion. Detached from the request path — the caller still throws.
+ */
+function reportIfCreditDenied(
+  operation: string,
+  status: number,
+  body: string,
+  alertIdentity: CreditAlertIdentity | undefined,
+): void {
+  if (!APOLLO_CREDIT_DENIED_STATUSES.has(status)) return;
+  reportApolloCreditsExhausted(alertIdentity, {
+    operation,
+    reason: `Apollo rejected the request with HTTP ${status}`,
+    apolloStatus: status,
+    apolloBody: body,
+  });
+}
+
+/**
+ * Raise the staff alert when Apollo answered 200 but handed back the
+ * "email exists, your plan/credits cannot reveal it" sentinel instead of an
+ * address. This is the reliable exhaustion signal: it is otherwise indis-
+ * tinguishable downstream from "this person has no verified email", because
+ * `withVerifiedEmailOnly` nulls it before anyone sees it.
+ */
+function reportIfPlaceholderEmail(
+  operation: string,
+  people: Array<Pick<ApolloPerson, "email"> | undefined | null>,
+  alertIdentity: CreditAlertIdentity | undefined,
+): void {
+  if (!people.some((p) => p?.email === APOLLO_PLACEHOLDER_EMAIL)) return;
+  reportApolloCreditsExhausted(alertIdentity, {
+    operation,
+    reason: `Apollo returned the ${APOLLO_PLACEHOLDER_EMAIL} sentinel — the email exists but the plan/credits cannot reveal it`,
+  });
+}
+
+/**
  * Search for people using Apollo API
  * Uses the new api_search endpoint (mixed_people/search is deprecated)
  */
 export async function searchPeople(
   apiKey: string,
-  params: ApolloSearchParams
+  params: ApolloSearchParams,
+  alertIdentity?: CreditAlertIdentity
 ): Promise<ApolloSearchResponse> {
   const response = await fetch(`${APOLLO_API_BASE}/mixed_people/api_search`, {
     method: "POST",
@@ -340,6 +388,7 @@ export async function searchPeople(
       status: response.status,
       error,
     });
+    reportIfCreditDenied("mixed_people/api_search", response.status, error, alertIdentity);
     throw new Error(`Apollo search failed: ${response.status} - ${error}`);
   }
 
@@ -352,7 +401,8 @@ export async function searchPeople(
 export async function enrichPerson(
   apiKey: string,
   personId: string,
-  webhookUrl?: string
+  webhookUrl?: string,
+  alertIdentity?: CreditAlertIdentity
 ): Promise<ApolloEnrichResponse> {
   const response = await fetchWithTimeout(`${APOLLO_API_BASE}/people/match`, {
     method: "POST",
@@ -373,10 +423,13 @@ export async function enrichPerson(
 
   if (!response.ok) {
     const error = await response.text();
+    reportIfCreditDenied("people/match (enrich)", response.status, error, alertIdentity);
     throw new Error(`Apollo enrich failed: ${response.status} - ${error}`);
   }
 
-  return parseWithSafeRequestId<ApolloEnrichResponse>(response);
+  const parsed = await parseWithSafeRequestId<ApolloEnrichResponse>(response);
+  reportIfPlaceholderEmail("people/match (enrich)", [parsed.person], alertIdentity);
+  return parsed;
 }
 
 /**
@@ -388,7 +441,8 @@ export async function matchPersonByName(
   firstName: string,
   lastName: string,
   domain: string,
-  webhookUrl?: string
+  webhookUrl?: string,
+  alertIdentity?: CreditAlertIdentity
 ): Promise<ApolloMatchResponse> {
   const response = await fetchWithTimeout(`${APOLLO_API_BASE}/people/match`, {
     method: "POST",
@@ -409,10 +463,13 @@ export async function matchPersonByName(
 
   if (!response.ok) {
     const error = await response.text();
+    reportIfCreditDenied("people/match", response.status, error, alertIdentity);
     throw new Error(`Apollo match failed: ${response.status} - ${error}`);
   }
 
-  return parseWithSafeRequestId<ApolloMatchResponse>(response);
+  const parsed = await parseWithSafeRequestId<ApolloMatchResponse>(response);
+  reportIfPlaceholderEmail("people/match", [parsed.person], alertIdentity);
+  return parsed;
 }
 
 
@@ -422,7 +479,8 @@ export async function matchPersonByName(
 export async function bulkEnrichPeople(
   apiKey: string,
   personIds: string[],
-  webhookUrl?: string
+  webhookUrl?: string,
+  alertIdentity?: CreditAlertIdentity
 ): Promise<{ matches: ApolloPerson[]; waterfall?: ApolloWaterfallStatus; request_id?: string | number }> {
   const response = await fetch(`${APOLLO_API_BASE}/people/bulk_match`, {
     method: "POST",
@@ -441,8 +499,11 @@ export async function bulkEnrichPeople(
 
   if (!response.ok) {
     const error = await response.text();
+    reportIfCreditDenied("people/bulk_match", response.status, error, alertIdentity);
     throw new Error(`Apollo bulk enrich failed: ${response.status} - ${error}`);
   }
 
-  return parseWithSafeRequestId<{ matches: ApolloPerson[]; waterfall?: ApolloWaterfallStatus; request_id?: string | number }>(response);
+  const parsed = await parseWithSafeRequestId<{ matches: ApolloPerson[]; waterfall?: ApolloWaterfallStatus; request_id?: string | number }>(response);
+  reportIfPlaceholderEmail("people/bulk_match", parsed.matches ?? [], alertIdentity);
+  return parsed;
 }

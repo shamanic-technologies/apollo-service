@@ -162,7 +162,7 @@ describe("Apollo audience endpoints", () => {
       expect.anything(),
     );
     // The refine loop dry-ran each candidate via Apollo per_page=1.
-    expect(mockSearchPeople).toHaveBeenCalledWith("apollo-key", expect.objectContaining({ per_page: 1 }));
+    expect(mockSearchPeople).toHaveBeenCalledWith("apollo-key", expect.objectContaining({ per_page: 1 }), expect.anything());
     // Stored row carries the winning filters + count snapshot.
     expect(state.inserted.filters).toEqual(CONFIRMED_FILTERS);
     expect(state.inserted.count).toBe(42000);
@@ -217,7 +217,7 @@ describe("Apollo audience endpoints", () => {
     mockSearchPeople.mockResolvedValueOnce({ total_entries: 5000, people: [] });
     const res = await request(app).post("/audiences/aud-1/dry-run").set(HEADERS).expect(200);
     expect(res.body).toEqual({ count: 5000 });
-    expect(mockSearchPeople).toHaveBeenCalledWith("apollo-key", expect.objectContaining({ per_page: 1 }));
+    expect(mockSearchPeople).toHaveBeenCalledWith("apollo-key", expect.objectContaining({ per_page: 1 }), expect.anything());
   });
 
   it("POST /:id/dry-run 404 when not found", async () => {

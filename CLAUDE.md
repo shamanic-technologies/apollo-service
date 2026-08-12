@@ -108,6 +108,51 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
   break boot or any existing endpoint — only `/audiences/suggest-from-segment`
   would 500 until they are set.
 
+## Running out of Apollo credits raises a STAFF EMAIL — never let it stay silent
+
+Apollo signals credit exhaustion two ways, and BOTH used to be silent here: a
+200 response whose `email` is the `email_not_unlocked@domain.com` sentinel (an
+email exists but the plan/credits cannot reveal it) and an outright 402/403/429.
+The sentinel is the nastier one — `withVerifiedEmailOnly` nulls it, so downstream
+a dry provider is byte-identical to "this person has no verified email", i.e. the
+service keeps running and quietly serves nothing. Both signals now raise a staff
+alert from `src/lib/credit-alert.ts`, detected at the single chokepoint every
+Apollo HTTP call goes through (`src/lib/apollo-client.ts`).
+
+- **transactional-email-service owns the send** (`POST /platform-send`): it holds
+  the hardcoded internal staff recipient list, the template, the send's run/cost,
+  AND the rate bound. apollo-service declares NO cost for it — same relationship
+  as with chat-service for LLM spend. The payload is the PRODUCER's contract, not
+  ours: `eventType: "provider_credits_exhausted"`, `metadata.provider` +
+  `metadata.reason` REQUIRED non-empty (400 otherwise), `metadata.detail` the
+  optional free-form room for the raw upstream status/body — and those three are
+  exactly what its staff template renders, so anything else we invent is stored
+  and never displayed. `metadata.orgId` is filled in from `x-org-id`; do not send
+  it. `recipientEmail`/`bccEmails` are rejected outright (staff-only delivery).
+  Re-read its deployed OpenAPI before changing any of this.
+- **Zero throttle state on this side, by design.** The alert is deduped per org
+  per calendar day inside transactional-email-service, so a run that hits the
+  wall on thousands of consecutive people cannot mail-bomb. Do NOT add a local
+  counter, cooldown or table — that would duplicate a bound the producer owns.
+- **Org-billed, identity reused.** The alert carries the identity of the inbound
+  request that hit the wall (`toCreditAlertIdentity(req)`), so the staff email
+  names the affected org. An identity-less caller logs a warning and sends
+  nothing (the staff path is org-scoped).
+- **Detached on purpose.** `reportApolloCreditsExhausted` is fire-and-forget with
+  a logged `.catch` — an alert that fails to send must not turn a customer's
+  enrichment into a 500. The Apollo error it accompanies is still thrown. This is
+  the auto-triggered-side-effect exception to fail-loud, not a swallowed error on
+  the request path.
+- **Only 402/403/429 alert.** Every other non-2xx is a normal API error (a 422
+  from a malformed range filter must NOT page anyone).
+- **Env vars:** `TRANSACTIONAL_EMAIL_SERVICE_URL` +
+  `TRANSACTIONAL_EMAIL_SERVICE_API_KEY` (shared fleet values), read lazily inside
+  the alert call — their absence cannot break boot or any endpoint, it only makes
+  the alert fail and log.
+- **Reactive, not predictive.** This fires when the wall is hit, not before. A
+  "only N credits left" warning would need a daily cron against Apollo's usage
+  API; this service has no cron infrastructure today.
+
 ## Commands
 
 - `pnpm test` — run all tests (Vitest)
