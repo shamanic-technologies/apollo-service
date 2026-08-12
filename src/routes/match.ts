@@ -11,6 +11,7 @@ import { authorizeCredit } from "../lib/billing-client.js";
 import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment } from "../lib/transform.js";
 import { MatchRequestSchema } from "../schemas.js";
 import { traceEvent } from "../lib/trace-event.js";
+import { toCreditAlertIdentity } from "../lib/credit-alert.js";
 import { assertKeySource } from "../lib/validators.js";
 // Waterfall disabled 2026-05-28 — see src/lib/waterfall.ts header for revive.
 // import {
@@ -190,7 +191,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
       const recheck = await findCachedMatch(firstName, lastName, organizationDomain);
       if (recheck) return { kind: "cached", record: recheck.record, negative: recheck.negative };
 
-      const result = await matchPersonByName(apolloApiKey, firstName, lastName, organizationDomain, webhookUrl);
+      const result = await matchPersonByName(apolloApiKey, firstName, lastName, organizationDomain, webhookUrl, toCreditAlertIdentity(req));
       // Treat any non-verified email as no email (not billed, not cached, not returned).
       const person = result.person ? withVerifiedEmailOnly(result.person) : null;
 

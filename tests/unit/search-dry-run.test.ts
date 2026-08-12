@@ -144,7 +144,9 @@ describe("POST /search/dry-run", () => {
     expect(mockSearchPeople).toHaveBeenCalledTimes(1);
     expect(mockSearchPeople).toHaveBeenCalledWith(
       "fake-apollo-key",
-      expect.objectContaining({ page: 1, per_page: 1 })
+      expect.objectContaining({ page: 1, per_page: 1 }),
+      // The caller identity rides along so a credit-exhaustion alert can name the org.
+      expect.objectContaining({ orgId: expect.any(String) })
     );
   });
 
