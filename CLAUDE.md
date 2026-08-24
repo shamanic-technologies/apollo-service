@@ -143,8 +143,19 @@ Apollo HTTP call goes through (`src/lib/apollo-client.ts`).
   enrichment into a 500. The Apollo error it accompanies is still thrown. This is
   the auto-triggered-side-effect exception to fail-loud, not a swallowed error on
   the request path.
-- **Only 402/403/429 alert.** Every other non-2xx is a normal API error (a 422
-  from a malformed range filter must NOT page anyone).
+- **Status is NOT the trigger — the BODY is.** What Apollo actually returns when
+  the plan's lead credits hit zero is a plain **422** whose body reads
+  `{"error":"You have insufficient credits! … Upgrade your plan … lead credits."}`.
+  422 is also what an ordinary API error returns (a malformed range filter, a
+  cursor paging past the 50k cap — issue #131), so neither "402/403/429 only" nor
+  "422 means exhausted" works. `looksLikeApolloCreditExhaustion(status, body)` in
+  `src/lib/apollo-client.ts` alerts when the status is 402/403/429 (credit-related
+  by definition) OR the body matches a narrow out-of-credits pattern (every
+  pattern requires the word "credit"/"credits"). Keep the patterns narrow — a
+  detector that fires on ordinary errors trains staff to ignore the alert.
+  (Cost: the 2026-07-28 and 2026-08-22 exhaustions were both fleet-wide, lasted
+  days, and raised nothing — the status-only detector could not see the one
+  signal Apollo sends.)
 - **Env vars:** `TRANSACTIONAL_EMAIL_SERVICE_URL` +
   `TRANSACTIONAL_EMAIL_SERVICE_API_KEY` (shared fleet values), read lazily inside
   the alert call — their absence cannot break boot or any endpoint, it only makes

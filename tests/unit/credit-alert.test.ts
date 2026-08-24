@@ -4,6 +4,7 @@ import {
   enrichPerson,
   matchPersonByName,
   APOLLO_PLACEHOLDER_EMAIL,
+  looksLikeApolloCreditExhaustion,
 } from "../../src/lib/apollo-client.js";
 import {
   reportApolloCreditsExhausted,
@@ -17,6 +18,15 @@ import {
  * that both signals now raise a staff alert through transactional-email-service,
  * and that raising it never changes what the Apollo call itself returns/throws.
  */
+
+/**
+ * Apollo's literal answer when the plan's lead credits hit zero, copied verbatim
+ * from the prod failures of 2026-08-22. Note the status: a plain 422, the same
+ * one a malformed range filter or an over-threshold page returns — so only the
+ * body distinguishes exhaustion from an ordinary API error.
+ */
+const APOLLO_INSUFFICIENT_CREDITS_BODY =
+  '{"error":"You have insufficient credits! <a href=\'https://app.apollo.io/#/settings/plans/upgrade\' aria-onclick=\'close_alert\'>Upgrade your plan</a> to increase your number of lead credits."}';
 
 const IDENTITY = {
   orgId: "org-1",
@@ -146,6 +156,49 @@ describe("Apollo credit-exhaustion staff alert", () => {
     expect(alertCalls(fetchMock)).toHaveLength(0);
   });
 
+  it("alerts on Apollo's literal 422 insufficient-credits body", async () => {
+    apolloRejects(422, APOLLO_INSUFFICIENT_CREDITS_BODY);
+
+    await expect(enrichPerson("key", "person-1", undefined, IDENTITY)).rejects.toThrow(
+      /Apollo enrich failed: 422/,
+    );
+    await flushAlert();
+
+    const calls = alertCalls(fetchMock);
+    // Exactly once, through the existing detached path.
+    expect(calls).toHaveLength(1);
+    const body = JSON.parse(calls[0][1].body as string);
+    expect(body.eventType).toBe(PROVIDER_CREDITS_EXHAUSTED_EVENT);
+    expect(body.metadata.provider).toBe("apollo");
+    expect(body.metadata.reason).toContain("out-of-credits");
+    expect(body.metadata.detail).toContain("people/match (enrich)");
+    expect(body.metadata.detail).toContain("HTTP 422");
+    expect(body.metadata.detail).toContain("insufficient credits");
+    expect(body.metadata.orgId).toBeUndefined();
+  });
+
+  it("alerts on the 422 insufficient-credits body from people-search too", async () => {
+    apolloRejects(422, APOLLO_INSUFFICIENT_CREDITS_BODY);
+
+    await expect(searchPeople("key", { person_titles: ["CEO"] }, IDENTITY)).rejects.toThrow(
+      /Apollo search failed: 422/,
+    );
+    await flushAlert();
+
+    expect(alertCalls(fetchMock)).toHaveLength(1);
+  });
+
+  it("does NOT alert on the over-threshold pagination 422", async () => {
+    apolloRejects(422, '{"error":"Page * per page number is over threshold."}');
+
+    await expect(searchPeople("key", { person_titles: ["CEO"] }, IDENTITY)).rejects.toThrow(
+      /Apollo search failed: 422/,
+    );
+    await flushAlert();
+
+    expect(alertCalls(fetchMock)).toHaveLength(0);
+  });
+
   it("does NOT alert on a normal verified-email response", async () => {
     apolloReturnsPerson({ id: "p1", email: "ada@example.com", email_status: "verified" });
 
@@ -200,5 +253,40 @@ describe("Apollo credit-exhaustion staff alert", () => {
   it("toCreditAlertIdentity returns undefined without an org", () => {
     expect(toCreditAlertIdentity({ userId: "user-1" })).toBeUndefined();
     expect(toCreditAlertIdentity({ orgId: "org-1" })?.orgId).toBe("org-1");
+  });
+});
+
+/**
+ * The detector itself. Apollo states credit exhaustion in the BODY on a status
+ * (422) it also uses for ordinary errors, so status alone cannot be the trigger
+ * and "422 means exhausted" cannot be the rule either.
+ */
+describe("looksLikeApolloCreditExhaustion", () => {
+  it("matches Apollo's literal insufficient-credits 422", () => {
+    expect(looksLikeApolloCreditExhaustion(422, APOLLO_INSUFFICIENT_CREDITS_BODY)).toBe(true);
+  });
+
+  it("matches other plain-English out-of-credits phrasings", () => {
+    expect(looksLikeApolloCreditExhaustion(422, "You are out of credits")).toBe(true);
+    expect(looksLikeApolloCreditExhaustion(422, "Not enough export credits")).toBe(true);
+    expect(looksLikeApolloCreditExhaustion(422, "Your credit limit has been reached")).toBe(true);
+    expect(looksLikeApolloCreditExhaustion(200, "lead credits exhausted")).toBe(true);
+  });
+
+  it("keeps matching the already-covered rejected statuses whatever the body", () => {
+    for (const status of [402, 403, 429]) {
+      expect(looksLikeApolloCreditExhaustion(status, "")).toBe(true);
+    }
+  });
+
+  it("does not match ordinary Apollo errors", () => {
+    expect(
+      looksLikeApolloCreditExhaustion(422, "no implicit conversion of String into Integer"),
+    ).toBe(false);
+    expect(
+      looksLikeApolloCreditExhaustion(422, '{"error":"Page * per page number is over threshold."}'),
+    ).toBe(false);
+    expect(looksLikeApolloCreditExhaustion(404, "Not Found")).toBe(false);
+    expect(looksLikeApolloCreditExhaustion(500, "Internal Server Error")).toBe(false);
   });
 });
