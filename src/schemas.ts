@@ -98,6 +98,29 @@ const VALID_EMAIL_STATUSES = [
 ] as const;
 
 /**
+ * "The provider cannot serve us" — present on an error body ONLY when the
+ * failure is the upstream provider being unable to serve, never on an ordinary
+ * or transient failure. Switch on `code`; never parse `message`.
+ *
+ * `retryable: false` means the same call will keep failing until the provider
+ * recovers (Apollo credits topped up), so repeating it is not worth it. What to
+ * DO about that (stop the campaign, tell the customer) is the caller's call —
+ * this service only states the truth. See `src/lib/provider-error.ts`.
+ */
+export const ProviderErrorSchema = z
+  .object({
+    provider: z.literal("apollo").describe("Upstream provider that could not serve the request"),
+    code: z
+      .literal("provider_credits_exhausted")
+      .describe("Stable machine-readable state: the provider is out of credits"),
+    retryable: z
+      .literal(false)
+      .describe("Retrying will keep failing until the provider recovers"),
+    message: z.string().describe("Human-readable explanation — do not parse"),
+  })
+  .openapi("ProviderError");
+
+/**
  * Discriminated union of error responses. Every 4xx/5xx body has a `type` field
  * so clients can switch on the failure mode without parsing strings.
  */
@@ -137,6 +160,7 @@ export const ErrorResponseSchema = z
       .object({
         type: z.literal("internal"),
         error: z.string(),
+        providerError: ProviderErrorSchema.optional(),
       })
       .openapi("InternalError"),
   ])

@@ -8,6 +8,7 @@ import { buildFiltersPrompt, APOLLO_UNDOCUMENTED_FILTERS_ENCART } from "../lib/f
 import { refineAudience, dryRunCount } from "../lib/audience-refine.js";
 import { toCreditAlertIdentity } from "../lib/credit-alert.js";
 import { SuggestFromSegmentRequestSchema, ApolloNativeSearchFiltersSchema } from "../schemas.js";
+import { providerErrorFields } from "../lib/provider-error.js";
 
 const router = Router();
 
@@ -82,7 +83,7 @@ router.post("/audiences/suggest-from-segment", serviceAuth, async (req: Authenti
     res.json({ apolloAudienceId: row.id, filters: refined.filters, count: refined.count });
   } catch (error) {
     console.error("[Apollo Service][POST /audiences/suggest-from-segment] ERROR:", error);
-    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error" });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
   }
 });
 
@@ -152,7 +153,7 @@ router.post("/audiences/:apolloAudienceId/dry-run", serviceAuth, async (req: Aut
     res.json({ count });
   } catch (error) {
     console.error("[Apollo Service][POST /audiences/:id/dry-run] ERROR:", error);
-    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error" });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
   }
 });
 
