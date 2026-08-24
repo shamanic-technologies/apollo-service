@@ -164,6 +164,44 @@ Apollo HTTP call goes through (`src/lib/apollo-client.ts`).
   "only N credits left" warning would need a daily cron against Apollo's usage
   API; this service has no cron infrastructure today.
 
+## Provider exhaustion is stated to CALLERS too — `providerError` on the error body
+
+The staff email above is only half the answer. Callers used to receive credit
+exhaustion as a generic upstream failure — byte-identical to a transient blip —
+so every consumer had to GUESS, which is what produced 621 identical retries and
+a customer who was told nothing (2026-08-22; same shape 2026-07-28). The
+contract that fixes it lives in `src/lib/provider-error.ts`:
+
+- **Additive, never breaking.** HTTP status and the existing `type` / `error`
+  fields are UNCHANGED. A caller that ignores the signal sees byte-identical
+  behaviour — that is the whole reason the signal is a new FIELD and not a new
+  status code. Do NOT "upgrade" it to a 503 later; four downstream services key
+  on the field.
+- **Present exactly when true.** `ApolloCreditsExhaustedError` is thrown by the
+  Apollo chokepoint (`apolloRequestFailure` in `src/lib/apollo-client.ts`) only
+  when `looksLikeApolloCreditExhaustion` says so, and routes spread
+  `providerErrorFields(error)` into the 500 body. Every ordinary/transient
+  failure carries NO `providerError` key at all, so the two are never conflated
+  and nobody has to count failures to infer the state:
+
+  ```json
+  { "type": "internal", "error": "Apollo search failed: 422 - …",
+    "providerError": { "provider": "apollo", "code": "provider_credits_exhausted",
+                       "retryable": false, "message": "…" } }
+  ```
+
+- **`code` is the switch; `message` is prose.** `provider_credits_exhausted`
+  reuses the vocabulary of the staff alert's `eventType` (#211) — one word for
+  one state across the fleet. Never make a consumer regex `message`; that is how
+  the alert itself broke (#216).
+- **This service states, it does not decide.** No retry limiter, circuit breaker
+  or backoff belongs here — stopping the campaign, backing off and telling the
+  customer are the callers' jobs (chain tracked in campaign-service#397).
+- **Not covered: the 200-with-sentinel case.** The
+  `email_not_unlocked@domain.com` placeholder still raises the staff alert and
+  still returns 200 with a null email (making it throw would be breaking). Only
+  a REJECTED Apollo response carries `providerError`.
+
 ## Commands
 
 - `pnpm test` — run all tests (Vitest)

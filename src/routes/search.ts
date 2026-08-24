@@ -4,6 +4,7 @@ import { db } from "../db/index.js";
 import { apolloPeopleSearches, apolloPeopleEnrichments, apolloSearchCursors } from "../db/schema.js";
 import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
 import { searchPeople, enrichPerson, ApolloPerson, buildWaterfallWebhookUrl, withVerifiedEmailOnly } from "../lib/apollo-client.js";
+import { providerErrorFields } from "../lib/provider-error.js";
 import { advisoryXactLock, enrichLockKey } from "../lib/advisory-lock.js";
 import { decryptKey } from "../lib/keys-client.js";
 import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/runs-client.js";
@@ -99,7 +100,7 @@ router.post("/search/dry-run", serviceAuth, async (req: AuthenticatedRequest, re
     res.json({ totalEntries, validationErrors: [] });
   } catch (error) {
     console.error("[Apollo Service][POST /search/dry-run] ERROR:", error);
-    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error" });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
   }
 });
 
@@ -343,7 +344,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
     if (req.runId) {
       traceEvent(req.runId, { service: "apollo-service", event: "enrich-error", detail: error instanceof Error ? error.message : "Unknown error", level: "error" }, req.headers).catch(() => {});
     }
-    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error" });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
   }
 });
 
@@ -602,7 +603,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     if (req.runId) {
       traceEvent(req.runId, { service: "apollo-service", event: "search-next-error", detail: error instanceof Error ? error.message : "Unknown error", level: "error" }, req.headers).catch(() => {});
     }
-    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error" });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
   }
 });
 
