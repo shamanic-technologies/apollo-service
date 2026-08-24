@@ -313,9 +313,49 @@ export function withVerifiedEmailOnly(person: ApolloPerson): ApolloPerson {
  * HTTP statuses Apollo returns when the account cannot pay for the call:
  * 402 (payment required), 403 (plan/credit gate), 429 (quota exhausted — Apollo
  * uses it for both rate limiting and credit limits, so it is worth surfacing).
- * Every other non-2xx is a normal API error and raises no alert.
+ *
+ * This set alone is NOT sufficient: the status Apollo actually returns when the
+ * lead credits run out is a plain **422** with the exhaustion stated only in the
+ * body (see APOLLO_CREDIT_EXHAUSTED_BODY_PATTERNS). The status set is kept
+ * because a rejected request on any of these statuses is credit-related by
+ * definition, whatever the body says.
  */
 const APOLLO_CREDIT_DENIED_STATUSES = new Set([402, 403, 429]);
+
+/**
+ * Body patterns that mean "Apollo has no credits left", regardless of status.
+ *
+ * Apollo's real answer when the plan's lead credits hit zero, verbatim:
+ *
+ *   HTTP 422
+ *   {"error":"You have insufficient credits! <a href='https://app.apollo.io/#/settings/plans/upgrade' aria-onclick='close_alert'>Upgrade your plan</a> to increase your number of lead credits."}
+ *
+ * 422 is also what Apollo returns for ordinary API errors — a malformed range
+ * filter, or a cursor paging past the 50k result cap — so the status cannot be
+ * the trigger. These patterns are deliberately narrow (they all require the word
+ * "credit"/"credits") so a non-credit 422 raises nothing and staff can keep
+ * trusting the alert.
+ */
+const APOLLO_CREDIT_EXHAUSTED_BODY_PATTERNS: RegExp[] = [
+  /insufficient\s+credits?/i,
+  /\b(?:out\s+of|no|not\s+enough)\s+(?:\w+\s+)?credits?\b/i,
+  /credits?\s+(?:limit\s+)?(?:exhausted|depleted)/i,
+  /credits?\s+limit\b[\w\s]{0,20}?\b(?:reached|exceeded)/i,
+  /(?:exceeded|reached)\s+your\s+(?:\w+\s+)?credit/i,
+];
+
+/**
+ * Does this rejected Apollo response mean "we are out of credits"?
+ *
+ * True when the status itself is a payment/quota rejection, OR when the body
+ * says so in plain English — the latter is the ONLY signal for the 422 Apollo
+ * actually sends. Exported so the detection is testable against Apollo's literal
+ * response body without going through an HTTP mock.
+ */
+export function looksLikeApolloCreditExhaustion(status: number, body: string): boolean {
+  if (APOLLO_CREDIT_DENIED_STATUSES.has(status)) return true;
+  return APOLLO_CREDIT_EXHAUSTED_BODY_PATTERNS.some((pattern) => pattern.test(body));
+}
 
 /**
  * Raise the staff alert when a rejected Apollo response looks like credit
@@ -327,10 +367,13 @@ function reportIfCreditDenied(
   body: string,
   alertIdentity: CreditAlertIdentity | undefined,
 ): void {
-  if (!APOLLO_CREDIT_DENIED_STATUSES.has(status)) return;
+  if (!looksLikeApolloCreditExhaustion(status, body)) return;
+  const statusIsTheSignal = APOLLO_CREDIT_DENIED_STATUSES.has(status);
   reportApolloCreditsExhausted(alertIdentity, {
     operation,
-    reason: `Apollo rejected the request with HTTP ${status}`,
+    reason: statusIsTheSignal
+      ? `Apollo rejected the request with HTTP ${status}`
+      : `Apollo rejected the request with HTTP ${status} and an out-of-credits message`,
     apolloStatus: status,
     apolloBody: body,
   });
