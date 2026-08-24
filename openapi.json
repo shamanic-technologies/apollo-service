@@ -173,11 +173,50 @@
           },
           "error": {
             "type": "string"
+          },
+          "providerError": {
+            "$ref": "#/components/schemas/ProviderError"
           }
         },
         "required": [
           "type",
           "error"
+        ]
+      },
+      "ProviderError": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "apollo"
+            ],
+            "description": "Upstream provider that could not serve the request"
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "provider_credits_exhausted"
+            ],
+            "description": "Stable machine-readable state: the provider is out of credits"
+          },
+          "retryable": {
+            "type": "boolean",
+            "enum": [
+              false
+            ],
+            "description": "Retrying will keep failing until the provider recovers"
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable explanation — do not parse"
+          }
+        },
+        "required": [
+          "provider",
+          "code",
+          "retryable",
+          "message"
         ]
       },
       "SearchDryRunResponse": {

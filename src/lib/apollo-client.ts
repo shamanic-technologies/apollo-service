@@ -1,5 +1,6 @@
 import type { EmailStatus } from "../schemas.js";
 import { reportApolloCreditsExhausted, type CreditAlertIdentity } from "./credit-alert.js";
+import { ApolloCreditsExhaustedError } from "./provider-error.js";
 
 const APOLLO_API_BASE = "https://api.apollo.io/api/v1";
 
@@ -380,6 +381,31 @@ function reportIfCreditDenied(
 }
 
 /**
+ * Single exit for a rejected Apollo response: raise the staff alert when it
+ * looks like credit exhaustion, then build the error the caller will throw.
+ *
+ * The returned error is an `ApolloCreditsExhaustedError` when — and only when —
+ * Apollo is out of credits, so the route handler can put a machine-readable
+ * `providerError` on the response. Its `message` is byte-identical to the plain
+ * Error returned for every other failure, so nothing that reads `err.message`
+ * changes. See `provider-error.ts` for the caller contract.
+ */
+function apolloRequestFailure(
+  operation: string,
+  label: string,
+  status: number,
+  body: string,
+  alertIdentity: CreditAlertIdentity | undefined,
+): Error {
+  reportIfCreditDenied(operation, status, body, alertIdentity);
+  const message = `${label}: ${status} - ${body}`;
+  if (looksLikeApolloCreditExhaustion(status, body)) {
+    return new ApolloCreditsExhaustedError(message, status);
+  }
+  return new Error(message);
+}
+
+/**
  * Raise the staff alert when Apollo answered 200 but handed back the
  * "email exists, your plan/credits cannot reveal it" sentinel instead of an
  * address. This is the reliable exhaustion signal: it is otherwise indis-
@@ -431,8 +457,7 @@ export async function searchPeople(
       status: response.status,
       error,
     });
-    reportIfCreditDenied("mixed_people/api_search", response.status, error, alertIdentity);
-    throw new Error(`Apollo search failed: ${response.status} - ${error}`);
+    throw apolloRequestFailure("mixed_people/api_search", "Apollo search failed", response.status, error, alertIdentity);
   }
 
   return response.json();
@@ -466,8 +491,7 @@ export async function enrichPerson(
 
   if (!response.ok) {
     const error = await response.text();
-    reportIfCreditDenied("people/match (enrich)", response.status, error, alertIdentity);
-    throw new Error(`Apollo enrich failed: ${response.status} - ${error}`);
+    throw apolloRequestFailure("people/match (enrich)", "Apollo enrich failed", response.status, error, alertIdentity);
   }
 
   const parsed = await parseWithSafeRequestId<ApolloEnrichResponse>(response);
@@ -506,8 +530,7 @@ export async function matchPersonByName(
 
   if (!response.ok) {
     const error = await response.text();
-    reportIfCreditDenied("people/match", response.status, error, alertIdentity);
-    throw new Error(`Apollo match failed: ${response.status} - ${error}`);
+    throw apolloRequestFailure("people/match", "Apollo match failed", response.status, error, alertIdentity);
   }
 
   const parsed = await parseWithSafeRequestId<ApolloMatchResponse>(response);
@@ -542,8 +565,7 @@ export async function bulkEnrichPeople(
 
   if (!response.ok) {
     const error = await response.text();
-    reportIfCreditDenied("people/bulk_match", response.status, error, alertIdentity);
-    throw new Error(`Apollo bulk enrich failed: ${response.status} - ${error}`);
+    throw apolloRequestFailure("people/bulk_match", "Apollo bulk enrich failed", response.status, error, alertIdentity);
   }
 
   const parsed = await parseWithSafeRequestId<{ matches: ApolloPerson[]; waterfall?: ApolloWaterfallStatus; request_id?: string | number }>(response);

@@ -4,6 +4,7 @@ import { db } from "../db/index.js";
 import { apolloPeopleEnrichments } from "../db/schema.js";
 import { serviceAuth, type AuthenticatedRequest } from "../middleware/auth.js";
 import { matchPersonByName, buildWaterfallWebhookUrl, withVerifiedEmailOnly, type ApolloPerson } from "../lib/apollo-client.js";
+import { providerErrorFields } from "../lib/provider-error.js";
 import { advisoryXactLock, matchLockKey } from "../lib/advisory-lock.js";
 import { decryptKey } from "../lib/keys-client.js";
 import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/runs-client.js";
@@ -285,7 +286,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
     if (req.runId) {
       traceEvent(req.runId, { service: "apollo-service", event: "match-error", detail: error instanceof Error ? error.message : "Unknown error", level: "error" }, req.headers).catch(() => {});
     }
-    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error" });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
   }
 });
 
