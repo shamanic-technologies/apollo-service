@@ -43,8 +43,16 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
     minimum-encodings gate, no premature-confirm rejection.
   - **Each dry-run returns a COUNT and a SAMPLE of who matched** (`dryRunSample`):
     ~20 people drawn from up to 2 RANDOM pages (`SAMPLE_PAGES` × `SAMPLE_PER_PAGE`,
-    clamped to Apollo's 500-page cap), each rendered as company — title — city,
-    country. Random pages, never the head: Apollo RANKS results, so page 1 is
+    clamped to Apollo's 500-page cap), each rendered as `employer — title`.
+    **That is ALL Apollo's free teaser serves** — a person comes back as
+    `id, first_name, last_name_obfuscated, title, organization` plus `has_city` /
+    `has_state` / `has_country` BOOLEANS, and the nested organization carries only
+    `name` (verified live 2026-08-31). City, country, domain and industry are NOT
+    obtainable at zero credits; do not re-add them to `SampledPerson` expecting
+    values. Consequence worth knowing: the sample exposes an off-target SECTOR
+    (Emmi Group and World Vision in a "drugstores" audience) but cannot expose a
+    GEOGRAPHY leak, so a bare `Switzerland` where cantons were asked for gets no
+    feedback from it. Random pages, never the head: Apollo RANKS results, so page 1 is
     biased in the direction that hides the bug (a set leaking into Romandie shows
     clean German-Swiss shops on page 1 while Geneva sits on page 40). The sample
     is what REPLACES the deleted rules — the model sees Procter & Gamble and Rolex
