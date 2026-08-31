@@ -122,9 +122,7 @@ const decide = (
   action: "test" | "final",
   filters: Record<string, unknown>,
   extra: Record<string, unknown> = {},
-  // Anthropic strict JSON mode cannot describe a sparse filter object, so the
-  // filter set travels as a JSON STRING (see REFINE_RESPONSE_SCHEMA).
-) => chatRes({ action, filters: JSON.stringify(filters), reasoning: "r", ...extra });
+) => chatRes({ action, filters, reasoning: "r", ...extra });
 
 async function createApp() {
   const app = express();
@@ -167,20 +165,16 @@ describe("Apollo audience endpoints", () => {
     expect(res.body.count).toBe(42000);
     expect(res.body.degraded).toBe(false);
     expect(mockChatComplete).toHaveBeenCalledTimes(2);
-    // The strongest model chat-service exposes, JSON mode with NO responseSchema
-    // (a strict Anthropic schema cannot describe the sparse filter object).
+    // Schemaless JSON mode on google/pro (anthropic/opus is usage-capped on the
+    // platform account; the guard below accepts either encoding).
     expect(mockChatComplete).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "anthropic", model: "opus", responseFormat: "json" }),
+      expect.objectContaining({ provider: "google", model: "pro", responseFormat: "json" }),
       expect.anything(),
     );
     // Reasoning stays ON.
     expect(mockChatComplete.mock.calls[0][0].disableThinking).toBeUndefined();
-    // Anthropic JSON mode needs a STRICT schema, and a strict schema cannot
-    // describe a sparse filter object — so filters travel as a JSON string.
-    const schema = mockChatComplete.mock.calls[0][0].responseSchema;
-    expect(schema.additionalProperties).toBe(false);
-    expect(schema.properties.filters.type).toBe("string");
-    expect(schema.required).toEqual(["action", "filters", "reasoning", "matchesRequest"]);
+    // Schemaless: Gemini needs no responseSchema, the Zod guards validate.
+    expect(mockChatComplete.mock.calls[0][0].responseSchema).toBeUndefined();
     // Each candidate was dry-run for free via Apollo per_page=1.
     expect(mockSearchPeople).toHaveBeenCalledWith("apollo-key", expect.objectContaining({ per_page: 1 }), expect.anything());
     // Stored row carries the winning filters + count snapshot + the sample.
@@ -389,6 +383,22 @@ describe("Apollo audience endpoints", () => {
     expect(res.body.count).toBe(42000);
     expect(state.inserted.refineTrace[0].action).toBe("invalid");
     expect(state.inserted.refineTrace[0].validationErrors.length).toBeGreaterThan(0);
+  });
+
+  it("filters sent as a JSON STRING are accepted — a strict-schema provider can only send that", async () => {
+    mockChatComplete
+      .mockReset()
+      .mockResolvedValue(chatRes({ action: "final", filters: JSON.stringify(FINAL_FILTERS), reasoning: "r", matchesRequest: true }));
+    setCounts(42000);
+
+    const res = await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(200);
+
+    expect(res.body.filters).toEqual(FINAL_FILTERS);
+    expect(res.body.degraded).toBe(false);
   });
 
   it("a filters string that is not a JSON object burns the retry budget, not a real attempt", async () => {

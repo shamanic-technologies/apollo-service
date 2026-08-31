@@ -64,18 +64,19 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
     attempt's filters, count, sample and reasoning, in one structured `console.warn`.
     Nothing on the happy path. Without it, an over-strict judgement is
     indistinguishable from a broken call and the only option is a revert (#227).
-  - **The loop runs on `provider:"anthropic", model:"opus"`, and the filter set travels
-    as a JSON STRING.** chat-service REJECTS Anthropic JSON mode without a
-    `responseSchema` (`400 "Anthropic JSON mode requires responseSchema"` — the OpenAPI
-    text suggesting plain `responseFormat:"json"` suffices is wrong for this provider,
-    verified in prod 2026-08-31), and an Anthropic schema must be STRICT: every property
-    in `required`, `additionalProperties:false`. That cannot describe the SPARSE filter
-    object the model emits (a few of ~18 optional filters). So `REFINE_RESPONSE_SCHEMA`
-    declares `filters` as a `string` and `decodeFilters` parses it back — a strict schema
-    describes a string exactly, and the filter vocabulary stays open. Do NOT flatten the
-    filters into a fixed schema shape, and do not drop the schema (the call 400s).
-    Reasoning stays ON (on Anthropic `/complete`, `disableThinking` is a no-op, so it is
-    not sent).
+  - **The loop runs on `provider:"google", model:"pro"`, schemaless JSON, reasoning ON.**
+    `anthropic`/`opus` was the target and its JSON shape IS solved — chat-service REJECTS
+    Anthropic JSON mode without a `responseSchema` (`400 "Anthropic JSON mode requires
+    responseSchema"`; the OpenAPI text implying plain `responseFormat:"json"` suffices is
+    wrong for that provider), and an Anthropic schema must be STRICT (every property in
+    `required`, `additionalProperties:false`), which cannot describe the SPARSE filter
+    object the model emits — so the filter set is sent as a JSON STRING, which a strict
+    schema describes exactly. What blocks opus is not the shape but the platform Anthropic
+    account: it is usage-capped (`"You have reached your specified API usage limits"`, prod
+    2026-08-31), so every refine call 500s. Flipping back is one provider/model pair plus
+    the strict `responseSchema` — `chatComplete` already forwards `responseSchema`, and the
+    decision guard already accepts `filters` as an object OR a JSON string. Do NOT set
+    `disableThinking` or a thinkingLevel floor: judgement is the whole job here.
   - **DO NOT re-add:** the MECE vocabulary and its restated invariant, the
     "maximize volume among the MECE sets" objective, the `reachesOffTarget` /
     `leavesTargetUnreached` self-grading fields, `pickBest`, `MIN_ENCODINGS_BEFORE_CONFIRM`,
