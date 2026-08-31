@@ -146,6 +146,21 @@ function buildSystemPrompt(catalog: string): string {
     "Read how loose the wording is: \"around\", \"roughly\", \"and similar\" widen the described target;",
     "strict, specific wording keeps it tight.",
     "",
+    "FIRMOGRAPHIC CONSTRAINTS ARE NEVER INVENTED. Company headcount",
+    "(organizationNumEmployeesRanges), revenue and funding stage are set ONLY when the description",
+    "states them. Apollo's coverage of those fields is SPARSE — a company whose headcount, revenue",
+    "or funding stage is simply UNKNOWN is dropped by such a filter — so adding one the caller never",
+    "asked for does not sharpen the target, it deletes most of it. Do not infer a size band from",
+    "words like \"shop\", \"store\", \"clinic\", \"local\" or \"independent\" that merely describe the kind",
+    "of business: that inference is leavesTargetUnreached, not diligence. If the description DOES",
+    "state a size (\"small businesses\", \"independent shops under 50 people\", \"$1M-$10M revenue\",",
+    "\"Series A\"), the constraint is part of the target and the set must carry it.",
+    "",
+    "READ THE COUNTS — an unchanged count means you are varying the wrong lever. If your last two",
+    "encodings returned the SAME count, the axis you changed between them is not binding: whatever",
+    "is capping the result is a DIFFERENT filter. Stop refining that axis and change another one.",
+    "First suspect any constraint that is NOT in the description — drop it and re-run the count.",
+    "",
     "THE OBJECTIVE — among the filter sets that hold the invariant, maximize volume.",
     "Two filter sets that describe the SAME target can return very different volumes, not because",
     "one is less correct, but because Apollo's index coverage differs by mechanism (an industry",
@@ -255,6 +270,29 @@ function buildUserMessage(
         "another mechanism for the same idea. Do not drop the concept.",
     );
     lines.push("");
+  }
+
+  // Two consecutive encodings returning an IDENTICAL count is free, reliable
+  // proof that the axis being varied is not the binding one. The history above
+  // already carries it every round; this reads it out loud so it is not ignored
+  // (a run once spent 5 of 6 attempts piling on keyword tags while an invented
+  // 1-50 headcount clamp held the count frozen at 161).
+  const valids = history.filter(
+    (h): h is RefineIteration & { count: number } => h.action !== "invalid" && h.count !== null,
+  );
+  if (valids.length >= 2) {
+    const last = valids[valids.length - 1]!;
+    const prev = valids[valids.length - 2]!;
+    if (last.count === prev.count && last.count > 0) {
+      lines.push(
+        `Your last two encodings both returned ${last.count}. An unchanged count means the axis you ` +
+          "varied between them is NOT what is capping the result — more of the same axis will not move " +
+          "it. Change a DIFFERENT axis, and first consider whether a constraint that the description " +
+          "never stated (a headcount, revenue or funding-stage band especially — Apollo's coverage of " +
+          "those fields is sparse) is the real cap. Drop or widen it and read the count.",
+      );
+      lines.push("");
+    }
   }
 
   const encodings = distinctEncodings(history);

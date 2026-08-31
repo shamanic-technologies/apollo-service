@@ -279,6 +279,73 @@ describe("Apollo audience endpoints", () => {
     expect(allPrompts).not.toContain("NEVER confirm");
   });
 
+  it("never invents a firmographic constraint the description does not state (#229)", async () => {
+    mockSearchPeople
+      .mockResolvedValueOnce({ total_entries: 1000, people: [] })
+      .mockResolvedValueOnce({ total_entries: 42000, people: [] });
+
+    await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(200);
+
+    const [[opts]] = mockChatComplete.mock.calls;
+    // The rule names the three sparse-coverage fields explicitly, says WHY
+    // (unknown values get dropped), and blocks the "shop/store/local ⇒ small"
+    // inference that produced the 161-count Swiss drugstore audience.
+    expect(opts.systemPrompt).toContain("FIRMOGRAPHIC CONSTRAINTS ARE NEVER INVENTED");
+    expect(opts.systemPrompt).toContain("organizationNumEmployeesRanges");
+    expect(opts.systemPrompt).toContain("ONLY when the description");
+    expect(opts.systemPrompt).toContain("SPARSE");
+    expect(opts.systemPrompt).toContain("is simply UNKNOWN is dropped");
+    expect(opts.systemPrompt).toContain("Do not infer a size band");
+    // A description that DOES state a size keeps the constraint legitimate —
+    // this is prompt guidance, never a schema/code ban on the field.
+    expect(opts.systemPrompt).toContain("If the description DOES");
+    expect(opts.systemPrompt).toContain("the set must carry it");
+    // No numeric goal sneaked in with it.
+    const allPrompts = mockChatComplete.mock.calls
+      .map(([o]: any[]) => `${o.systemPrompt}\n${o.message}`)
+      .join("\n");
+    expect(allPrompts).not.toMatch(/ambition|aim for|at least [0-9~]/i);
+  });
+
+  it("reads an unchanged count as evidence the varied axis is not binding (#229)", async () => {
+    mockChatComplete
+      .mockReset()
+      .mockResolvedValueOnce(decide("test", FIRST_ENCODING, MECE))
+      .mockResolvedValueOnce(decide("test", { personTitles: ["CTO"] }, MECE))
+      .mockResolvedValue(decide("confirm", CONFIRMED_FILTERS, MECE));
+    // Two consecutive encodings return the IDENTICAL count — the tell that the
+    // axis being varied is not the cap.
+    mockSearchPeople
+      .mockResolvedValueOnce({ total_entries: 161, people: [] })
+      .mockResolvedValueOnce({ total_entries: 161, people: [] })
+      .mockResolvedValueOnce({ total_entries: 42000, people: [] });
+
+    await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(200);
+
+    // The standing instruction lives in the system prompt every round…
+    const [[first]] = mockChatComplete.mock.calls;
+    expect(first.systemPrompt).toContain("READ THE COUNTS");
+    expect(first.systemPrompt).toContain("Stop refining that axis and change another one");
+
+    // …and the third round's user message calls out the concrete stall.
+    const third = mockChatComplete.mock.calls[2][0];
+    expect(third.message).toContain("Your last two encodings both returned 161");
+    expect(third.message).toContain("Change a DIFFERENT axis");
+    expect(third.message).toContain("never stated");
+
+    // Round 2 has only one prior count — nothing to compare, no stall claim.
+    const second = mockChatComplete.mock.calls[1][0];
+    expect(second.message).not.toContain("last two encodings both returned");
+  });
+
   it("AC2 — restates the MECE invariant in EVERY round's user message, independent of count", async () => {
     mockChatComplete
       .mockReset()
