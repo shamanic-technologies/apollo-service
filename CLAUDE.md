@@ -28,7 +28,7 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
 - **The NL-segment→filters agentic refine loop lives HERE** (`src/lib/audience-refine.ts`),
   not in human-service. It calls **chat-service** for the LLM (chat-service owns
   the LLM cost — apollo-service declares NONE for it) and uses the FREE Apollo
-  dry-run (per_page=1, zero credits) for live count feedback.
+  dry-run (zero credits) for live count feedback plus a matched-company sample.
 - **Refine-loop objective — the MECE invariant + max volume AMONG the MECE sets.
   The loop is NOT steered by size. There is NO floor, ambition or target band.**
   Every round the model must hold ONE invariant, restated in EVERY user message
@@ -55,18 +55,39 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
     its own mechanism per case; the invariant is the only constraint. Removal is the fix,
     not a replacement rule. (The appended `APOLLO_UNDOCUMENTED_FILTERS_ENCART` keeps the
     verified Apollo count FACTS — those are observed engine behaviour, not fidelity rules.)
-  - **Per-round self-judgement + a revision channel.** Each decision JSON carries four
-    fields describing the set it proposes — `reachesOffTarget` / `offTargetReason`
-    (matches people outside the described target) and `leavesTargetUnreached` /
-    `unreachedReason` (excludes people inside it). Names follow Nielsen Digital Ad Ratings
-    vocabulary; keep them. They land on every `RefineIteration` (so they persist in the
-    bronze `refine_trace`) and are echoed back into the next round's input. A later round
-    MAY re-judge an earlier iteration via `revisions[]` — the proposer grades its own set
-    before knowing the count and is biased toward clean flags, whereas re-judging with the
-    count known and an alternative encoding for contrast is a far less biased act. Newest
-    revision wins on the flat fields; the full history stays under `revisions`.
+  - **The judgement comes from an INDEPENDENT GRADER, never from the proposer (#224).**
+    Two roles, two `chatComplete` calls per real attempt, both on `provider:"zai"`,
+    `model:"glm-flash"`, `disableThinking:true`: the PROPOSER emits `{action, filters,
+    reasoning}` only, and a separate GRADER returns the four judgement fields —
+    `reachesOffTarget` / `offTargetReason` (matches people outside the described target)
+    and `leavesTargetUnreached` / `unreachedReason` (excludes people inside it). Names
+    follow Nielsen Digital Ad Ratings vocabulary; keep them. The verdict lands on the
+    `RefineIteration` (so it persists in the bronze `refine_trace`) exactly where the
+    self-grade used to. Non-negotiable properties:
+    - **The grader NEVER sees the count.** Its input is `{name, description, filters,
+      matched-company sample}` — nothing else. Off-target is judged from the sample,
+      leaves-unreached from filter semantics. Showing it a number reintroduces the exact
+      size pressure that made a 137-match sector-less set beat the correct 19-match one.
+      `maximize volume` stays in the PROPOSER's prompt and in `pickBest`, where it is free.
+    - **It is a VERDICT, not a negotiation.** No reply channel to the proposer, no memory
+      of prior verdicts, no loop until agreement. It adds CALLS per iteration, never
+      ITERATIONS — `MAX_REAL_ATTEMPTS` (6) and `MAX_INVALID_RETRIES` (3) are untouched.
+    - **Fail loud.** An unparsable verdict throws; there is no default-to-clean (that
+      default IS the bug this split removes).
+    - Its fixed shape is enforced server-side via `responseSchema` (glm-flash serves
+      `json_schema`); the sparse Apollo filter object the proposer emits cannot carry one,
+      so the proposer stays on plain JSON mode + the Zod guard.
+    - The dry-run pulls `DRY_RUN_SAMPLE_SIZE` (10) people so the grader has real company
+      names. Still zero Apollo credits — the teaser is free at any `per_page`. The
+      count-only route (`POST /audiences/{id}/dry-run`) stays on `per_page=1`.
+    - **The grader's rejection reason is threaded into the next round's proposer message**
+      (with the matched companies it saw). Context, not negotiation: a blind retry is a
+      random walk, a concrete reason makes 6 attempts a search.
+    - **`revisions` is GONE** (schema, `RefineIteration`, `applyRevisions`). It existed so
+      a proposer could re-judge after seeing a count it had not seen when it graded; a
+      grader that judges once does not have that problem. Do not bring it back.
   - **Selection is DETERMINISTIC in code, not the model's `confirm`.** `pickBest` = max
-    `count` among iterations with BOTH flags `false` (after revisions) and `count > 0`.
+    `count` among iterations with BOTH flags `false` (as set by the grader) and `count > 0`.
     `action:"confirm"` only means "I am done exploring" — it does not pick the set. No
     both-flags-false iteration → **throw** (fail loud, no audience persisted): human-service
     runs per-segment builds under `Promise.allSettled`, so losing one bad segment is correct.
@@ -98,7 +119,15 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
   keyword ban (the description literally said "wellness"), the redundant-keyword example, the
   `q_keywords` volume-killer figures, and "add a keyword only if no structured filter expresses
   the idea". It did not hallucinate. Fix = this section: MECE invariant + max-volume-among-MECE,
-  size steering deleted, mechanism rules deleted, selection moved into code.)
+  size steering deleted, mechanism rules deleted, selection moved into code. 2026-08-31
+  (#224): two prod audiences showed the SELF-grade failing in both directions — `Regional
+  Swiss-German Drugstore Buyers` escaped two 0-counts by DROPPING the shop type and the
+  region ("Dropping the overly restrictive keyword and specific city filters…") and graded
+  the result clean at 552; `Zurich Bio Shop Buyers` graded the CORRECT 19-match set
+  (organic / health-food tags + a pharmacy exclusion) `leavesTargetUnreached` purely for
+  being small, then confirmed a sector-less 137 ("without over-filtering on niche keyword
+  tags"). Same leak both times: ONE model emitted the judgement AND the volume preference
+  in one JSON message. Fix = split the grader out and blind it to the count.)
 - **Endpoints:** `POST /audiences/suggest-from-segment`, `GET /audiences/{id}`,
   `POST /audiences/{id}/dry-run`. A serve-next-by-audience-id endpoint is a
   later wave (designed with human-service) — do NOT build it here yet.
