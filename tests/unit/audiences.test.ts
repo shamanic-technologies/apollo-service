@@ -9,7 +9,10 @@ import request from "supertest";
  *   POST /audiences/:id/dry-run           → re-count
  *
  * The agentic refine loop (audience-refine.ts) runs for real; only its leaves
- * are mocked — chat-service (chatComplete) and Apollo (searchPeople).
+ * are mocked — chat-service (chatComplete) and Apollo (searchPeople). The loop
+ * makes TWO kinds of chat calls per real attempt: a PROPOSER turn that emits a
+ * filter set and an independent GRADER turn that judges it. The mock routes by
+ * system prompt, so a test queues the two sides separately.
  */
 
 // ── Stateful db mock ──
@@ -106,12 +109,39 @@ const unreached = (why: string) => ({
 });
 
 const chatRes = (json: unknown) => ({ json, content: "", tokensInput: 1, tokensOutput: 1, model: "m" });
-const decide = (
-  action: "test" | "confirm",
-  filters: Record<string, unknown>,
-  judgement: Record<string, unknown>,
-  extra: Record<string, unknown> = {},
-) => chatRes({ action, filters, reasoning: "r", ...judgement, ...extra });
+/** A PROPOSER turn: it emits an action + a filter set, and NOTHING else — it no
+ * longer grades its own proposal. */
+const propose = (action: "test" | "confirm", filters: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
+  chatRes({ action, filters, reasoning: "r", ...extra });
+/** A GRADER turn: the independent verdict on someone else's filter set. */
+const verdict = (judgement: Record<string, unknown>) => chatRes(judgement);
+
+const GRADER_MARKER = "You review Apollo People Search filter sets";
+const isGraderCall = (opts: any) => String(opts.systemPrompt).includes(GRADER_MARKER);
+
+/** Queues, consumed in order; the last entry repeats once a queue runs dry. */
+let proposerQueue: any[] = [];
+let graderQueue: any[] = [];
+
+function queueProposer(...responses: any[]) {
+  proposerQueue = [...responses];
+}
+function queueGrader(...responses: any[]) {
+  graderQueue = [...responses];
+}
+const proposerCalls = () => mockChatComplete.mock.calls.filter(([o]: any[]) => !isGraderCall(o));
+const graderCalls = () => mockChatComplete.mock.calls.filter(([o]: any[]) => isGraderCall(o));
+
+/** A search result carrying a company sample, so the grader sees real names. */
+const searchRes = (total: number, companies: string[] = []) => ({
+  total_entries: total,
+  people: companies.map((name, i) => ({
+    id: `p-${i}`,
+    name: `Person ${i}`,
+    title: "Buyer",
+    organization: { id: `o-${i}`, name, industry: "retail" },
+  })),
+});
 
 async function createApp() {
   const app = express();
@@ -129,20 +159,31 @@ describe("Apollo audience endpoints", () => {
     state.inserted = null;
     state.selectRow = undefined;
     mockDecryptKey.mockResolvedValue({ key: "apollo-key", keySource: "platform" });
-    mockSearchPeople.mockResolvedValue({ total_entries: 42000, people: [] });
+    // mockReset (not clearAllMocks): leftover `…Once` queues would otherwise
+    // leak counts into the next test.
+    mockSearchPeople.mockReset();
+    mockChatComplete.mockReset();
+    mockSearchPeople.mockResolvedValue(searchRes(42000));
+
     // Default: one exploratory encoding, then a confirm on a second encoding
     // (a confirm before a second encoding exists is premature — see the
-    // "must test an alternative encoding" test).
-    mockChatComplete
-      .mockResolvedValueOnce(decide("test", FIRST_ENCODING, MECE))
-      .mockResolvedValue(decide("confirm", CONFIRMED_FILTERS, MECE));
+    // "must test an alternative encoding" test). Every set grades MECE.
+    queueProposer(propose("test", FIRST_ENCODING), propose("confirm", CONFIRMED_FILTERS));
+    queueGrader(verdict(MECE));
+
+    mockChatComplete.mockImplementation(async (opts: any) => {
+      const queue = isGraderCall(opts) ? graderQueue : proposerQueue;
+      if (queue.length === 0) throw new Error("test mock: no queued chat response");
+      return queue.length === 1 ? queue[0] : queue.shift();
+    });
+
     app = await createApp();
   });
 
   it("POST /suggest-from-segment persists and returns {apolloAudienceId, filters, count}", async () => {
     mockSearchPeople
-      .mockResolvedValueOnce({ total_entries: 1000, people: [] })
-      .mockResolvedValueOnce({ total_entries: 42000, people: [] });
+      .mockResolvedValueOnce(searchRes(1000, ["Acme"]))
+      .mockResolvedValueOnce(searchRes(42000, ["Globex"]));
 
     const res = await request(app)
       .post("/audiences/suggest-from-segment")
@@ -153,26 +194,35 @@ describe("Apollo audience endpoints", () => {
     expect(res.body.apolloAudienceId).toBe("aud-1");
     expect(res.body.filters).toEqual(CONFIRMED_FILTERS);
     expect(res.body.count).toBe(42000);
-    expect(mockChatComplete).toHaveBeenCalledTimes(2);
-    // Refine LLM goes through Google (Gemini) JSON mode, NOT Anthropic: chat-service
-    // requires a strict responseSchema for Anthropic JSON, incompatible with the
-    // sparse Apollo filter object. Gemini JSON mode needs no schema.
-    expect(mockChatComplete).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "google", responseFormat: "json" }),
-      expect.anything(),
-    );
-    // The refine loop dry-ran each candidate via Apollo per_page=1.
-    expect(mockSearchPeople).toHaveBeenCalledWith("apollo-key", expect.objectContaining({ per_page: 1 }), expect.anything());
+    // Two real attempts → two proposer turns and two INDEPENDENT grader turns.
+    expect(proposerCalls()).toHaveLength(2);
+    expect(graderCalls()).toHaveLength(2);
+    // Both sides run on zai/glm-flash with reasoning off.
+    for (const [opts] of mockChatComplete.mock.calls) {
+      expect(opts.provider).toBe("zai");
+      expect(opts.model).toBe("glm-flash");
+      expect(opts.disableThinking).toBe(true);
+      expect(opts.responseFormat).toBe("json");
+    }
+    // The grader's fixed verdict shape is enforced server-side; the sparse
+    // filter object the proposer emits cannot carry a schema.
+    expect(graderCalls()[0][0].responseSchema).toMatchObject({
+      required: ["reachesOffTarget", "offTargetReason", "leavesTargetUnreached", "unreachedReason"],
+    });
+    expect(proposerCalls()[0][0].responseSchema).toBeUndefined();
+    // The refine loop dry-runs with a small SAMPLE so the grader sees companies.
+    expect(mockSearchPeople).toHaveBeenCalledWith("apollo-key", expect.objectContaining({ per_page: 10 }), expect.anything());
     // Stored row carries the winning filters + count snapshot.
     expect(state.inserted.filters).toEqual(CONFIRMED_FILTERS);
     expect(state.inserted.count).toBe(42000);
     expect(state.inserted.status).toBe("confirmed");
-    // The four target-fit fields land in the bronze refine_trace.
+    // The four target-fit fields + the sample land in the bronze refine_trace.
     expect(state.inserted.refineTrace[0]).toMatchObject({
       reachesOffTarget: false,
       offTargetReason: null,
       leavesTargetUnreached: false,
       unreachedReason: null,
+      sampleCompanies: [expect.stringContaining("Acme")],
     });
   });
 
@@ -214,9 +264,10 @@ describe("Apollo audience endpoints", () => {
 
   it("POST /:id/dry-run re-counts the stored filters and returns {count}", async () => {
     state.selectRow = { id: "aud-1", orgId: "org-1", brandId: "brand-1", filters: CONFIRMED_FILTERS, count: 4200 };
-    mockSearchPeople.mockResolvedValueOnce({ total_entries: 5000, people: [] });
+    mockSearchPeople.mockResolvedValueOnce(searchRes(5000));
     const res = await request(app).post("/audiences/aud-1/dry-run").set(HEADERS).expect(200);
     expect(res.body).toEqual({ count: 5000 });
+    // The count-only route stays on the cheapest teaser — no sample needed.
     expect(mockSearchPeople).toHaveBeenCalledWith("apollo-key", expect.objectContaining({ per_page: 1 }), expect.anything());
   });
 
@@ -226,13 +277,11 @@ describe("Apollo audience endpoints", () => {
   });
 
   // ────────────────────────────────────────────────────────────────────────
-  // The MECE invariant + max-volume-among-MECE objective
+  // The MECE invariant, judged by an independent grader
   // ────────────────────────────────────────────────────────────────────────
 
-  it("prompts with the MECE invariant + max-volume objective, and none of the removed size/keyword rules", async () => {
-    mockSearchPeople
-      .mockResolvedValueOnce({ total_entries: 1000, people: [] })
-      .mockResolvedValueOnce({ total_entries: 42000, people: [] });
+  it("prompts the proposer with the MECE invariant + max-volume objective, and none of the removed size/keyword rules", async () => {
+    mockSearchPeople.mockResolvedValueOnce(searchRes(1000)).mockResolvedValueOnce(searchRes(42000));
 
     await request(app)
       .post("/audiences/suggest-from-segment")
@@ -240,10 +289,7 @@ describe("Apollo audience endpoints", () => {
       .send({ name: "n", description: "d", brandId: null })
       .expect(200);
 
-    const [[opts]] = mockChatComplete.mock.calls;
-    // Refine loop runs on flash (Gemini 2.5 Flash) with thinking fully off.
-    expect(opts.model).toBe("flash");
-    expect(opts.disableThinking).toBe(true);
+    const [opts] = proposerCalls()[0];
 
     // The invariant, verbatim, plus the objective on top of it.
     expect(opts.systemPrompt).toContain("we do not add people who should not be there");
@@ -252,8 +298,11 @@ describe("Apollo audience endpoints", () => {
     // The exploration mandate — why the loop has rounds at all.
     expect(opts.systemPrompt).toContain('A 0 means "this word does not work"');
     expect(opts.systemPrompt).toContain("Never drop the concept.");
+    // The proposer no longer grades anything.
+    expect(opts.systemPrompt).toContain("YOU DO NOT GRADE YOUR OWN SETS");
+    expect(opts.systemPrompt).not.toContain('"reachesOffTarget": true | false');
 
-    // AC1 — the four instructions that pushed the model to drop the sector are GONE,
+    // The four instructions that pushed the model to drop the sector are GONE,
     // with no rule-based replacement. (Asserted on the exact authored strings: the
     // appended Apollo encart legitimately keeps the verified count figures, which
     // are observed Apollo behaviour, not a fidelity rule.)
@@ -261,11 +310,9 @@ describe("Apollo audience endpoints", () => {
     expect(opts.systemPrompt).not.toContain("REDUNDANT filter");
     expect(opts.systemPrompt).not.toContain("harshest volume killer");
     expect(opts.systemPrompt).not.toContain("Add a keyword ONLY when");
-    // (`wellness` still occurs in the schema-generated industry catalog — that is a
-    // legal Apollo VALUE, not the banned-keyword rule that was removed.)
     expect(opts.systemPrompt).not.toContain("that betrays the request");
 
-    // AC3 — no floor, no ambition, no band, anywhere in either prompt.
+    // No floor, no ambition, no band, anywhere in any prompt.
     const allPrompts = mockChatComplete.mock.calls
       .map(([o]: any[]) => `${o.systemPrompt}\n${o.message}`)
       .join("\n");
@@ -277,17 +324,17 @@ describe("Apollo audience endpoints", () => {
     expect(allPrompts).not.toContain("NEVER confirm");
   });
 
-  it("AC2 — restates the MECE invariant in EVERY round's user message, independent of count", async () => {
-    mockChatComplete
-      .mockReset()
-      .mockResolvedValueOnce(decide("test", FIRST_ENCODING, MECE))
-      .mockResolvedValueOnce(decide("test", { personTitles: ["CTO"] }, MECE))
-      .mockResolvedValue(decide("confirm", CONFIRMED_FILTERS, MECE));
+  it("restates the MECE invariant in EVERY proposer round, independent of count", async () => {
+    queueProposer(
+      propose("test", FIRST_ENCODING),
+      propose("test", { personTitles: ["CTO"] }),
+      propose("confirm", CONFIRMED_FILTERS),
+    );
     // A huge count on round 1 must NOT silence the invariant on round 2.
     mockSearchPeople
-      .mockResolvedValueOnce({ total_entries: 900000, people: [] })
-      .mockResolvedValueOnce({ total_entries: 300, people: [] })
-      .mockResolvedValueOnce({ total_entries: 42000, people: [] });
+      .mockResolvedValueOnce(searchRes(900000))
+      .mockResolvedValueOnce(searchRes(300))
+      .mockResolvedValueOnce(searchRes(42000));
 
     await request(app)
       .post("/audiences/suggest-from-segment")
@@ -295,58 +342,176 @@ describe("Apollo audience endpoints", () => {
       .send({ name: "n", description: "d", brandId: null })
       .expect(200);
 
-    expect(mockChatComplete).toHaveBeenCalledTimes(3);
-    for (const [opts] of mockChatComplete.mock.calls) {
+    expect(proposerCalls()).toHaveLength(3);
+    for (const [opts] of proposerCalls()) {
       expect(opts.message).toContain("we do not add people who should not be there");
       expect(opts.message).toContain("we do not leave out people who should be there");
     }
   });
 
-  it("the 82,522 regression: a sector-less set flagged off-target never wins, even at 20x the count", async () => {
-    // The exact prod row that motivated this change (apollo_audiences
-    // aa95612d-…): "Owner" + include_similar_titles + US + 11-50 employees and
-    // NO sector constraint matched every US small-business owner — 82,522 —
-    // while the description states chiropractic/wellness clinics.
-    const description =
-      "Lead chiropractors, clinic directors, and owners managing multi-practitioner chiropractic " +
-      "and wellness clinics with 11-50 employees located across the United States.";
-    const sectorless = {
-      personTitles: ["Chiropractor", "Clinic Director", "Owner"],
-      personLocations: ["United States"],
-      includeSimilarTitles: true,
-      organizationNumEmployeesRanges: ["11,50"],
-    };
-    const withSector = { ...sectorless, qOrganizationKeywordTags: ["chiropractic", "wellness"] };
-
-    mockChatComplete
-      .mockReset()
-      .mockResolvedValueOnce(
-        decide("test", sectorless, offTarget("no sector constraint — matches US small-business owners in any industry")),
-      )
-      .mockResolvedValue(decide("confirm", withSector, MECE));
-    mockSearchPeople
-      .mockResolvedValueOnce({ total_entries: 82522, people: [] })
-      .mockResolvedValueOnce({ total_entries: 4100, people: [] });
+  it("AC1 — the judgement on a trace row comes from a call that did not author that row's filters", async () => {
+    // The proposer emits the flags anyway (old shape); they are IGNORED. Only
+    // the grader's verdict lands on the row.
+    queueProposer(
+      propose("test", FIRST_ENCODING, MECE),
+      propose("confirm", CONFIRMED_FILTERS, MECE),
+    );
+    queueGrader(verdict(offTarget("matches employers outside the described target")), verdict(MECE));
+    mockSearchPeople.mockResolvedValueOnce(searchRes(82522, ["Rolex"])).mockResolvedValueOnce(searchRes(4100, ["Drogerie Müller"]));
 
     const res = await request(app)
       .post("/audiences/suggest-from-segment")
       .set(HEADERS)
-      .send({ name: "Multi-Practitioner Clinic Directors US", description, brandId: null })
+      .send({ name: "n", description: "d", brandId: null })
       .expect(200);
 
-    // Max-count-among-MECE, not max-count: 82,522 is excluded by its flag.
-    expect(res.body.filters).toEqual(withSector);
+    // Round 1 self-graded clean and had 20x the volume — the grader excluded it.
     expect(res.body.count).toBe(4100);
-    expect(state.inserted.count).toBe(4100);
-    // The rejected set is still traced, flag + reason intact (bronze).
+    expect(res.body.filters).toEqual(CONFIRMED_FILTERS);
     expect(state.inserted.refineTrace[0]).toMatchObject({
       count: 82522,
       reachesOffTarget: true,
-      offTargetReason: expect.stringContaining("no sector"),
+      offTargetReason: expect.stringContaining("outside the described target"),
     });
+    // The grader was handed the set it judged, not asked to write one.
+    expect(graderCalls()[0][0].message).toContain("fintech");
+    expect(graderCalls()[0][0].message).toContain("Filter set under review");
   });
 
-  it("AC8 — a description that states no sector is NOT forced to acquire one", async () => {
+  it("AC2 — the grader's input contains no count", async () => {
+    mockSearchPeople
+      .mockResolvedValueOnce(searchRes(137, ["Coop City"]))
+      .mockResolvedValueOnce(searchRes(19, ["Reformhaus Ruprecht"]));
+
+    await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "Bio shop buyers in Zurich", brandId: null })
+      .expect(200);
+
+    for (const [opts] of graderCalls()) {
+      const whole = `${opts.systemPrompt}\n${opts.message}`;
+      expect(whole).not.toContain("137");
+      expect(whole).not.toContain("19");
+      expect(opts.message).not.toMatch(/count/i);
+      expect(opts.message).not.toMatch(/matches|volume|how many/i);
+    }
+    // And the grader is told size is not its business.
+    expect(graderCalls()[0][0].systemPrompt).toContain("audience size is NOT your concern");
+  });
+
+  it("AC3 — the grader's rejection reason appears in the next round's proposer message", async () => {
+    queueProposer(propose("test", FIRST_ENCODING), propose("confirm", CONFIRMED_FILTERS));
+    queueGrader(
+      verdict(offTarget("matches Honeywell and Rolex, which are not drugstores")),
+      verdict(MECE),
+    );
+    mockSearchPeople
+      .mockResolvedValueOnce(searchRes(552, ["Honeywell Technologies", "Rolex"]))
+      .mockResolvedValueOnce(searchRes(120, ["Drogerie Bahnhof"]));
+
+    await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "Drugstore buyers", brandId: null })
+      .expect(200);
+
+    const secondTurn = proposerCalls()[1][0].message as string;
+    expect(secondTurn).toContain("The reviewer REJECTED your last set");
+    expect(secondTurn).toContain("matches Honeywell and Rolex, which are not drugstores");
+    expect(secondTurn).toContain("Honeywell Technologies");
+    expect(secondTurn).toContain("without dropping any concept the description states");
+  });
+
+  it("AC4 — `revisions` is gone: a proposer that sends them cannot re-judge an earlier row", async () => {
+    queueProposer(
+      propose("test", FIRST_ENCODING),
+      propose("confirm", CONFIRMED_FILTERS, {
+        revisions: [{ iteration: 1, reachesOffTarget: true, offTargetReason: "nope", leavesTargetUnreached: false, unreachedReason: null }],
+      }),
+    );
+    queueGrader(verdict(MECE));
+    mockSearchPeople.mockResolvedValueOnce(searchRes(82522)).mockResolvedValueOnce(searchRes(4100));
+
+    const res = await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(200);
+
+    // Iteration 1 keeps the grader's verdict; the "revision" is inert.
+    expect(state.inserted.refineTrace[0].reachesOffTarget).toBe(false);
+    expect(state.inserted.refineTrace[0].revisions).toBeUndefined();
+    expect(res.body.count).toBe(82522);
+    // And the proposer is never invited to revise anything.
+    expect(proposerCalls()[0][0].systemPrompt).not.toContain("revisions");
+    expect(proposerCalls()[1][0].message).not.toContain("revisions");
+  });
+
+  it("AC5 — the Swiss drugstore replay: a Switzerland+retail set that dropped the shop type and region fails loud", async () => {
+    const description =
+      "Buyers and purchasing managers of psyllium husk products working in independent drogueries and " +
+      "health drugstores located across German-speaking Switzerland outside of Zurich, excluding pharmacies.";
+    const withKeyword = {
+      personTitles: ["Buyer", "Purchasing Manager"],
+      personLocations: ["Switzerland"],
+      qKeywords: "psyllium OR Flohsamenschalen",
+    };
+    const dropped = { personTitles: ["Buyer", "Purchasing Manager"], personLocations: ["Switzerland"], qOrganizationKeywordTags: ["retail"] };
+
+    queueProposer(propose("test", withKeyword), propose("confirm", dropped));
+    queueGrader(
+      verdict(unreached("the psyllium keyword returned nothing, but the shop type is still required")),
+      verdict(offTarget("matches Honeywell Technologies, Procter & Gamble and Rolex — not drugstores; the shop type and the German-speaking region were dropped")),
+    );
+    mockSearchPeople
+      .mockResolvedValueOnce(searchRes(0))
+      .mockResolvedValue(searchRes(552, ["Honeywell Technologies", "Procter & Gamble", "Rolex"]));
+
+    const res = await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "Regional Swiss-German Drugstore Buyers", description, brandId: null })
+      .expect(500);
+
+    expect(res.body.error).toContain("judged MECE");
+    expect(state.inserted).toBeNull();
+  });
+
+  it("AC6 — the Zurich bio-shop replay: the 19-count set carrying the sector tags beats the 137-count sector-less one", async () => {
+    const description =
+      "Buyers and purchasing managers at organic and health-food shops in Zurich, excluding pharmacies.";
+    const sectorless = {
+      personTitles: ["Buyer", "Purchasing Manager"],
+      personLocations: ["Zurich"],
+      qOrganizationKeywordTags: ["retail"],
+    };
+    const withSector = {
+      ...sectorless,
+      qOrganizationKeywordTags: ["organic", "health food"],
+      person_not_titles: ["Pharmacist", "Pharmacy"],
+    };
+
+    queueProposer(propose("test", sectorless), propose("confirm", withSector));
+    queueGrader(
+      verdict(offTarget("no organic/health-food constraint and no pharmacy exclusion — matches Coop City and Migros")),
+      verdict(MECE),
+    );
+    mockSearchPeople
+      .mockResolvedValueOnce(searchRes(137, ["Coop City", "Migros"]))
+      .mockResolvedValueOnce(searchRes(19, ["Reformhaus Ruprecht", "Bioladen Zürich"]));
+
+    const res = await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "Zurich Bio Shop Buyers", description, brandId: null })
+      .expect(200);
+
+    expect(res.body.filters).toEqual(withSector);
+    expect(res.body.count).toBe(19);
+  });
+
+  it("a description that states no sector is NOT forced to acquire one", async () => {
     // Guards the opposite regression (#178, 14-67-match audiences): MECE is
     // measured against the DESCRIBED target, so a sector-free description is
     // correctly served by a sector-free filter set — and a set that invented a
@@ -354,15 +519,9 @@ describe("Apollo audience endpoints", () => {
     const sectorFree = { personTitles: ["Founder"], personSeniorities: ["founder"] };
     const inventedSector = { ...sectorFree, qOrganizationKeywordTags: ["software"] };
 
-    mockChatComplete
-      .mockReset()
-      .mockResolvedValueOnce(decide("test", sectorFree, MECE))
-      .mockResolvedValue(
-        decide("confirm", inventedSector, unreached("adds a software sector the description never stated")),
-      );
-    mockSearchPeople
-      .mockResolvedValueOnce({ total_entries: 61000, people: [] })
-      .mockResolvedValueOnce({ total_entries: 9000, people: [] });
+    queueProposer(propose("test", sectorFree), propose("confirm", inventedSector));
+    queueGrader(verdict(MECE), verdict(unreached("adds a software sector the description never stated")));
+    mockSearchPeople.mockResolvedValueOnce(searchRes(61000)).mockResolvedValueOnce(searchRes(9000));
 
     const res = await request(app)
       .post("/audiences/suggest-from-segment")
@@ -374,14 +533,12 @@ describe("Apollo audience endpoints", () => {
     expect(res.body.count).toBe(61000);
   });
 
-  it("AC7 — a count of 0 drives a same-concept retry, never dropping the concept", async () => {
-    mockChatComplete
-      .mockReset()
-      .mockResolvedValueOnce(decide("test", { personTitles: ["Chiropractor"], qKeywords: "chiropractie" }, MECE))
-      .mockResolvedValue(decide("confirm", { personTitles: ["Chiropractor"], qOrganizationKeywordTags: ["chiropractic"] }, MECE));
-    mockSearchPeople
-      .mockResolvedValueOnce({ total_entries: 0, people: [] })
-      .mockResolvedValueOnce({ total_entries: 4100, people: [] });
+  it("a count of 0 drives a same-concept retry, never dropping the concept", async () => {
+    queueProposer(
+      propose("test", { personTitles: ["Chiropractor"], qKeywords: "chiropractie" }),
+      propose("confirm", { personTitles: ["Chiropractor"], qOrganizationKeywordTags: ["chiropractic"] }),
+    );
+    mockSearchPeople.mockResolvedValueOnce(searchRes(0)).mockResolvedValueOnce(searchRes(4100));
 
     await request(app)
       .post("/audiences/suggest-from-segment")
@@ -389,18 +546,17 @@ describe("Apollo audience endpoints", () => {
       .send({ name: "US Chiropractors", description: "Chiropractors in the US", brandId: null })
       .expect(200);
 
-    const secondTurn = mockChatComplete.mock.calls[1][0].message as string;
+    const secondTurn = proposerCalls()[1][0].message as string;
     expect(secondTurn).toContain("returned 0 matches");
     expect(secondTurn).toContain("does not work");
     expect(secondTurn).toContain("NOT a signal that the constraint is superfluous");
     expect(secondTurn).toContain("Do not drop the concept");
   });
 
-  it("AC6 — zero both-flags-false iterations throws (no audience persisted)", async () => {
-    mockChatComplete
-      .mockReset()
-      .mockResolvedValue(decide("confirm", { personTitles: ["Owner"] }, offTarget("no sector constraint")));
-    mockSearchPeople.mockResolvedValue({ total_entries: 82522, people: [] });
+  it("zero both-flags-false iterations throws (no audience persisted)", async () => {
+    queueProposer(propose("confirm", { personTitles: ["Owner"] }));
+    queueGrader(verdict(offTarget("no sector constraint")));
+    mockSearchPeople.mockResolvedValue(searchRes(82522));
 
     const res = await request(app)
       .post("/audiences/suggest-from-segment")
@@ -411,57 +567,16 @@ describe("Apollo audience endpoints", () => {
     expect(res.body.error).toContain("judged MECE");
     expect(state.inserted).toBeNull();
     // A big count never rescues an off-target set: the budget runs out instead.
-    expect(mockChatComplete).toHaveBeenCalledTimes(6);
-  });
-
-  it("AC5 — a later round revises a prior iteration's flags, changing who wins", async () => {
-    const big = { personTitles: ["Owner"], personLocations: ["United States"] };
-    const scoped = { ...big, qOrganizationKeywordTags: ["chiropractic"] };
-
-    mockChatComplete
-      .mockReset()
-      // Round 1 grades its own proposal clean — the proposer bias this channel exists to correct.
-      .mockResolvedValueOnce(decide("test", big, MECE))
-      // Round 2 sees the count next to an alternative encoding and re-grades round 1.
-      .mockResolvedValue(
-        decide("confirm", scoped, MECE, {
-          revisions: [
-            {
-              iteration: 1,
-              reachesOffTarget: true,
-              offTargetReason: "matches owners in every industry, not just chiropractic clinics",
-              leavesTargetUnreached: false,
-              unreachedReason: null,
-            },
-          ],
-        }),
-      );
-    mockSearchPeople
-      .mockResolvedValueOnce({ total_entries: 82522, people: [] })
-      .mockResolvedValueOnce({ total_entries: 4100, people: [] });
-
-    const res = await request(app)
-      .post("/audiences/suggest-from-segment")
-      .set(HEADERS)
-      .send({ name: "n", description: "Owners of US chiropractic clinics", brandId: null })
-      .expect(200);
-
-    // Without the revision, 82,522 would have won on count.
-    expect(res.body.filters).toEqual(scoped);
-    expect(res.body.count).toBe(4100);
-    // Revision is persisted on the revised iteration, original + new both visible.
-    const revised = state.inserted.refineTrace[0];
-    expect(revised.reachesOffTarget).toBe(true);
-    expect(revised.revisions).toEqual([
-      expect.objectContaining({ atIteration: 2, reachesOffTarget: true }),
-    ]);
+    // The grader adds one CALL per attempt, never an extra attempt.
+    expect(proposerCalls()).toHaveLength(6);
+    expect(graderCalls()).toHaveLength(6);
   });
 
   it("a confirm is not accepted before a second encoding has been tested", async () => {
     // Same filter set confirmed twice = one encoding: the first confirm is
     // premature and the loop keeps exploring.
-    mockChatComplete.mockReset().mockResolvedValue(decide("confirm", CONFIRMED_FILTERS, MECE));
-    mockSearchPeople.mockResolvedValue({ total_entries: 42000, people: [] });
+    queueProposer(propose("confirm", CONFIRMED_FILTERS));
+    mockSearchPeople.mockResolvedValue(searchRes(42000));
 
     const res = await request(app)
       .post("/audiences/suggest-from-segment")
@@ -469,25 +584,25 @@ describe("Apollo audience endpoints", () => {
       .send({ name: "n", description: "d", brandId: null })
       .expect(200);
 
-    expect(mockChatComplete).toHaveBeenCalledTimes(6);
+    expect(proposerCalls()).toHaveLength(6);
     expect(res.body.count).toBe(42000);
     // Never got a second encoding to compare → exploration ran out, not a confirm.
     expect(state.inserted.status).toBe("exhausted");
     expect(state.inserted.refineTrace[0].action).toBe("rejected_confirm");
     // And the model was told what was missing.
-    expect(mockChatComplete.mock.calls[1][0].message).toContain("ALTERNATIVE");
+    expect(proposerCalls()[1][0].message).toContain("ALTERNATIVE");
   });
 
   it("selection is max count among MECE sets, whichever round produced it", async () => {
-    mockChatComplete
-      .mockReset()
-      .mockResolvedValueOnce(decide("test", { personTitles: ["A"] }, MECE))
-      .mockResolvedValueOnce(decide("test", { personTitles: ["B"] }, MECE))
-      .mockResolvedValue(decide("confirm", { personTitles: ["C"] }, MECE));
+    queueProposer(
+      propose("test", { personTitles: ["A"] }),
+      propose("test", { personTitles: ["B"] }),
+      propose("confirm", { personTitles: ["C"] }),
+    );
     mockSearchPeople
-      .mockResolvedValueOnce({ total_entries: 5000, people: [] })
-      .mockResolvedValueOnce({ total_entries: 31000, people: [] }) // biggest, mid-loop
-      .mockResolvedValueOnce({ total_entries: 9000, people: [] });
+      .mockResolvedValueOnce(searchRes(5000))
+      .mockResolvedValueOnce(searchRes(31000)) // biggest, mid-loop
+      .mockResolvedValueOnce(searchRes(9000));
 
     const res = await request(app)
       .post("/audiences/suggest-from-segment")
@@ -501,13 +616,8 @@ describe("Apollo audience endpoints", () => {
   });
 
   it("a zero-match set never wins even when judged MECE", async () => {
-    mockChatComplete
-      .mockReset()
-      .mockResolvedValueOnce(decide("test", { personTitles: ["Nobody"] }, MECE))
-      .mockResolvedValue(decide("confirm", CONFIRMED_FILTERS, MECE));
-    mockSearchPeople
-      .mockResolvedValueOnce({ total_entries: 0, people: [] })
-      .mockResolvedValueOnce({ total_entries: 42000, people: [] });
+    queueProposer(propose("test", { personTitles: ["Nobody"] }), propose("confirm", CONFIRMED_FILTERS));
+    mockSearchPeople.mockResolvedValueOnce(searchRes(0)).mockResolvedValueOnce(searchRes(42000));
 
     const res = await request(app)
       .post("/audiences/suggest-from-segment")
@@ -519,31 +629,30 @@ describe("Apollo audience endpoints", () => {
     expect(res.body.filters).toEqual(CONFIRMED_FILTERS);
   });
 
-  it("a decision missing the target-fit flags is unusable output, not a clean default", async () => {
-    // No silent default-to-MECE: an ungraded proposal burns the invalid-retry
-    // budget exactly like malformed JSON.
-    mockChatComplete
-      .mockReset()
-      .mockResolvedValue(chatRes({ action: "confirm", filters: CONFIRMED_FILTERS, reasoning: "r" }));
+  it("a grader verdict that does not parse fails loud — no default-to-clean", async () => {
+    queueProposer(propose("test", FIRST_ENCODING), propose("confirm", CONFIRMED_FILTERS));
+    queueGrader(chatRes({ verdict: "looks fine to me" }));
+    mockSearchPeople.mockResolvedValue(searchRes(42000));
 
-    await request(app)
+    const res = await request(app)
       .post("/audiences/suggest-from-segment")
       .set(HEADERS)
       .send({ name: "n", description: "d", brandId: null })
       .expect(500);
 
-    expect(mockChatComplete).toHaveBeenCalledTimes(4); // 4th trips invalidRetries > 3 → break
-    expect(mockSearchPeople).not.toHaveBeenCalled();
+    expect(res.body.error).toContain("unusable verdict");
+    expect(state.inserted).toBeNull();
   });
 
   it("invalid model output does not consume the 6 real-attempt budget", async () => {
     // 2 malformed decisions (no real attempt) then 6 valid off-target confirms (6 real attempts).
-    mockChatComplete
-      .mockReset()
-      .mockResolvedValueOnce(chatRes({ garbage: true }))
-      .mockResolvedValueOnce(chatRes({ still: "wrong" }))
-      .mockResolvedValue(decide("confirm", { personTitles: ["Founder"] }, offTarget("no sector")));
-    mockSearchPeople.mockResolvedValue({ total_entries: 1000, people: [] });
+    queueProposer(
+      chatRes({ garbage: true }),
+      chatRes({ still: "wrong" }),
+      propose("confirm", { personTitles: ["Founder"] }),
+    );
+    queueGrader(verdict(offTarget("no sector")));
+    mockSearchPeople.mockResolvedValue(searchRes(1000));
 
     await request(app)
       .post("/audiences/suggest-from-segment")
@@ -551,14 +660,16 @@ describe("Apollo audience endpoints", () => {
       .send({ name: "n", description: "d", brandId: null })
       .expect(500); // no MECE-judged set → no audience
 
-    // 2 invalid (retry budget) + 6 valid (real budget) = 8 chat calls; invalids did not eat the 6.
-    expect(mockChatComplete).toHaveBeenCalledTimes(8);
+    // 2 invalid (retry budget) + 6 valid (real budget) = 8 proposer turns; invalids did not eat the 6.
+    expect(proposerCalls()).toHaveLength(8);
     expect(mockSearchPeople).toHaveBeenCalledTimes(6);
+    // A malformed proposal is never graded — there is no usable set to judge.
+    expect(graderCalls()).toHaveLength(6);
   });
 
   it("aborts once the invalid-retry budget is exhausted", async () => {
     // 4 consecutive malformed decisions (> MAX_INVALID_RETRIES of 3) → break, nothing to select → 500.
-    mockChatComplete.mockReset().mockResolvedValue(chatRes({ garbage: true }));
+    queueProposer(chatRes({ garbage: true }));
 
     await request(app)
       .post("/audiences/suggest-from-segment")
@@ -566,7 +677,8 @@ describe("Apollo audience endpoints", () => {
       .send({ name: "n", description: "d", brandId: null })
       .expect(500);
 
-    expect(mockChatComplete).toHaveBeenCalledTimes(4); // 4th trips invalidRetries > 3 → break
+    expect(proposerCalls()).toHaveLength(4); // 4th trips invalidRetries > 3 → break
+    expect(graderCalls()).toHaveLength(0);
     expect(mockSearchPeople).not.toHaveBeenCalled();
   });
 });
