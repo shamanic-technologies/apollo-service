@@ -1241,6 +1241,10 @@ const SuggestFromSegmentResponseSchema = z
     apolloAudienceId: z.string().openapi({ description: "Persisted apollo-audience id. human-service stores ONLY this pointer." }),
     filters: ApolloNativeSearchFiltersSchema.openapi({ description: "The confirmed Apollo-native filter object." }),
     count: z.number().int().openapi({ description: "Live match-count snapshot for the confirmed filters." }),
+    degraded: z.boolean().openapi({
+      description:
+        "TRUE when no filter set was judged MECE with the described target and the refine loop fell back to its best available non-empty attempt. The audience is usable but unblessed — a quality signal, not an error. FALSE on the normal path.",
+    }),
   })
   .openapi("SuggestFromSegmentResponse");
 
