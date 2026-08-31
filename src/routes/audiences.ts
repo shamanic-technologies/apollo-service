@@ -22,7 +22,9 @@ const FILTERS_PROMPT = `${buildFiltersPrompt(ApolloNativeSearchFiltersSchema)}\n
 /**
  * POST /audiences/suggest-from-segment — run the agentic NL→faithful-Apollo-
  * filters refine loop (LLM via chat-service, free dry-runs for live counts) and
- * persist the confirmed audience. Returns { apolloAudienceId, filters, count }.
+ * persist the confirmed audience. Returns { apolloAudienceId, filters, count,
+ * degraded }. `degraded` is true when no filter set was judged MECE and the loop
+ * fell back to its best attempt — the audience is usable but unblessed.
  */
 router.post("/audiences/suggest-from-segment", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
@@ -80,7 +82,7 @@ router.post("/audiences/suggest-from-segment", serviceAuth, async (req: Authenti
       })
       .returning();
 
-    res.json({ apolloAudienceId: row.id, filters: refined.filters, count: refined.count });
+    res.json({ apolloAudienceId: row.id, filters: refined.filters, count: refined.count, degraded: refined.degraded });
   } catch (error) {
     console.error("[Apollo Service][POST /audiences/suggest-from-segment] ERROR:", error);
     res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });

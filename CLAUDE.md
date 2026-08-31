@@ -67,9 +67,31 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
     revision wins on the flat fields; the full history stays under `revisions`.
   - **Selection is DETERMINISTIC in code, not the model's `confirm`.** `pickBest` = max
     `count` among iterations with BOTH flags `false` (after revisions) and `count > 0`.
-    `action:"confirm"` only means "I am done exploring" — it does not pick the set. No
-    both-flags-false iteration → **throw** (fail loud, no audience persisted): human-service
-    runs per-segment builds under `Promise.allSettled`, so losing one bad segment is correct.
+    `action:"confirm"` only means "I am done exploring" — it does not pick the set.
+  - **No both-flags-false iteration → DEGRADE, do not throw.** `pickFallback` takes the max
+    `count` among every set that validated and matched at least one person, the result carries
+    `degraded: true`, and `POST /audiences/suggest-from-segment` returns that flag (additive
+    field, nothing else changed). human-service now asks for ONE audience per request, so a
+    throw here is an error screen where the customer's audience should be — an audience they
+    can look at and reject beats an empty screen, and "the model was not satisfied with any
+    set" is a quality signal, not an error. Fail loud still holds for REAL errors: chat-service
+    or Apollo unreachable, missing config, and a set that matches NOBODY (`count > 0` gates the
+    fallback too) all still throw.
+  - **The degraded path is never silent.** `logRefineTrace` emits ONE structured `console.warn`
+    carrying every iteration's filters, count, action, both verdict flags and their reasons
+    whenever the loop ends without a cleanly-judged set. When the independent grader (#225)
+    started rejecting every set in prod there was no way to tell an over-strict judgement from
+    a broken call — the failure was unfalsifiable in place and the only option was a revert.
+    Nothing is logged on the happy path; this is a diagnostic of last resort, not chatter.
+  - **The loop runs on `provider:"deepseek", model:"deepseek-pro"`, thinking ON.** DeepSeek
+    serves `json_object` only (no `json_schema`), which fits: the loop is schemaless JSON
+    validated by the Zod guards. Do NOT set `disableThinking` here — judgement quality is the
+    whole point, and thinking-off on the previous model (`google`/`flash`) is a documented
+    contributor to the leniency in #224. Chosen over `zai`/`glm-pro` on a live A/B over three
+    segment descriptions (2026-08-31): glm-pro DEGRADED on 2 of 3 (it kept a flag true on the
+    very set it then confirmed — the #225 failure mode) and on the chiropractic segment picked
+    a 207,497-person set against deepseek-pro's 21,373 tight one; deepseek-pro was clean on
+    3 of 3 and ~2x faster.
     A `confirm` is also REJECTED until at least `MIN_ENCODINGS_BEFORE_CONFIRM` (2) distinct
     filter sets have been dry-run — comparing encodings is the act that surfaces a leak.
   - **DO NOT reintroduce any size steering.** Not a hard floor, not an "ambition", not a

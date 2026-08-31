@@ -86,6 +86,11 @@ export interface RefineResult {
   filters: Record<string, unknown>;
   count: number;
   status: "confirmed" | "exhausted";
+  /** TRUE when no iteration was judged MECE and the loop fell back to the best
+   * available non-empty set. The audience is usable but unblessed — the caller
+   * carries the flag so a customer can look at it and reject it, instead of
+   * seeing an error where an audience should be. */
+  degraded: boolean;
   trace: RefineIteration[];
 }
 
@@ -322,6 +327,51 @@ function pickBest(history: RefineIteration[]): { filters: Record<string, unknown
   return mece.reduce((a, b) => (b.count > a.count ? b : a));
 }
 
+/** DEGRADED selection: the biggest count among every set that VALIDATED and
+ * matched at least one person, regardless of how the model graded it. Used only
+ * when `pickBest` found nothing — an audience the customer can look at and
+ * reject beats an empty screen, and "the model was not satisfied with any set"
+ * is a quality signal, not an error. A set that matches NOBODY is still not a
+ * usable audience, so `count > 0` holds here too and its absence still throws. */
+function pickFallback(history: RefineIteration[]): { filters: Record<string, unknown>; count: number } | null {
+  const usable = history.filter(
+    (h): h is RefineIteration & { filters: Record<string, unknown>; count: number } =>
+      h.action !== "invalid" && h.filters !== null && h.count !== null && h.count > 0,
+  );
+  if (usable.length === 0) return null;
+  return usable.reduce((a, b) => (b.count > a.count ? b : a));
+}
+
+/** Diagnostic of last resort: one structured line carrying the WHOLE trace when
+ * the loop ends without a cleanly-judged set — every iteration's filters, count,
+ * action and both verdict flags with their reasons. When the independent grader
+ * (#225) started rejecting every set in production there was no way to tell an
+ * over-strict judgement from a broken call, and the only option was a revert.
+ * Deliberately NOT emitted on the happy path — this is not per-iteration chatter. */
+function logRefineTrace(input: RefineInput, trace: RefineIteration[], outcome: "degraded" | "no_usable_set"): void {
+  console.warn(
+    "[apollo-service][refineAudience] no MECE-judged filter set " +
+      JSON.stringify({
+        outcome,
+        name: input.name,
+        description: input.description,
+        iterations: trace.map((h) => ({
+          iteration: h.iteration,
+          action: h.action,
+          count: h.count,
+          filters: h.filters,
+          reachesOffTarget: h.reachesOffTarget,
+          offTargetReason: h.offTargetReason,
+          leavesTargetUnreached: h.leavesTargetUnreached,
+          unreachedReason: h.unreachedReason,
+          validationErrors: h.validationErrors,
+          revisions: h.revisions,
+          reasoning: h.reasoning,
+        })),
+      }),
+  );
+}
+
 export async function refineAudience(input: RefineInput): Promise<RefineResult> {
   const systemPrompt = buildSystemPrompt(input.filtersPromptCatalog);
   const trace: RefineIteration[] = [];
@@ -341,22 +391,24 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
       {
         message,
         systemPrompt,
-        // Google (Gemini) JSON mode, NOT Anthropic. chat-service requires a strict
-        // `responseSchema` for Anthropic JSON mode (output_config.format), and a
-        // strict Anthropic schema must list EVERY property as required with
-        // additionalProperties:false — incompatible with the SPARSE Apollo filter
-        // object the model emits (it picks a few of ~18 optional filters). Gemini
-        // JSON mode needs no schema and returns free-form JSON, validated by the
-        // Zod guards below. (chat-service owns the LLM cost either way.)
-        provider: "google",
-        // flash = Gemini 2.5 Flash. disableThinking on Gemini 2.5 is a FULL-OFF
-        // (unlike Gemini 3 / flash-pro, which floors at `minimal`), so the whole
-        // output budget goes to this structured-JSON decision, no chain-of-thought.
-        model: "flash",
+        // DeepSeek, NOT Anthropic. chat-service requires a strict `responseSchema`
+        // for Anthropic JSON mode (output_config.format), and a strict Anthropic
+        // schema must list EVERY property as required with additionalProperties:
+        // false — incompatible with the SPARSE Apollo filter object the model emits
+        // (it picks a few of ~18 optional filters). DeepSeek serves `json_object`
+        // only, i.e. schemaless JSON, validated by the Zod guards below.
+        // (chat-service owns the LLM cost either way.)
+        provider: "deepseek",
+        // Chosen over zai/glm-pro on an A/B over the same segment descriptions:
+        // glm-pro kept a flag true on sets it then confirmed (nothing selectable),
+        // deepseek-pro graded honestly and explored real alternative encodings.
+        // Thinking stays ON — judgement quality is the whole point of the loop,
+        // and running it with reasoning switched off is a documented contributor
+        // to the leniency in #224.
+        model: "deepseek-pro",
         responseFormat: "json",
         temperature: 0.2,
         maxTokens: 2000,
-        disableThinking: true,
       },
       input.tracking,
     );
@@ -446,14 +498,30 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
   }
 
   // Selection is ours, not the model's: the biggest MECE-judged set wins,
-  // whichever round produced it. No MECE-judged set at all → fail loud. The
-  // caller (human-service) runs per-segment builds under Promise.allSettled, so
-  // losing one bad segment is correct — better no audience than a false one.
+  // whichever round produced it.
   const best = pickBest(trace);
-  if (!best) {
+  if (best) {
+    return { filters: best.filters, count: best.count, status: doneExploring ? "confirmed" : "exhausted", degraded: false, trace };
+  }
+
+  // No set was judged MECE. With one audience per request this is the whole
+  // answer the customer gets, so degrade to the best set we actually have
+  // rather than showing an error — and log the full trace so the judgement is
+  // falsifiable in place. REAL errors (chat-service or Apollo unreachable,
+  // missing config) already threw above; a set that matches NOBODY is not an
+  // audience, so that case still throws below.
+  const fallback = pickFallback(trace);
+  logRefineTrace(input, trace, fallback ? "degraded" : "no_usable_set");
+  if (!fallback) {
     throw new Error(
-      "[apollo-service][refineAudience] no filter set was judged MECE with the described target (both reachesOffTarget and leavesTargetUnreached false) with at least one match",
+      "[apollo-service][refineAudience] no filter set validated and matched at least one person",
     );
   }
-  return { filters: best.filters, count: best.count, status: doneExploring ? "confirmed" : "exhausted", trace };
+  return {
+    filters: fallback.filters,
+    count: fallback.count,
+    status: doneExploring ? "confirmed" : "exhausted",
+    degraded: true,
+    trace,
+  };
 }

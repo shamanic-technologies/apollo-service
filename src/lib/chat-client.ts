@@ -14,8 +14,20 @@
 
 import { fetchWithRetry } from "./fetch-retry.js";
 
-export type ChatProvider = "google" | "anthropic";
-export type ChatModel = "flash" | "flash-lite" | "flash-pro" | "pro" | "sonnet" | "haiku" | "opus";
+export type ChatProvider = "google" | "anthropic" | "deepseek" | "zai";
+export type ChatModel =
+  | "flash"
+  | "flash-lite"
+  | "flash-pro"
+  | "pro"
+  | "sonnet"
+  | "haiku"
+  | "opus"
+  // OpenAI-compatible vendors. DeepSeek serves `json_object` only (no
+  // `json_schema`), which suits this loop: it runs schemaless JSON validated by
+  // Zod guards, exactly like Gemini JSON mode.
+  | "deepseek-pro"
+  | "glm-pro";
 
 export interface ChatCompleteParams {
   message: string;
