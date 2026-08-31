@@ -154,11 +154,11 @@ describe("Apollo audience endpoints", () => {
     expect(res.body.filters).toEqual(CONFIRMED_FILTERS);
     expect(res.body.count).toBe(42000);
     expect(mockChatComplete).toHaveBeenCalledTimes(2);
-    // Refine LLM goes through Google (Gemini) JSON mode, NOT Anthropic: chat-service
+    // Refine LLM goes through DeepSeek JSON mode, NOT Anthropic: chat-service
     // requires a strict responseSchema for Anthropic JSON, incompatible with the
-    // sparse Apollo filter object. Gemini JSON mode needs no schema.
+    // sparse Apollo filter object. DeepSeek serves schemaless `json_object`.
     expect(mockChatComplete).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "google", responseFormat: "json" }),
+      expect.objectContaining({ provider: "deepseek", responseFormat: "json" }),
       expect.anything(),
     );
     // The refine loop dry-ran each candidate via Apollo per_page=1.
@@ -241,9 +241,11 @@ describe("Apollo audience endpoints", () => {
       .expect(200);
 
     const [[opts]] = mockChatComplete.mock.calls;
-    // Refine loop runs on flash (Gemini 2.5 Flash) with thinking fully off.
-    expect(opts.model).toBe("flash");
-    expect(opts.disableThinking).toBe(true);
+    // Refine loop runs on deepseek-pro with thinking ON — judgement quality is
+    // the whole point of the loop.
+    expect(opts.provider).toBe("deepseek");
+    expect(opts.model).toBe("deepseek-pro");
+    expect(opts.disableThinking).toBeUndefined();
 
     // The invariant, verbatim, plus the objective on top of it.
     expect(opts.systemPrompt).toContain("we do not add people who should not be there");
@@ -396,7 +398,8 @@ describe("Apollo audience endpoints", () => {
     expect(secondTurn).toContain("Do not drop the concept");
   });
 
-  it("AC6 — zero both-flags-false iterations throws (no audience persisted)", async () => {
+  it("AC6 — zero both-flags-false iterations degrades to the best attempt, flagged + logged", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     mockChatComplete
       .mockReset()
       .mockResolvedValue(decide("confirm", { personTitles: ["Owner"] }, offTarget("no sector constraint")));
@@ -406,12 +409,57 @@ describe("Apollo audience endpoints", () => {
       .post("/audiences/suggest-from-segment")
       .set(HEADERS)
       .send({ name: "n", description: "chiropractic clinics", brandId: null })
+      .expect(200);
+
+    // An audience the customer can look at and reject beats an empty screen —
+    // but it is marked, never passed off as a blessed set.
+    expect(res.body.degraded).toBe(true);
+    expect(res.body.filters).toEqual({ personTitles: ["Owner"] });
+    expect(res.body.count).toBe(82522);
+    expect(state.inserted).not.toBeNull();
+    // The loop still spends its whole exploration budget looking for a clean set.
+    expect(mockChatComplete).toHaveBeenCalledTimes(6);
+
+    // AC4 — the full trace is logged, with per-iteration verdicts and reasons.
+    const line = warn.mock.calls.map((c) => c.join(" ")).find((l) => l.includes("no MECE-judged filter set"));
+    expect(line).toBeDefined();
+    expect(line).toContain('"outcome":"degraded"');
+    expect(line).toContain('"reachesOffTarget":true');
+    expect(line).toContain("no sector constraint");
+    expect(line).toContain('"count":82522');
+    warn.mockRestore();
+  });
+
+  it("the normal path is NOT flagged degraded and logs no trace", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const res = await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(200);
+
+    expect(res.body.degraded).toBe(false);
+    expect(warn.mock.calls.map((c) => c.join(" ")).some((l) => l.includes("no MECE-judged filter set"))).toBe(false);
+    warn.mockRestore();
+  });
+
+  it("a set matching NOBODY is not an audience — still throws, nothing persisted", async () => {
+    // Fail loud survives for real errors: every candidate validated but matched
+    // zero people, so there is nothing to degrade to.
+    mockChatComplete
+      .mockReset()
+      .mockResolvedValue(decide("confirm", { personTitles: ["Nobody"] }, offTarget("no sector")));
+    mockSearchPeople.mockResolvedValue({ total_entries: 0, people: [] });
+
+    const res = await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
       .expect(500);
 
-    expect(res.body.error).toContain("judged MECE");
+    expect(res.body.error).toContain("matched at least one person");
     expect(state.inserted).toBeNull();
-    // A big count never rescues an off-target set: the budget runs out instead.
-    expect(mockChatComplete).toHaveBeenCalledTimes(6);
   });
 
   it("AC5 — a later round revises a prior iteration's flags, changing who wins", async () => {
@@ -549,7 +597,7 @@ describe("Apollo audience endpoints", () => {
       .post("/audiences/suggest-from-segment")
       .set(HEADERS)
       .send({ name: "n", description: "d", brandId: null })
-      .expect(500); // no MECE-judged set → no audience
+      .expect(200); // no MECE-judged set → degraded to the best attempt
 
     // 2 invalid (retry budget) + 6 valid (real budget) = 8 chat calls; invalids did not eat the 6.
     expect(mockChatComplete).toHaveBeenCalledTimes(8);
