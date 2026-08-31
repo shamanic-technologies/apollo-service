@@ -143,13 +143,52 @@ export async function dryRunSample(
   return { count, sample };
 }
 
+/**
+ * Anthropic JSON mode is only enforceable through a STRICT schema — every
+ * property required, `additionalProperties: false` — which cannot describe the
+ * SPARSE filter object the model emits (it picks a few of ~18 optional filters).
+ * So the filter set travels as a JSON STRING, which a strict schema describes
+ * exactly, and is parsed back here. That keeps the strongest model without
+ * flattening the filter vocabulary into a fixed shape.
+ */
+const REFINE_RESPONSE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    action: { type: "string", enum: ["test", "final"] },
+    filters: {
+      type: "string",
+      description: "The Apollo filter set as a JSON object, serialized to a string.",
+    },
+    reasoning: { type: "string" },
+    matchesRequest: {
+      type: "boolean",
+      description: 'On "final": does this set match what was asked? Ignored on "test".',
+    },
+  },
+  required: ["action", "filters", "reasoning", "matchesRequest"],
+} as const;
+
 const RefineDecisionSchema = z.object({
   action: z.enum(["test", "final"]),
-  filters: z.record(z.string(), z.unknown()),
+  /** JSON-encoded filter object — see REFINE_RESPONSE_SCHEMA. */
+  filters: z.string(),
   reasoning: z.string().optional(),
-  /** Only meaningful on `final`. Absent = no closing answer = not confident. */
+  /** Only meaningful on `final`. */
   matchesRequest: z.boolean().optional(),
 });
+
+/** The decision's filters, decoded. `null` when the model sent something that is
+ * not a JSON object — unusable output, handled on the invalid-retry budget. */
+function decodeFilters(raw: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
 
 function buildSystemPrompt(catalog: string): string {
   return [
@@ -171,10 +210,11 @@ function buildSystemPrompt(catalog: string): string {
     "Each turn, reply with ONLY a JSON object (no prose, no code fences):",
     "{",
     '  "action": "test" | "final",',
-    '  "filters": { ...filters... },',
+    '  "filters": "{ ...filters, as a JSON string... }",',
     '  "reasoning": "<one short line>",',
     '  "matchesRequest": true | false',
     "}",
+    '- "filters" is the filter object SERIALIZED TO A STRING, e.g. "{\\"personTitles\\":[\\"Owner\\"]}".',
     '- "test": you want the live count for this filter set before deciding.',
     '- "final": this is your answer. The set you send with "final" is what we return — nothing',
     "  re-ranks it, and no other round can win over it.",
@@ -266,17 +306,16 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
       {
         message,
         systemPrompt,
-        // The strongest model chat-service exposes. `responseFormat:"json"`
-        // WITHOUT a `responseSchema`: the strict-schema requirement (every
-        // property required, additionalProperties:false) applies only to the
-        // schema path, and is incompatible with the SPARSE Apollo filter object
-        // the model emits — it picks a few of ~18 optional filters. chat-service
-        // strips fences and parses; the Zod guards below validate the shape.
-        // Reasoning stays ON (judgement is the whole job here); on Anthropic
-        // /complete `disableThinking` is a no-op anyway, so it is not sent.
+        // The strongest model chat-service exposes. Anthropic JSON mode REQUIRES
+        // a strict `responseSchema` (chat-service 400s without one), which cannot
+        // describe the sparse filter object — hence the JSON-string encoding in
+        // REFINE_RESPONSE_SCHEMA. Reasoning stays ON (judgement is the whole job
+        // here); on Anthropic /complete `disableThinking` is a no-op, so it is
+        // not sent.
         provider: "anthropic",
         model: "opus",
         responseFormat: "json",
+        responseSchema: REFINE_RESPONSE_SCHEMA as unknown as Record<string, unknown>,
         temperature: 0.2,
         maxTokens: 2000,
       },
@@ -290,7 +329,7 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
       trace.push({
         iteration: step,
         action: "invalid",
-        filters: (res.json?.filters as Record<string, unknown>) ?? null,
+        filters: typeof res.json?.filters === "string" ? decodeFilters(res.json.filters) : null,
         count: null,
         reasoning: "model decision did not match {action, filters}",
         validationErrors: parsed.error.issues.map((e) => `${e.path.join(".")}: ${e.message}`),
@@ -299,7 +338,22 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
       continue;
     }
 
-    const { action, filters, reasoning, matchesRequest } = parsed.data;
+    const { action, reasoning, matchesRequest } = parsed.data;
+    const filters = decodeFilters(parsed.data.filters);
+    if (filters === null) {
+      // The filter string was not a JSON object — unusable output, retry budget.
+      invalidRetries += 1;
+      trace.push({
+        iteration: step,
+        action: "invalid",
+        filters: null,
+        count: null,
+        reasoning: reasoning ?? "",
+        validationErrors: [`filters: not a JSON object (${parsed.data.filters.slice(0, 200)})`],
+      });
+      if (invalidRetries > MAX_INVALID_RETRIES) break;
+      continue;
+    }
 
     // Validate the proposed filters against our faithful vocabulary.
     const filterCheck = SearchFiltersSchema.safeParse(filters);

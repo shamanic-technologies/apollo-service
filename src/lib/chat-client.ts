@@ -35,6 +35,10 @@ export interface ChatCompleteParams {
   provider: ChatProvider;
   model: ChatModel;
   responseFormat?: "json";
+  /** JSON Schema the provider enforces server-side. REQUIRED for Anthropic JSON
+   * mode (chat-service 400s without it) and it must be STRICT: every property
+   * listed in `required`, `additionalProperties: false`. */
+  responseSchema?: Record<string, unknown>;
   temperature?: number;
   maxTokens?: number;
   /** Minimize the model's internal reasoning. Provider-floored: Gemini 3 (incl.
@@ -117,6 +121,7 @@ export async function chatComplete(
     provider: params.provider,
     model: params.model,
     ...(params.responseFormat && { responseFormat: params.responseFormat }),
+    ...(params.responseSchema && { responseSchema: params.responseSchema }),
     ...(params.temperature !== undefined && { temperature: params.temperature }),
     ...(params.disableThinking !== undefined && { disableThinking: params.disableThinking }),
     // platform-complete has no maxTokens field in chat-service's request schema.
