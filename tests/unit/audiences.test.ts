@@ -92,13 +92,9 @@ const apollo: { counts: number[]; people: any[]; pagesRequested: number[] } = {
   people: [],
   pagesRequested: [],
 };
-const person = (company: string, title: string, city: string, country: string) => ({
-  name: "P",
-  title,
-  city,
-  country,
-  organization: { name: company },
-});
+/** Apollo's free teaser serves only the title + the employer's name — every
+ * location field is redacted to a `has_*` boolean. */
+const person = (company: string, title: string) => ({ name: "P", title, organization: { name: company } });
 function apolloImpl(_key: unknown, params: any) {
   if (params.per_page === 1) {
     const c = apollo.counts.length > 1 ? apollo.counts.shift()! : (apollo.counts[0] ?? 0);
@@ -141,7 +137,7 @@ describe("Apollo audience endpoints", () => {
     state.selectRow = undefined;
     mockDecryptKey.mockResolvedValue({ key: "apollo-key", keySource: "platform" });
     apollo.counts = [42000];
-    apollo.people = [person("Drogerie Müller", "Owner", "Zürich", "Switzerland")];
+    apollo.people = [person("Drogerie Müller", "Owner")];
     apollo.pagesRequested = [];
     mockSearchPeople.mockImplementation(apolloImpl);
     // Default: one exploratory proposal, then the model's own final answer.
@@ -181,12 +177,7 @@ describe("Apollo audience endpoints", () => {
     expect(state.inserted.filters).toEqual(FINAL_FILTERS);
     expect(state.inserted.count).toBe(42000);
     expect(state.inserted.status).toBe("confirmed");
-    expect(state.inserted.refineTrace[0].sample[0]).toEqual({
-      company: "Drogerie Müller",
-      title: "Owner",
-      city: "Zürich",
-      country: "Switzerland",
-    });
+    expect(state.inserted.refineTrace[0].sample[0]).toEqual({ company: "Drogerie Müller", title: "Owner" });
   });
 
   it("400 when description missing", async () => {
@@ -458,7 +449,7 @@ describe("Apollo audience endpoints", () => {
       .mockResolvedValueOnce(decide("test", { personTitles: ["Founder"] }))
       .mockResolvedValue(decide("final", { personTitles: ["Owner"] }, { matchesRequest: false }));
     setCounts(90000, 1959);
-    apollo.people = [person("Procter & Gamble", "Owner", "Genève", "Switzerland")];
+    apollo.people = [person("Procter & Gamble", "Owner")];
 
     await request(app)
       .post("/audiences/suggest-from-segment")
@@ -473,7 +464,6 @@ describe("Apollo audience endpoints", () => {
     expect(line).toContain('"count":1959');
     // The sample is in the log — that is what makes a bad run diagnosable.
     expect(line).toContain("Procter & Gamble");
-    expect(line).toContain("Genève");
 
     // Happy path: nothing logged.
     warn.mockClear();
@@ -493,10 +483,10 @@ describe("Apollo audience endpoints", () => {
   // The sample: a count says how many, never who
   // ────────────────────────────────────────────────────────────────────────
 
-  it("shows the model company / title / city / country for real matched people", async () => {
+  it("shows the model the employer and title of real matched people", async () => {
     apollo.people = [
-      person("Drogerie Müller", "Inhaber", "Zürich", "Switzerland"),
-      person("Rolex", "Head of Retail", "Genève", "Switzerland"),
+      person("Drogerie Müller", "Inhaber"),
+      person("Rolex", "Head of Retail"),
     ];
     setCounts(1222, 2640);
 
@@ -509,8 +499,8 @@ describe("Apollo audience endpoints", () => {
     // Round 2 sees what round 1 actually returned — the Genève row is the leak.
     const second = mockChatComplete.mock.calls[1][0].message as string;
     expect(second).toContain("count=1222");
-    expect(second).toContain("Drogerie Müller — Inhaber — Zürich, Switzerland");
-    expect(second).toContain("Rolex — Head of Retail — Genève, Switzerland");
+    expect(second).toContain("Drogerie Müller — Inhaber");
+    expect(second).toContain("Rolex — Head of Retail");
   });
 
   it("samples random pages, not just the head — and never past Apollo's 500-page cap", async () => {
