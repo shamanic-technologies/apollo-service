@@ -143,44 +143,23 @@ export async function dryRunSample(
   return { count, sample };
 }
 
-/**
- * Anthropic JSON mode is only enforceable through a STRICT schema — every
- * property required, `additionalProperties: false` — which cannot describe the
- * SPARSE filter object the model emits (it picks a few of ~18 optional filters).
- * So the filter set travels as a JSON STRING, which a strict schema describes
- * exactly, and is parsed back here. That keeps the strongest model without
- * flattening the filter vocabulary into a fixed shape.
- */
-const REFINE_RESPONSE_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    action: { type: "string", enum: ["test", "final"] },
-    filters: {
-      type: "string",
-      description: "The Apollo filter set as a JSON object, serialized to a string.",
-    },
-    reasoning: { type: "string" },
-    matchesRequest: {
-      type: "boolean",
-      description: 'On "final": does this set match what was asked? Ignored on "test".',
-    },
-  },
-  required: ["action", "filters", "reasoning", "matchesRequest"],
-} as const;
-
 const RefineDecisionSchema = z.object({
   action: z.enum(["test", "final"]),
-  /** JSON-encoded filter object — see REFINE_RESPONSE_SCHEMA. */
-  filters: z.string(),
+  /** Accepted as the object itself OR as a JSON string of it. Gemini's schemaless
+   * JSON mode returns the object; a strict-schema provider (Anthropic) can only
+   * describe the SPARSE filter set as a string. Taking both keeps the loop
+   * provider-portable and removes a whole class of unusable output. */
+  filters: z.union([z.record(z.string(), z.unknown()), z.string()]),
   reasoning: z.string().optional(),
   /** Only meaningful on `final`. */
   matchesRequest: z.boolean().optional(),
 });
 
-/** The decision's filters, decoded. `null` when the model sent something that is
- * not a JSON object — unusable output, handled on the invalid-retry budget. */
-function decodeFilters(raw: string): Record<string, unknown> | null {
+/** The decision's filters as an object. `null` when the model sent something that
+ * is not one — unusable output, handled on the invalid-retry budget. */
+function decodeFilters(raw: unknown): Record<string, unknown> | null {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw as Record<string, unknown>;
+  if (typeof raw !== "string") return null;
   try {
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
@@ -210,11 +189,10 @@ function buildSystemPrompt(catalog: string): string {
     "Each turn, reply with ONLY a JSON object (no prose, no code fences):",
     "{",
     '  "action": "test" | "final",',
-    '  "filters": "{ ...filters, as a JSON string... }",',
+    '  "filters": { ...filters... },',
     '  "reasoning": "<one short line>",',
     '  "matchesRequest": true | false',
     "}",
-    '- "filters" is the filter object SERIALIZED TO A STRING, e.g. "{\\"personTitles\\":[\\"Owner\\"]}".',
     '- "test": you want the live count for this filter set before deciding.',
     '- "final": this is your answer. The set you send with "final" is what we return — nothing',
     "  re-ranks it, and no other round can win over it.",
@@ -306,16 +284,19 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
       {
         message,
         systemPrompt,
-        // The strongest model chat-service exposes. Anthropic JSON mode REQUIRES
-        // a strict `responseSchema` (chat-service 400s without one), which cannot
-        // describe the sparse filter object — hence the JSON-string encoding in
-        // REFINE_RESPONSE_SCHEMA. Reasoning stays ON (judgement is the whole job
-        // here); on Anthropic /complete `disableThinking` is a no-op, so it is
-        // not sent.
-        provider: "anthropic",
-        model: "opus",
+        // Google's most powerful model, in SCHEMALESS JSON mode — it needs no
+        // responseSchema, and the Zod guards below validate the shape.
+        // anthropic/opus was the target and its JSON shape IS solved (send the
+        // filter set as a JSON string, which a strict Anthropic schema can
+        // describe), but the platform Anthropic account is usage-capped and the
+        // call 400s, so the loop would be dead in prod. Flipping back is this
+        // provider/model pair plus a strict `responseSchema` — the decision guard
+        // already accepts filters as an object OR a JSON string.
+        // Reasoning stays ON: judgement is the whole job here, so no
+        // `disableThinking` and no thinkingLevel floor.
+        provider: "google",
+        model: "pro",
         responseFormat: "json",
-        responseSchema: REFINE_RESPONSE_SCHEMA as unknown as Record<string, unknown>,
         temperature: 0.2,
         maxTokens: 2000,
       },
@@ -329,7 +310,7 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
       trace.push({
         iteration: step,
         action: "invalid",
-        filters: typeof res.json?.filters === "string" ? decodeFilters(res.json.filters) : null,
+        filters: decodeFilters(res.json?.filters),
         count: null,
         reasoning: "model decision did not match {action, filters}",
         validationErrors: parsed.error.issues.map((e) => `${e.path.join(".")}: ${e.message}`),
@@ -349,7 +330,7 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
         filters: null,
         count: null,
         reasoning: reasoning ?? "",
-        validationErrors: [`filters: not a JSON object (${parsed.data.filters.slice(0, 200)})`],
+        validationErrors: [`filters: not a JSON object (${String(parsed.data.filters).slice(0, 200)})`],
       });
       if (invalidRetries > MAX_INVALID_RETRIES) break;
       continue;
