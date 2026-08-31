@@ -43,13 +43,20 @@ const SAMPLE_PAGES = 2;
  * sampled page beyond it 422s. */
 const APOLLO_MAX_PAGE = 500;
 
-/** One sampled person, flattened to what makes a bad filter set obvious: the
- * company name exposes an off-target sector, the city exposes a geography leak. */
+/** One sampled person, flattened to what makes a bad filter set obvious.
+ *
+ * Company + title is ALL there is: Apollo's free people-search teaser REDACTS
+ * every location field — a person carries `id, first_name, last_name_obfuscated,
+ * title, organization` plus `has_city` / `has_state` / `has_country` BOOLEANS,
+ * and the nested organization carries only `name` + its own `has_*` flags
+ * (verified live 2026-08-31). So city, country, domain and industry are not
+ * obtainable here at zero credits — do not re-add them expecting values; they
+ * come back `null` for every row. The company name is still the load-bearing
+ * signal: it is what shows Emmi Group and World Vision sitting in a "drugstores"
+ * audience. */
 export interface SampledPerson {
   company: string | null;
   title: string | null;
-  city: string | null;
-  country: string | null;
 }
 
 export interface RefineIteration {
@@ -111,12 +118,7 @@ function pickRandomPages(totalPages: number, n: number): number[] {
 }
 
 function toSampledPerson(p: ApolloPerson): SampledPerson {
-  return {
-    company: p.organization?.name ?? null,
-    title: p.title ?? null,
-    city: p.city ?? p.organization?.city ?? null,
-    country: p.country ?? p.organization?.country ?? null,
-  };
+  return { company: p.organization?.name ?? null, title: p.title ?? null };
 }
 
 /**
@@ -183,8 +185,8 @@ function buildSystemPrompt(catalog: string): string {
     "=== END FILTERS ===",
     "",
     "Every set you propose is run against Apollo. You get back the live number of people it matches,",
-    "plus a sample of who they actually are — company, title, city, country — drawn from random pages",
-    `of the result set. You have up to ${MAX_REAL_ATTEMPTS} proposals. Stop when you have the set you want.`,
+    "plus a sample of who they actually are — the employer and the person's title — drawn from random",
+    `pages of the result set. You have up to ${MAX_REAL_ATTEMPTS} proposals. Stop when you have the set you want.`,
     "",
     "Each turn, reply with ONLY a JSON object (no prose, no code fences):",
     "{",
@@ -223,9 +225,7 @@ function buildUserMessage(input: RefineInput, history: RefineIteration[], realAt
     } else {
       lines.push(`- #${h.iteration} count=${h.count} filters=${JSON.stringify(h.filters)} — ${h.reasoning}`);
       for (const s of h.sample ?? []) {
-        lines.push(
-          `    · ${s.company ?? "?"} — ${s.title ?? "?"} — ${[s.city, s.country].filter(Boolean).join(", ") || "?"}`,
-        );
+        lines.push(`    · ${s.company ?? "?"} — ${s.title ?? "?"}`);
       }
     }
   }
