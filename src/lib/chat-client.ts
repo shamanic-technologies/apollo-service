@@ -14,21 +14,8 @@
 
 import { fetchWithRetry } from "./fetch-retry.js";
 
-export type ChatProvider = "google" | "anthropic" | "deepseek" | "zai" | "moonshot";
-export type ChatModel =
-  | "flash"
-  | "flash-lite"
-  | "flash-pro"
-  | "pro"
-  | "sonnet"
-  | "haiku"
-  | "opus"
-  | "deepseek-flash"
-  | "deepseek-pro"
-  | "glm-flash"
-  | "glm-pro"
-  | "kimi-flash"
-  | "kimi-pro";
+export type ChatProvider = "google" | "anthropic";
+export type ChatModel = "flash" | "flash-lite" | "flash-pro" | "pro" | "sonnet" | "haiku" | "opus";
 
 export interface ChatCompleteParams {
   message: string;
@@ -36,10 +23,6 @@ export interface ChatCompleteParams {
   provider: ChatProvider;
   model: ChatModel;
   responseFormat?: "json";
-  /** JSON Schema enforced server-side by the provider's structured-output API.
-   * Implies responseFormat "json". Only usable for a FIXED output shape — a
-   * sparse/open object (the Apollo filter map) must stay schema-less. */
-  responseSchema?: Record<string, unknown>;
   temperature?: number;
   maxTokens?: number;
   /** Minimize the model's internal reasoning. Provider-floored: Gemini 3 (incl.
@@ -122,7 +105,6 @@ export async function chatComplete(
     provider: params.provider,
     model: params.model,
     ...(params.responseFormat && { responseFormat: params.responseFormat }),
-    ...(params.responseSchema && { responseSchema: params.responseSchema }),
     ...(params.temperature !== undefined && { temperature: params.temperature }),
     ...(params.disableThinking !== undefined && { disableThinking: params.disableThinking }),
     // platform-complete has no maxTokens field in chat-service's request schema.
