@@ -28,99 +28,59 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
 - **The NL-segment→filters agentic refine loop lives HERE** (`src/lib/audience-refine.ts`),
   not in human-service. It calls **chat-service** for the LLM (chat-service owns
   the LLM cost — apollo-service declares NONE for it) and uses the FREE Apollo
-  dry-run (per_page=1, zero credits) for live count feedback.
-- **Refine-loop objective — the MECE invariant + max volume AMONG the MECE sets.
-  The loop is NOT steered by size. There is NO floor, ambition or target band.**
-  Every round the model must hold ONE invariant, restated in EVERY user message
-  regardless of the count — the proposed filter set is **MECE with respect to the
-  DESCRIBED target**:
-  - we do not add people who should not be there
-  - we do not leave out people who should be there
-
-  Among the sets that hold it, the biggest dry-run count wins. This is free, not a
-  trade: two filter sets describing the SAME target can return very different volumes
-  purely because Apollo's index coverage differs by mechanism (industry enum vs
-  `q_organization_keyword_tags` vs `q_keywords` vs titles), so maximizing volume among
-  equally-correct sets costs no fidelity.
-  - **Why the loop has rounds — exactly two reasons.** (1) Test whether an Apollo VALUE
-    actually works: a non-functional value returns **0**, and a 0 means "this word does
-    not work", NOT "this constraint is superfluous" → retry the SAME concept with another
-    value or another mechanism, never drop the concept. (2) Test DIFFERENT filter sets
-    that should describe the SAME audience, and keep the one where the index is richest.
-  - **The prompt prescribes NO mechanism.** `buildSystemPrompt` deliberately contains no
-    "prefer X over Y" keyword rules, no banned-keyword list, no volume-killer figures, no
-    "add a keyword only if no structured filter expresses the idea". Those four
-    instructions were REMOVED 2026-07-28 and must NOT come back in any form — they are
-    what made the model drop a stated sector (see the cost note below). The model picks
-    its own mechanism per case; the invariant is the only constraint. Removal is the fix,
-    not a replacement rule. (The appended `APOLLO_UNDOCUMENTED_FILTERS_ENCART` keeps the
-    verified Apollo count FACTS — those are observed engine behaviour, not fidelity rules.)
-  - **Per-round self-judgement + a revision channel.** Each decision JSON carries four
-    fields describing the set it proposes — `reachesOffTarget` / `offTargetReason`
-    (matches people outside the described target) and `leavesTargetUnreached` /
-    `unreachedReason` (excludes people inside it). Names follow Nielsen Digital Ad Ratings
-    vocabulary; keep them. They land on every `RefineIteration` (so they persist in the
-    bronze `refine_trace`) and are echoed back into the next round's input. A later round
-    MAY re-judge an earlier iteration via `revisions[]` — the proposer grades its own set
-    before knowing the count and is biased toward clean flags, whereas re-judging with the
-    count known and an alternative encoding for contrast is a far less biased act. Newest
-    revision wins on the flat fields; the full history stays under `revisions`.
-  - **Selection is DETERMINISTIC in code, not the model's `confirm`.** `pickBest` = max
-    `count` among iterations with BOTH flags `false` (after revisions) and `count > 0`.
-    `action:"confirm"` only means "I am done exploring" — it does not pick the set.
-  - **No both-flags-false iteration → DEGRADE, do not throw.** `pickFallback` takes the max
-    `count` among every set that validated and matched at least one person, the result carries
-    `degraded: true`, and `POST /audiences/suggest-from-segment` returns that flag (additive
-    field, nothing else changed). human-service now asks for ONE audience per request, so a
-    throw here is an error screen where the customer's audience should be — an audience they
-    can look at and reject beats an empty screen, and "the model was not satisfied with any
-    set" is a quality signal, not an error. Fail loud still holds for REAL errors: chat-service
-    or Apollo unreachable, missing config, and a set that matches NOBODY (`count > 0` gates the
-    fallback too) all still throw.
-  - **The degraded path is never silent.** `logRefineTrace` emits ONE structured `console.warn`
-    carrying every iteration's filters, count, action, both verdict flags and their reasons
-    whenever the loop ends without a cleanly-judged set. When the independent grader (#225)
-    started rejecting every set in prod there was no way to tell an over-strict judgement from
-    a broken call — the failure was unfalsifiable in place and the only option was a revert.
-    Nothing is logged on the happy path; this is a diagnostic of last resort, not chatter.
-  - **The loop runs on `provider:"deepseek", model:"deepseek-pro"`, thinking ON.** DeepSeek
-    serves `json_object` only (no `json_schema`), which fits: the loop is schemaless JSON
-    validated by the Zod guards. Do NOT set `disableThinking` here — judgement quality is the
-    whole point, and thinking-off on the previous model (`google`/`flash`) is a documented
-    contributor to the leniency in #224. Chosen over `zai`/`glm-pro` on a live A/B over three
-    segment descriptions (2026-08-31): glm-pro DEGRADED on 2 of 3 (it kept a flag true on the
-    very set it then confirmed — the #225 failure mode) and on the chiropractic segment picked
-    a 207,497-person set against deepseek-pro's 21,373 tight one; deepseek-pro was clean on
-    3 of 3 and ~2x faster.
-    A `confirm` is also REJECTED until at least `MIN_ENCODINGS_BEFORE_CONFIRM` (2) distinct
-    filter sets have been dry-run — comparing encodings is the act that surfaces a leak.
-  - **DO NOT reintroduce any size steering.** Not a hard floor, not an "ambition", not a
-    target band, not a below-N widen nudge. Every one of them pressures the model to break
-    MECE, and the repo has now paid for BOTH symmetric failures. `MAX_REAL_ATTEMPTS` stays 6.
-  - **MECE is measured against the DESCRIBED target — it never mandates a sector.** A
-    description that states no sector ("Solo Founders >$100k Revenue", "HR Heads Singapore
-    Mid-Market") is correctly served by a sector-free filter set; inventing a constraint the
-    description never stated is `leavesTargetUnreached`, not diligence.
-
-  (Costs — the loop oscillated between the two symmetric failures because the objective was
-  always expressed in SIZE. 2026-06-25: prompt example "drop a revenue or headcount band"
-  made the builder drop revenue + reach for `q_keywords` → 14–67-match audiences (v0.24.13,
-  #163/#178, over-narrow). 2026-07-03: the hard 20k floor inflated a "chiropractic clinics"
-  audience with `health care` — floor deleted, objective rewritten to faithful-first
-  (#184/#197/#202). 2026-07-28: that size-driven correction produced
-  `Multi-Practitioner Clinic Directors US` — `{personTitles:["Chiropractor","Clinic Director",
-  "Owner"], personLocations:["United States"], includeSimilarTitles:true,
-  organizationNumEmployeesRanges:["11,50"]}`, **no sector constraint at all**, count
-  **82,522** = every US small-business owner in any industry, while the description said
-  "chiropractic and wellness clinics". Its `refine_trace` had 2 iterations: one test at
-  82,522, then a confirm on the identical set. 82,522 was already above `AMBITION_MIN`
-  (7,000) at iteration 1, so the only feedback branch that existed — the below-ambition
-  widen nudge — never fired, and nothing in the loop ever measured FIDELITY. The model was
-  also following four prompt instructions at once: the healthcare/medical-practice/**wellness**
-  keyword ban (the description literally said "wellness"), the redundant-keyword example, the
-  `q_keywords` volume-killer figures, and "add a keyword only if no structured filter expresses
-  the idea". It did not hallucinate. Fix = this section: MECE invariant + max-volume-among-MECE,
-  size steering deleted, mechanism rules deleted, selection moved into code.)
+  people-search teaser (zero credits at any page size) for live feedback.
+- **The refine loop is a strong model, a plain goal, a real budget, and its own
+  final answer. It is deliberately UNDER-instructed — do not add rules to it.**
+  The model gets three things: the audience description, the Apollo filter catalog
+  (`buildFiltersPrompt`), and the goal — find the filter set that best answers this
+  description. Each proposal is dry-run and the result comes back to it. Up to
+  **10** attempts (`MAX_REAL_ATTEMPTS`), plus a SEPARATE `MAX_INVALID_RETRIES` (3)
+  budget for malformed output, which must never eat a real attempt.
+  - **The set the model returns with `action:"final"` IS the result.** No code
+    re-ranks, scores, filters or arbitrates. If the budget runs out before it
+    answers, its most recent proposal stands — that is still its own latest
+    answer, not a selection. There is no `pickBest`, no max-count rule, no
+    minimum-encodings gate, no premature-confirm rejection.
+  - **Each dry-run returns a COUNT and a SAMPLE of who matched** (`dryRunSample`):
+    ~20 people drawn from up to 2 RANDOM pages (`SAMPLE_PAGES` × `SAMPLE_PER_PAGE`,
+    clamped to Apollo's 500-page cap), each rendered as company — title — city,
+    country. Random pages, never the head: Apollo RANKS results, so page 1 is
+    biased in the direction that hides the bug (a set leaking into Romandie shows
+    clean German-Swiss shops on page 1 while Geneva sits on page 40). The sample
+    is what REPLACES the deleted rules — the model sees Procter & Gamble and Rolex
+    in a "drugstores" audience and draws its own conclusion, and sees a sample thin
+    out when it invented a headcount clamp. Do NOT re-add the rules alongside it.
+  - **ONE closing question, and it decides NOTHING.** `matchesRequest` on the
+    `final` turn ("does this set match what was asked?") populates the response's
+    `degraded` flag. It is read AFTER the set is chosen; an omitted answer, or an
+    exhausted budget, is also `degraded: true`. It must never influence selection —
+    that non-influence is the entire point (the model both issuing a verdict and
+    benefiting from it is what produced #225/#230). `degraded` stays on the
+    response: human-service reads it and the dashboard renders it.
+  - **Degrade, never throw, except for real errors.** chat-service or Apollo
+    unreachable, missing config, and a chosen set that matches NOBODY (`count === 0`)
+    still throw. Everything else returns a usable set with the flag.
+  - **A degraded or failed run logs its FULL trace** (`logRefineTrace`): every
+    attempt's filters, count, sample and reasoning, in one structured `console.warn`.
+    Nothing on the happy path. Without it, an over-strict judgement is
+    indistinguishable from a broken call and the only option is a revert (#227).
+  - **The loop runs on `provider:"anthropic", model:"opus"`,** `responseFormat:"json"`
+    with NO `responseSchema` — the strict-schema requirement (every property required,
+    `additionalProperties:false`) applies only to the schema path and cannot describe
+    the SPARSE filter object the model emits (a few of ~18 optional filters).
+    chat-service strips fences and parses; the Zod guards validate. Reasoning stays ON
+    (on Anthropic `/complete`, `disableThinking` is a no-op, so it is not sent).
+  - **DO NOT re-add:** the MECE vocabulary and its restated invariant, the
+    "maximize volume among the MECE sets" objective, the `reachesOffTarget` /
+    `leavesTargetUnreached` self-grading fields, `pickBest`, `MIN_ENCODINGS_BEFORE_CONFIRM`,
+    the 0-count "never drop the concept" rule, the "never invent a firmographic
+    constraint" rule, the frozen-count "wrong lever" rule, or any floor, ambition,
+    target band or scoring function. Every one of them was added after a specific
+    incident, and the pile is what made the results a lottery: the same request
+    produced 2,640 (correct, 19 German-speaking cantons), 161 (an invented headcount
+    clamp) and 1,222 (geography collapsed to bare `Switzerland`) in one day. If a
+    fix adds an instruction to this prompt, it is the wrong fix — the model has the
+    count, the sample and its own judgement, which is the whole design.
 - **Endpoints:** `POST /audiences/suggest-from-segment`, `GET /audiences/{id}`,
   `POST /audiences/{id}/dry-run`. A serve-next-by-audience-id endpoint is a
   later wave (designed with human-service) — do NOT build it here yet.
@@ -274,10 +234,11 @@ by calling Apollo people-search outside `searchPeople`.
   not the demographic total (which fixes the inflated "remaining to contact").
 - **The refine loop has NO band to calibrate — `AMBITION_MIN` is GONE (2026-07-28).**
   It used to be recalibrated 20,000 → 7,000 when the dry-runs became verified-only
-  (counts are ~1/3 of the demographic total). That whole axis was deleted: the loop is
-  steered by the MECE invariant + max volume among MECE, never by a count threshold.
-  So the verified-only change now affects only what a count MEANS (the contactable pool),
-  not any accept/reject decision. Do NOT re-derive a band from the verified scale.
+  (counts are ~1/3 of the demographic total). That whole axis was deleted: the model
+  reads the count and the sample and decides for itself, and nothing in code compares a
+  count to a threshold. So the verified-only change now affects only what a count MEANS
+  (the contactable pool), not any accept/reject decision. Do NOT re-derive a band from
+  the verified scale.
 
 ## Apollo pagination hard cap (DO NOT remove the cursor clamp)
 
@@ -392,9 +353,10 @@ engine behaviour that any caller LLM should know. It is NOT a prescription in th
 refine-loop system prompt: the "prefer keyword-tags over `q_keywords`" / "never add a
 redundant keyword" rules were REMOVED 2026-07-28 (they helped the model justify dropping a
 stated sector — see the refine-objective section). `q_keywords` + technology UIDs are
-always available; the model picks its mechanism and the MECE invariant is the only
-constraint. There is no relaxation ORDER anymore — the loop explores alternative encodings
-of the same target, it does not shed constraints in a ranked sequence.
+always available; the model picks its own mechanism, judged against the count and the
+sample its choice actually returns. There is no relaxation ORDER anymore — the loop
+explores alternative encodings of the same target, it does not shed constraints in a
+ranked sequence.
 
 **Verified 2026-06-25 — undocumented TARGETING filters People Search also honors
 (same baseline `CEO + United States` = 521,875).** The headline is the
