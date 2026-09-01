@@ -28,9 +28,33 @@ import { toCreditAlertIdentity, type CreditAlertIdentity } from "./credit-alert.
 import { searchPeople, type ApolloPerson } from "./apollo-client.js";
 import { SearchFiltersSchema } from "../schemas.js";
 
+/** The model this loop runs on: cheap AND smart, per the owner's instruction.
+ *
+ * A/B'd head-to-head against `deepseek/deepseek-pro` on the Swiss-drugstores
+ * description, 3 runs each (2026-09-01). `glm-pro` returned 13 / 171 / 15 with
+ * employers that are recognisably the target (Vita Drogerie AG, LANUR, PANVEGA,
+ * Markthalle Luzern); `deepseek-pro` returned 268 / 203 / 1 with Emmi Group,
+ * Transgourmet, Möbel Pfister and CALIDA in its samples — a wider spread AND
+ * off-target companies. glm-pro wins.
+ *
+ * `google/pro` was the emergency swap after the platform Anthropic account hit
+ * its usage cap (#236); Anthropic is off the table for this loop for good. */
+const REFINE_PROVIDER = "zai" as const;
+const REFINE_MODEL = "glm-pro" as const;
+
 /** Real dry-run attempts. Each one gives the model a live count AND a sample of
  * who it matched, to react to. */
 const MAX_REAL_ATTEMPTS = 10;
+/** Attempts the model must actually SPEND before a `final` is accepted.
+ *
+ * This is an EXPLORATION MECHANIC, not a targeting rule: it says nothing about
+ * WHAT to look for, only that the budget is there to be used. Six production
+ * runs of the same description returned 25, 9, 25, 164721, 13 and 6643 — and the
+ * two worst stopped at attempt 3 of 10 while their own sample showed the target
+ * abandoned. A `final` before this floor is run and shown to the model exactly
+ * like a `test`; the model keeps its set and can send it again. Nothing here
+ * re-ranks or rejects a set on its content. */
+const MIN_REAL_ATTEMPTS = 6;
 /** Extra budget for unusable model output (malformed decision JSON or filters
  * rejected by the faithful schema). These do NOT consume a real attempt — a
  * provider hiccup must not eat the exploration budget. */
@@ -147,10 +171,10 @@ export async function dryRunSample(
 
 const RefineDecisionSchema = z.object({
   action: z.enum(["test", "final"]),
-  /** Accepted as the object itself OR as a JSON string of it. Gemini's schemaless
-   * JSON mode returns the object; a strict-schema provider (Anthropic) can only
-   * describe the SPARSE filter set as a string. Taking both keeps the loop
-   * provider-portable and removes a whole class of unusable output. */
+  /** Accepted as the object itself OR as a JSON string of it. Schemaless JSON
+   * modes return the object; some providers wrap it in a string. Taking both is
+   * plain tolerance of the wire shape — it removes a class of unusable output
+   * and costs nothing. */
   filters: z.union([z.record(z.string(), z.unknown()), z.string()]),
   reasoning: z.string().optional(),
   /** Only meaningful on `final`. */
@@ -187,6 +211,10 @@ function buildSystemPrompt(catalog: string): string {
     "Every set you propose is run against Apollo. You get back the live number of people it matches,",
     "plus a sample of who they actually are — the employer and the person's title — drawn from random",
     `pages of the result set. You have up to ${MAX_REAL_ATTEMPTS} proposals. Stop when you have the set you want.`,
+    "",
+    `The first ${MIN_REAL_ATTEMPTS} proposals are exploration and they are yours to spend: a "final" sent before`,
+    `you have used ${MIN_REAL_ATTEMPTS} of them is run and answered like a "test", and the loop continues. Keep the`,
+    "set if you still want it — you can send it again as your answer once the exploration budget is spent.",
     "",
     "Each turn, reply with ONLY a JSON object (no prose, no code fences):",
     "{",
@@ -230,10 +258,17 @@ function buildUserMessage(input: RefineInput, history: RefineIteration[], realAt
     }
   }
   lines.push("");
+  const mustSpend = Math.max(0, MIN_REAL_ATTEMPTS - realAttemptsUsed);
   lines.push(
     `You have ${MAX_REAL_ATTEMPTS - realAttemptsUsed} proposal(s) left. Propose another set (action "test"), or give ` +
       'your answer (action "final").',
   );
+  if (mustSpend > 0) {
+    lines.push(
+      `${mustSpend} exploration proposal(s) remain to be spent — a "final" before that is run and answered like a ` +
+        '"test", and the loop continues.',
+    );
+  }
   return lines.join("\n");
 }
 
@@ -284,18 +319,15 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
       {
         message,
         systemPrompt,
-        // Google's most powerful model, in SCHEMALESS JSON mode — it needs no
-        // responseSchema, and the Zod guards below validate the shape.
-        // anthropic/opus was the target and its JSON shape IS solved (send the
-        // filter set as a JSON string, which a strict Anthropic schema can
-        // describe), but the platform Anthropic account is usage-capped and the
-        // call 400s, so the loop would be dead in prod. Flipping back is this
-        // provider/model pair plus a strict `responseSchema` — the decision guard
-        // already accepts filters as an object OR a JSON string.
+        // Cheap AND smart, in SCHEMALESS JSON mode — the Zod guards below
+        // validate the shape, so no responseSchema is sent. Anthropic is off the
+        // table for this loop for good (the platform account is usage-capped and
+        // the loop is not worth an opus bill either way), and `google/pro` was
+        // only ever the emergency swap that replaced it.
         // Reasoning stays ON: judgement is the whole job here, so no
         // `disableThinking` and no thinkingLevel floor.
-        provider: "google",
-        model: "pro",
+        provider: REFINE_PROVIDER,
+        model: REFINE_MODEL,
         responseFormat: "json",
         temperature: 0.2,
         maxTokens: 2000,
@@ -367,17 +399,25 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
       toCreditAlertIdentity(input.tracking),
     );
 
+    // A `final` sent before the exploration floor is DEFERRED: the set was just
+    // dry-run and its count + sample go back to the model like any other
+    // proposal, and the loop continues. The model keeps its set and may send it
+    // again once the budget is spent. Nothing about the set's CONTENT is judged
+    // here — only how much of the budget has been used.
+    const deferred = action === "final" && realAttempts < MIN_REAL_ATTEMPTS;
+
     trace.push({
       iteration: step,
-      action,
+      action: deferred ? "test" : action,
       filters: validFilters,
       count,
       sample,
       reasoning: reasoning ?? "",
-      ...(action === "final" && { matchesRequest: matchesRequest === true }),
+      ...(deferred && { finalDeferred: true }),
+      ...(action === "final" && !deferred && { matchesRequest: matchesRequest === true }),
     });
 
-    if (action === "final") {
+    if (action === "final" && !deferred) {
       answered = true;
       break;
     }
