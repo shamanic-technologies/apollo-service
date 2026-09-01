@@ -17,15 +17,25 @@
  * business context (why volume matters AND that a genuinely small market is a
  * correct answer), its round budget, and the full ordered history — each past
  * round carrying its filters, its live count, 10 sample rows drawn from RANDOM
- * pages, and the model's own three notes. It answers with a filter set, a
- * factual `showable` (does this answer the client's filtering request?) and
+ * pages, and the model's own three notes. It answers with a filter set and
  * `toContinue`.
  *
- * SELECTION: the LARGEST `showable` round wins — not the last one. Runs that
- * stopped early on a visibly over-constrained set (4, 30, 7, 9, 80, 14 people
- * for a market of a few hundred) are why. With no showable round, the largest
- * overall is returned and flagged `degraded`. Nothing here scores, re-ranks on
- * content, or enforces a count floor.
+ * NO SELF-GRADE, NO SELECTION (#246). This loop EXPLORES and REPORTS: it returns
+ * EVERY round it ran (`candidates`, in round order, each with its filters, its
+ * live count, its 10 sample rows and the model's three notes) and lets the
+ * consumer choose. `showable` is GONE — it was `true` on 60 of 60 rounds, the
+ * third absolute per-round self-grade in this loop to degenerate to a constant
+ * (after `reachesOffTarget`/`leavesTargetUnreached` and `matchesRequest`), which
+ * collapsed selection to plain argmax-count and shipped a 179,156-person set at
+ * Mars and Lidl. Do NOT re-introduce a per-round self-grade under another name.
+ * Which audience serves the customer is a product decision and it is made in
+ * human-service, which did not author the sets and compares N rather than
+ * judging one in isolation.
+ *
+ * The legacy single-result fields (`filters`, `count`, `degraded`) are kept
+ * ADDITIVELY alongside `candidates` so human-service can migrate on its own
+ * schedule; they pick the largest non-empty round, which is exactly what the
+ * always-true `showable` reduced to in production.
  */
 
 import { z } from "zod";
@@ -91,10 +101,6 @@ export interface RefineIteration {
   count: number | null;
   /** Who the set actually matched. `null` on `invalid` rows (nothing was run). */
   sample?: SampledPerson[] | null;
-  /** Does this set answer the client's filtering request? The model's own
-   * factual answer, independent of whether the volume is good. Selection picks
-   * the LARGEST showable round. */
-  showable?: boolean;
   /** The model asked to keep iterating (or not). */
   toContinue?: boolean;
   notes?: RoundNotes;
@@ -111,15 +117,31 @@ export interface RefineInput {
   tracking: ChatTrackingHeaders;
 }
 
+/** One explored round, reported as-is. No score, no rank, no self-grade — the
+ * count and the sample are the evidence, the notes are the model's own account
+ * of what it was trying. Round order is the only order. */
+export interface RefineCandidate {
+  /** 1-based position in the run, in the order the rounds were explored. */
+  round: number;
+  filters: Record<string, unknown>;
+  count: number;
+  sample: SampledPerson[];
+  notes: RoundNotes;
+}
+
 export interface RefineResult {
+  /** LEGACY single result — the largest non-empty round. Kept so human-service
+   * can migrate to `candidates` on its own schedule. */
   filters: Record<string, unknown>;
   count: number;
   status: "confirmed" | "exhausted";
-  /** TRUE when NO round was marked showable — the largest set is returned
-   * anyway (never nothing), unblessed, so the customer can look at it and reject
-   * it instead of seeing an error. human-service reads this and the dashboard
-   * renders it. */
+  /** LEGACY. With `showable` deleted there is no per-round self-tag left to
+   * withhold a blessing, so this is FALSE whenever an audience is returned —
+   * which is exactly what it was in production, where `showable` came back true
+   * on every round. Read `candidates` instead. */
   degraded: boolean;
+  /** EVERY round that was dry-run, in round order. The deliverable. */
+  candidates: RefineCandidate[];
   trace: RefineIteration[];
 }
 
@@ -179,7 +201,6 @@ const RefineDecisionSchema = z.object({
    * modes return the object; some providers wrap it in a string. Taking both is
    * plain tolerance of the wire shape. */
   filters: z.union([z.record(z.string(), z.unknown()), z.string()]),
-  showable: z.boolean().optional(),
   toContinue: z.boolean().optional(),
   whatWorked: z.string().optional(),
   whatToImprove: z.string().optional(),
@@ -257,18 +278,16 @@ function buildSystemPrompt(catalog: string): string {
     "Each turn, reply with ONLY a JSON object (no prose, no code fences):",
     "{",
     '  "filters": { ...filters... },',
-    '  "showable": true | false,',
     '  "toContinue": true | false,',
     '  "whatWorked": "<one sentence>",',
     '  "whatToImprove": "<one sentence>",',
     '  "nextExperiment": "<one sentence: what you are trying next and why>"',
     "}",
-    '- "showable": does THIS filter set answer the client\'s filtering request? A factual question',
-    "  about the request, independent of whether the volume is good.",
     '- "toContinue": true to keep iterating, false to stop here because you are satisfied.',
     "",
-    "When the loop ends, the SHOWABLE set with the LARGEST count is what we return — not your last",
-    "one. So a good set stays in the running even after you move on from it.",
+    "EVERY round you run is reported back, with its count, its sample and your notes — none of them is",
+    "discarded, and you are not asked to pick. Explore the space: a round that turns out too narrow or",
+    "too broad is still a useful data point for whoever chooses.",
   ].join("\n");
 }
 
@@ -295,7 +314,7 @@ function buildUserMessage(input: RefineInput, history: RefineIteration[], rounds
       continue;
     }
     lines.push(
-      `- #${h.iteration} count=${h.count} showable=${h.showable === true} filters=${JSON.stringify(h.filters)}`,
+      `- #${h.iteration} count=${h.count} filters=${JSON.stringify(h.filters)}`,
     );
     for (const s of h.sample ?? []) {
       lines.push(`    · ${s.company ?? "?"} — ${s.title ?? "?"}`);
@@ -315,12 +334,12 @@ function buildUserMessage(input: RefineInput, history: RefineIteration[], rounds
 }
 
 /** Diagnostic of last resort: one structured line carrying the WHOLE trace when
- * the run ends degraded or with nothing usable — every round's filters, count,
+ * the run ends with nothing usable — every round's filters, count,
  * sample and notes. When the independent grader (#225) started rejecting every
  * set in production there was no way to tell an over-strict judgement from a
  * broken call, and the only option was a revert. Deliberately NOT emitted on the
  * happy path. */
-function logRefineTrace(input: RefineInput, trace: RefineIteration[], outcome: "degraded" | "no_usable_set"): void {
+function logRefineTrace(input: RefineInput, trace: RefineIteration[], outcome: "no_usable_set"): void {
   console.warn(
     "[apollo-service][refineAudience] refine ended without a confident set " +
       JSON.stringify({
@@ -333,7 +352,6 @@ function logRefineTrace(input: RefineInput, trace: RefineIteration[], outcome: "
           count: h.count,
           filters: h.filters,
           sample: h.sample,
-          showable: h.showable,
           toContinue: h.toContinue,
           notes: h.notes,
           validationErrors: h.validationErrors,
@@ -388,14 +406,14 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
         action: "invalid",
         filters: decodeFilters(res.json?.filters),
         count: null,
-        reasoning: "model decision did not match {filters, showable, toContinue}",
+        reasoning: "model decision did not match {filters, toContinue}",
         validationErrors: parsed.error.issues.map((e) => `${e.path.join(".")}: ${e.message}`),
       });
       if (invalidRetries > MAX_INVALID_RETRIES) break;
       continue;
     }
 
-    const { showable, toContinue, whatWorked, whatToImprove, nextExperiment, reasoning } = parsed.data;
+    const { toContinue, whatWorked, whatToImprove, nextExperiment, reasoning } = parsed.data;
     const filters = decodeFilters(parsed.data.filters);
     if (filters === null) {
       // The filter string was not a JSON object — unusable output, retry budget.
@@ -449,7 +467,6 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
       filters: validFilters,
       count,
       sample,
-      showable: showable === true,
       toContinue: toContinue !== false,
       notes: {
         whatWorked: whatWorked ?? "",
@@ -462,20 +479,26 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
     if (toContinue === false) break;
   }
 
-  // Selection: the LARGEST `showable` round across the whole run — not the last
-  // one. Nothing here judges the CONTENT of a set; the model's own factual
-  // "does this answer the request" is the only gate, and among the sets that
-  // pass it, more relevant people is strictly better for a cold-email campaign.
-  const scored = trace.filter(isScored).filter((h) => h.count > 0);
-  const showable = scored.filter((h) => h.showable === true);
-  const pool = showable.length > 0 ? showable : scored;
-  const chosen = pool.reduce<ScoredRound | undefined>(
+  // EVERY round that ran, in round order — the deliverable. Nothing is scored,
+  // ranked or filtered out here: a round that matched nobody is still an honest
+  // report of what that filter set does, and the consumer chooses.
+  const roundRows = trace.filter(isScored);
+  const candidates: RefineCandidate[] = roundRows.map((h, i) => ({
+    round: i + 1,
+    filters: h.filters,
+    count: h.count,
+    sample: h.sample ?? [],
+    notes: h.notes ?? { whatWorked: "", whatToImprove: "", nextExperiment: "" },
+  }));
+
+  // LEGACY single result: the largest non-empty round. This is what the
+  // always-true `showable` reduced to in production, so the field's behaviour is
+  // unchanged for a consumer that has not migrated to `candidates` yet.
+  const scored = roundRows.filter((h) => h.count > 0);
+  const chosen = scored.reduce<ScoredRound | undefined>(
     (best, h) => (best === undefined || h.count > best.count ? h : best),
     undefined,
   );
-
-  // No round the model called showable = usable but unblessed. Never nothing.
-  const degraded = showable.length === 0;
 
   // A run where every set matched NOBODY is not an audience — that is a real
   // error, and fail-loud still holds for it (as it does for chat-service or
@@ -485,14 +508,12 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
     throw new Error("[apollo-service][refineAudience] no filter set validated and matched at least one person");
   }
 
-  if (degraded) logRefineTrace(input, trace, "degraded");
-
   return {
     filters: chosen.filters,
     count: chosen.count,
-    // "confirmed" = we have a set the model itself called showable.
-    status: degraded ? "exhausted" : "confirmed",
-    degraded,
+    status: "confirmed",
+    degraded: false,
+    candidates,
     trace,
   };
 }

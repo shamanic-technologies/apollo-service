@@ -58,27 +58,34 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
     reported honestly rather than inflated, and never to loosen the request to
     reach a number. A numeric target in a prompt makes a model fabricate when
     reality cannot meet it — documented in this codebase; this is its live case.
-  - **`showable` + `toContinue`, and selection is LARGEST-SHOWABLE.** Each round
-    the model returns `showable` (does THIS set answer the client's filtering
-    request? factual, independent of volume) and `toContinue` (keep going, or stop
-    here satisfied — `false` ends the loop). At the end the code returns the
-    showable round with the **largest count across the whole run — not the last
-    one**; if NO round is showable, the largest overall is returned anyway and
-    flagged `degraded` (never nothing). Returning the last attempt is what shipped
-    the 4s and 9s: runs stopped early on a visibly over-constrained set. Nothing
-    scores the CONTENT of a set — `showable` is the only gate, and among sets that
-    pass it more relevant people is strictly better for cold email. There is no
-    `pickBest` scoring function, no count floor, no target band.
-    - Known and accepted risk: `showable` DRIVES selection, so a model marking a
-      big loose set showable makes it win — the same incentive shape as the
-      self-grading removed in #225/#230. Accepted because the question is factual
-      rather than a quality self-assessment, and because the customer sees the
-      final filters in the onboarding UI. If verification shows huge sets marked
-      showable, SAY SO rather than tuning around it.
+  - **THIS SERVICE EXPLORES AND REPORTS — IT DOES NOT CHOOSE (#246).** Every round
+    is persisted as its own `apollo_audiences` row and every round is returned, in
+    ROUND ORDER, as `candidates[]` — each carrying its persisted apollo-audience
+    id, its filters, its live count, its 10 random-page sample rows and the model's
+    three notes. Nothing here ranks, scores or sorts. WHICH audience serves the
+    customer is a product decision made in **human-service**: it did not author the
+    sets (so it has no stake in any of them) and choosing among N is COMPARATIVE,
+    which is exactly what does not degenerate. `toContinue` stays — the model may
+    still stop early when satisfied. Rows are cheap and the unchosen ones are a
+    useful record of what was explored.
+  - **`showable` is DELETED and no per-round self-grade replaces it, under any
+    name.** It was `true` on 60 of 60 rounds. That is the THIRD absolute
+    self-judgement in this loop to degenerate to a constant —
+    `reachesOffTarget`/`leavesTargetUnreached` were always clean, `matchesRequest`
+    was always true (including on World Health Organization and HORNBACH
+    Baumarkt), `showable` was always true — so selection collapsed to plain
+    argmax-count and the loosest round of each run won (179,156 people at Mars,
+    Lidl, Bucherer and Manor, marked showable). The pattern is settled: a model
+    grading its own proposal in isolation answers the same way every time. The
+    exploration was never the problem — nearly every run already contains a round
+    in the low hundreds to ~2,000 with recognisable targets. The model writes the
+    right filter set; it cannot pick it. Do NOT re-introduce a per-round
+    self-grade, and do NOT convert one into a ranking.
   - **Each round's history entry carries filters, count, sample and the model's
     own three one-sentence notes** (`whatWorked`, `whatToImprove`,
-    `nextExperiment`), plus its `showable`. The notes are the model's own memory
-    of what it was trying — they are fed back, never graded.
+    `nextExperiment`). The notes are the model's own memory of what it was trying —
+    they are fed back, never graded, and they ship on the candidate so whoever
+    chooses can read what the round was for.
   - **Each dry-run returns a COUNT and a SAMPLE of who matched** (`dryRunSample`):
     **10** people drawn from up to 2 RANDOM pages (`SAMPLE_PAGES` ×
     `SAMPLE_ROWS_PER_PAGE`, clamped to Apollo's 500-page cap), each rendered as
@@ -114,13 +121,17 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
     them in the LOW HUNDREDS with verified emails, so a small count for a niche
     local trade is the correct answer, not a bug. Sample any reference set before
     comparing the loop to it — the same instrument the loop itself runs on.
-  - **`degraded` = no round was showable.** It stays on the response —
-    human-service reads it and the dashboard renders it. The old `matchesRequest`
-    closing question is GONE, folded into the per-round `showable`.
-  - **Degrade, never throw, except for real errors.** chat-service or Apollo
-    unreachable, missing config, and a chosen set that matches NOBODY (`count === 0`)
-    still throw. Everything else returns a usable set with the flag.
-  - **A degraded or failed run logs its FULL trace** (`logRefineTrace`): every
+  - **The single-result fields are LEGACY and additive.** `apolloAudienceId` /
+    `filters` / `count` / `degraded` stay on the response beside `candidates`,
+    behaving exactly as they did: the largest non-empty round, and `degraded:false`
+    — which is what it already was in production, since `showable` came back true
+    on every round. Additive on purpose: human-service migrates to `candidates` on
+    its own schedule, so there is no deploy-ordering constraint in either
+    direction. A LATER PR removes them once human-service reads `candidates`.
+  - **Never throw, except for real errors.** chat-service or Apollo unreachable,
+    missing config, and a run where EVERY set matched NOBODY (`count === 0`) still
+    throw. Everything else returns the candidate list.
+  - **A run with no usable set logs its FULL trace** (`logRefineTrace`): every
     attempt's filters, count, sample and reasoning, in one structured `console.warn`.
     Nothing on the happy path. Without it, an over-strict judgement is
     indistinguishable from a broken call and the only option is a revert (#227).
@@ -142,16 +153,16 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
     `leavesTargetUnreached` self-grading fields, `pickBest`, `MIN_ENCODINGS_BEFORE_CONFIRM`,
     the 0-count "never drop the concept" rule, the "never invent a firmographic
     constraint" rule, the frozen-count "wrong lever" rule, a geography rule, or any
-    count floor, ambition, target band or scoring function. (`showable`-based
-    largest-set selection is not on this list — it is the loop's selection rule,
-    not a content score. Neither is `COLD_EMAIL_CONTEXT`: it is what the audience
-    is FOR, not what to look for.) Every one of them was added after a specific
+    count floor, ambition, target band or scoring function — and `showable`, or any
+    per-round self-grade wearing a different name. (`COLD_EMAIL_CONTEXT` is not on
+    this list: it is what the audience is FOR, not what to look for.) Every one of them was added after a specific
     incident, and the pile is what made the results a lottery: the same request
     produced 2,640 (correct, 19 German-speaking cantons), 161 (an invented headcount
     clamp) and 1,222 (geography collapsed to bare `Switzerland`) in one day. If a
     fix adds an instruction to this prompt, it is the wrong fix — the model has the
     count, the sample and its own judgement, which is the whole design.
-- **Endpoints:** `POST /audiences/suggest-from-segment`, `GET /audiences/{id}`,
+- **Endpoints:** `POST /audiences/suggest-from-segment` (returns `candidates[]` —
+  every explored round, in round order, each persisted), `GET /audiences/{id}`,
   `POST /audiences/{id}/dry-run`. A serve-next-by-audience-id endpoint is a
   later wave (designed with human-service) — do NOT build it here yet.
 - **Env vars (NEW consumer of chat-service):** `CHAT_SERVICE_URL` +
