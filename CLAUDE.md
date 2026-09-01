@@ -75,6 +75,17 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
     is what REPLACES the deleted rules — the model sees Procter & Gamble and Rolex
     in a "drugstores" audience and draws its own conclusion, and sees a sample thin
     out when it invented a headcount clamp. Do NOT re-add the rules alongside it.
+  - **A COUNT WITHOUT A SAMPLE IS NOT A CALIBRATION — never judge the loop against
+    a hand-built number nobody looked at.** A "1,919-person hand-built equivalent"
+    was used to call six prod runs (4-80) a 24x-480x under-reach; sampling that set
+    live returned ADM, Omya, Emmi Group, HOCHDORF and DocMorris — ingredient and
+    food multinationals matched by broad tags (`organic products`, `natural foods`,
+    `nutritional supplements`), not drugstore owners. The count was real, the
+    relevance was never checked, and the whole judgement inverted once it was
+    (2026-09-01, #241/#242). Swiss Drogerien are 2-5-person shops: Apollo holds
+    them in the LOW HUNDREDS with verified emails, so a small count for a niche
+    local trade is the correct answer, not a bug. Sample any reference set before
+    comparing the loop to it — the same instrument the loop itself runs on.
   - **ONE closing question, and it decides NOTHING.** `matchesRequest` on the
     `final` turn ("does this set match what was asked?") populates the response's
     `degraded` flag. It is read AFTER the set is chosen; an omitted answer, or an
