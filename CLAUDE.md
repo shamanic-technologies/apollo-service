@@ -36,6 +36,17 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
   description. Each proposal is dry-run and the result comes back to it. Up to
   **10** attempts (`MAX_REAL_ATTEMPTS`), plus a SEPARATE `MAX_INVALID_RETRIES` (3)
   budget for malformed output, which must never eat a real attempt.
+  - **The budget is there to be SPENT: a `final` before `MIN_REAL_ATTEMPTS` (6) is
+    run and answered exactly like a `test`, and the loop continues.** This is the
+    ONLY instruction ever added back, and it is an EXPLORATION MECHANIC, not a
+    targeting rule — it says nothing about what to look for, only that stopping at
+    attempt 3 of 10 is not allowed. Six production runs of one description returned
+    25, 9, 25, 164,721, 13 and 6,643; the two worst stopped at attempt 3 with
+    World Health Organization, Mettler-Toledo and HORNBACH Baumarkt in their own
+    samples and answered `matchesRequest: true`. The deferred set is NOT rejected
+    or re-ranked — it is dry-run, fed back with its count and sample, traced as
+    `action:"test"` + `finalDeferred:true`, and the model may send it again as its
+    answer once the floor is passed.
   - **The set the model returns with `action:"final"` IS the result.** No code
     re-ranks, scores, filters or arbitrates. If the budget runs out before it
     answers, its most recent proposal stands — that is still its own latest
@@ -52,7 +63,13 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
     values. Consequence worth knowing: the sample exposes an off-target SECTOR
     (Emmi Group and World Vision in a "drugstores" audience) but cannot expose a
     GEOGRAPHY leak, so a bare `Switzerland` where cantons were asked for gets no
-    feedback from it. Random pages, never the head: Apollo RANKS results, so page 1 is
+    feedback from it. **That is ACCEPTED, by design: geography is out of scope for
+    the loop's feedback and the CUSTOMER is the feedback loop for that axis** — the
+    resulting Apollo filters are rendered in the onboarding UI, so a missing canton
+    constraint is visible to the human who wrote the request. Do NOT "fix" it with a
+    geography rule in the prompt, and do NOT try to re-derive location from company
+    names. Real per-person location would need paid enrichment, which turns a free
+    sample into a billed one. Random pages, never the head: Apollo RANKS results, so page 1 is
     biased in the direction that hides the bug (a set leaking into Romandie shows
     clean German-Swiss shops on page 1 while Geneva sits on page 40). The sample
     is what REPLACES the deleted rules — the model sees Procter & Gamble and Rolex
@@ -72,25 +89,26 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
     attempt's filters, count, sample and reasoning, in one structured `console.warn`.
     Nothing on the happy path. Without it, an over-strict judgement is
     indistinguishable from a broken call and the only option is a revert (#227).
-  - **The loop runs on `provider:"google", model:"pro"`, schemaless JSON, reasoning ON.**
-    `anthropic`/`opus` was the target and its JSON shape IS solved — chat-service REJECTS
-    Anthropic JSON mode without a `responseSchema` (`400 "Anthropic JSON mode requires
-    responseSchema"`; the OpenAPI text implying plain `responseFormat:"json"` suffices is
-    wrong for that provider), and an Anthropic schema must be STRICT (every property in
-    `required`, `additionalProperties:false`), which cannot describe the SPARSE filter
-    object the model emits — so the filter set is sent as a JSON STRING, which a strict
-    schema describes exactly. What blocks opus is not the shape but the platform Anthropic
-    account: it is usage-capped (`"You have reached your specified API usage limits"`, prod
-    2026-08-31), so every refine call 500s. Flipping back is one provider/model pair plus
-    the strict `responseSchema` — `chatComplete` already forwards `responseSchema`, and the
-    decision guard already accepts `filters` as an object OR a JSON string. Do NOT set
-    `disableThinking` or a thinkingLevel floor: judgement is the whole job here.
+  - **The loop runs on `provider:"zai", model:"glm-pro"`, schemaless JSON, reasoning ON.**
+    Cheap AND smart, per the owner's instruction. A/B'd against `deepseek/deepseek-pro`
+    on the Swiss-drugstores description, 3 runs each (2026-09-01): glm-pro returned
+    13 / 171 / 15 with employers that are recognisably the target (Vita Drogerie AG,
+    LANUR, PANVEGA, Markthalle Luzern); deepseek-pro returned 268 / 203 / 1 with
+    Emmi Group, Transgourmet, Möbel Pfister and CALIDA in its samples — a wider
+    spread AND off-target companies. **Anthropic is off the table for this loop for
+    good** (do NOT return to `opus` when the platform account's usage cap lifts), and
+    `google/pro` was only the emergency swap that replaced it (#236). No
+    `responseSchema` is sent: the Zod guards validate the decision, and the guard
+    still accepts `filters` as an object OR a JSON string — plain tolerance of the
+    wire shape, not an Anthropic contortion. Do NOT set `disableThinking` or a
+    thinkingLevel floor: judgement is the whole job here.
   - **DO NOT re-add:** the MECE vocabulary and its restated invariant, the
     "maximize volume among the MECE sets" objective, the `reachesOffTarget` /
     `leavesTargetUnreached` self-grading fields, `pickBest`, `MIN_ENCODINGS_BEFORE_CONFIRM`,
     the 0-count "never drop the concept" rule, the "never invent a firmographic
-    constraint" rule, the frozen-count "wrong lever" rule, or any floor, ambition,
-    target band or scoring function. Every one of them was added after a specific
+    constraint" rule, the frozen-count "wrong lever" rule, a geography rule, or any
+    count floor, ambition, target band or scoring function. (`MIN_REAL_ATTEMPTS` is
+    not on this list: it bounds WHEN the model may stop, never WHICH set wins.) Every one of them was added after a specific
     incident, and the pile is what made the results a lottery: the same request
     produced 2,640 (correct, 19 German-speaking cantons), 161 (an invented headcount
     clamp) and 1,222 (geography collapsed to bare `Switzerland`) in one day. If a

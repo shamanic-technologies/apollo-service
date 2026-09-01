@@ -140,15 +140,20 @@ describe("Apollo audience endpoints", () => {
     apollo.people = [person("Drogerie Müller", "Owner")];
     apollo.pagesRequested = [];
     mockSearchPeople.mockImplementation(apolloImpl);
-    // Default: one exploratory proposal, then the model's own final answer.
+    // Default: five exploratory proposals (the exploration floor), then the
+    // model's own final answer on its 6th.
     mockChatComplete
+      .mockResolvedValueOnce(decide("test", FIRST_ENCODING))
+      .mockResolvedValueOnce(decide("test", FIRST_ENCODING))
+      .mockResolvedValueOnce(decide("test", FIRST_ENCODING))
+      .mockResolvedValueOnce(decide("test", FIRST_ENCODING))
       .mockResolvedValueOnce(decide("test", FIRST_ENCODING))
       .mockResolvedValue(decide("final", FINAL_FILTERS, { matchesRequest: true }));
     app = await createApp();
   });
 
   it("POST /suggest-from-segment persists and returns {apolloAudienceId, filters, count}", async () => {
-    setCounts(1000, 42000);
+    setCounts(1000, 1000, 1000, 1000, 1000, 42000);
 
     const res = await request(app)
       .post("/audiences/suggest-from-segment")
@@ -160,16 +165,16 @@ describe("Apollo audience endpoints", () => {
     expect(res.body.filters).toEqual(FINAL_FILTERS);
     expect(res.body.count).toBe(42000);
     expect(res.body.degraded).toBe(false);
-    expect(mockChatComplete).toHaveBeenCalledTimes(2);
-    // Schemaless JSON mode on google/pro (anthropic/opus is usage-capped on the
-    // platform account; the guard below accepts either encoding).
+    expect(mockChatComplete).toHaveBeenCalledTimes(6);
+    // Schemaless JSON mode on the cheap-and-smart model (zai/glm-pro). No
+    // Anthropic, no google/pro.
     expect(mockChatComplete).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "google", model: "pro", responseFormat: "json" }),
+      expect.objectContaining({ provider: "zai", model: "glm-pro", responseFormat: "json" }),
       expect.anything(),
     );
     // Reasoning stays ON.
     expect(mockChatComplete.mock.calls[0][0].disableThinking).toBeUndefined();
-    // Schemaless: Gemini needs no responseSchema, the Zod guards validate.
+    // Schemaless: no responseSchema is sent — the Zod guards validate.
     expect(mockChatComplete.mock.calls[0][0].responseSchema).toBeUndefined();
     // Each candidate was dry-run for free via Apollo per_page=1.
     expect(mockSearchPeople).toHaveBeenCalledWith("apollo-key", expect.objectContaining({ per_page: 1 }), expect.anything());
@@ -244,6 +249,7 @@ describe("Apollo audience endpoints", () => {
     // The goal, plainly stated, and the loop's own mechanics.
     expect(opts.systemPrompt).toContain("find the Apollo People Search filter set that best answers");
     expect(opts.systemPrompt).toContain("You have up to 10 proposals");
+    expect(opts.systemPrompt).toContain("The first 6 proposals are exploration");
     expect(opts.systemPrompt).toContain("Stop when you have the set you want");
 
     const allPrompts = mockChatComplete.mock.calls
@@ -277,8 +283,12 @@ describe("Apollo audience endpoints", () => {
     mockChatComplete
       .mockReset()
       .mockResolvedValueOnce(decide("test", sectorless))
+      .mockResolvedValueOnce(decide("test", sectorless))
+      .mockResolvedValueOnce(decide("test", sectorless))
+      .mockResolvedValueOnce(decide("test", sectorless))
+      .mockResolvedValueOnce(decide("test", sectorless))
       .mockResolvedValue(decide("final", withSector, { matchesRequest: true }));
-    setCounts(82522, 4100);
+    setCounts(82522, 82522, 82522, 82522, 82522, 4100);
 
     const res = await request(app)
       .post("/audiences/suggest-from-segment")
@@ -293,6 +303,40 @@ describe("Apollo audience endpoints", () => {
     expect(state.inserted.refineTrace[0]).toMatchObject({ count: 82522, action: "test" });
   });
 
+  it("AC2b — a final before the exploration floor is run like a test and the loop continues", async () => {
+    // The 164,721 run stopped at attempt 3 of 10 on a sample that showed the
+    // target abandoned. The floor is an EXPLORATION mechanic: the premature set
+    // is still dry-run and fed back, and the model can send it again later.
+    const early = { personTitles: ["Owner"] };
+    mockChatComplete
+      .mockReset()
+      .mockResolvedValueOnce(decide("final", early, { matchesRequest: true }))
+      .mockResolvedValueOnce(decide("final", early, { matchesRequest: true }))
+      .mockResolvedValueOnce(decide("test", { personTitles: ["Founder"] }))
+      .mockResolvedValueOnce(decide("test", { personTitles: ["Founder"] }))
+      .mockResolvedValueOnce(decide("test", { personTitles: ["Founder"] }))
+      .mockResolvedValue(decide("final", FINAL_FILTERS, { matchesRequest: true }));
+    setCounts(164721, 164721, 900, 900, 900, 1919);
+
+    const res = await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "drugstores in German-speaking Switzerland", brandId: null })
+      .expect(200);
+
+    // The 6th attempt is the first `final` that counts — nothing before it wins.
+    expect(mockChatComplete).toHaveBeenCalledTimes(6);
+    expect(res.body.filters).toEqual(FINAL_FILTERS);
+    expect(res.body.count).toBe(1919);
+    // The deferred rounds are traced as what they were: dry-run proposals.
+    expect(state.inserted.refineTrace[0]).toMatchObject({ action: "test", count: 164721, finalDeferred: true });
+    expect(state.inserted.refineTrace[0].matchesRequest).toBeUndefined();
+    // And the model was told, in its own budget line, that it still had to spend.
+    expect(mockChatComplete.mock.calls[1][0].message).toContain("exploration proposal(s) remain to be spent");
+    // The accepted final carries the closing answer and nothing was re-ranked.
+    expect(state.inserted.refineTrace[5]).toMatchObject({ action: "final", matchesRequest: true });
+  });
+
   it("AC4 — degraded carries the model's closing answer and does NOT change the set", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const chosen = { personTitles: ["Owner"] };
@@ -300,9 +344,13 @@ describe("Apollo audience endpoints", () => {
     mockChatComplete
       .mockReset()
       .mockResolvedValueOnce(decide("test", bigger))
+      .mockResolvedValueOnce(decide("test", bigger))
+      .mockResolvedValueOnce(decide("test", bigger))
+      .mockResolvedValueOnce(decide("test", bigger))
+      .mockResolvedValueOnce(decide("test", bigger))
       // Says no — and still gets its own set back, unchanged.
       .mockResolvedValue(decide("final", chosen, { matchesRequest: false }));
-    setCounts(90000, 300);
+    setCounts(90000, 90000, 90000, 90000, 90000, 300);
 
     const res = await request(app)
       .post("/audiences/suggest-from-segment")
@@ -313,7 +361,7 @@ describe("Apollo audience endpoints", () => {
     expect(res.body.degraded).toBe(true);
     expect(res.body.filters).toEqual(chosen);
     expect(res.body.count).toBe(300);
-    expect(state.inserted.refineTrace[1].matchesRequest).toBe(false);
+    expect(state.inserted.refineTrace[5].matchesRequest).toBe(false);
     warn.mockRestore();
   });
 
@@ -447,8 +495,12 @@ describe("Apollo audience endpoints", () => {
     mockChatComplete
       .mockReset()
       .mockResolvedValueOnce(decide("test", { personTitles: ["Founder"] }))
+      .mockResolvedValueOnce(decide("test", { personTitles: ["Founder"] }))
+      .mockResolvedValueOnce(decide("test", { personTitles: ["Founder"] }))
+      .mockResolvedValueOnce(decide("test", { personTitles: ["Founder"] }))
+      .mockResolvedValueOnce(decide("test", { personTitles: ["Founder"] }))
       .mockResolvedValue(decide("final", { personTitles: ["Owner"] }, { matchesRequest: false }));
-    setCounts(90000, 1959);
+    setCounts(90000, 90000, 90000, 90000, 90000, 1959);
     apollo.people = [person("Procter & Gamble", "Owner")];
 
     await request(app)
@@ -488,7 +540,7 @@ describe("Apollo audience endpoints", () => {
       person("Drogerie Müller", "Inhaber"),
       person("Rolex", "Head of Retail"),
     ];
-    setCounts(1222, 2640);
+    setCounts(1222, 2640, 2640, 2640, 2640, 2640);
 
     await request(app)
       .post("/audiences/suggest-from-segment")
@@ -514,8 +566,8 @@ describe("Apollo audience endpoints", () => {
       .send({ name: "n", description: "d", brandId: null })
       .expect(200);
 
-    expect(apollo.pagesRequested.length).toBe(2);
-    expect(new Set(apollo.pagesRequested).size).toBe(2); // distinct pages
+    expect(apollo.pagesRequested.length).toBe(12); // 6 dry-runs x 2 sampled pages
+    expect(new Set(apollo.pagesRequested.slice(0, 2)).size).toBe(2); // distinct pages
     for (const p of apollo.pagesRequested) {
       expect(p).toBeGreaterThanOrEqual(1);
       expect(p).toBeLessThanOrEqual(500);
@@ -528,6 +580,10 @@ describe("Apollo audience endpoints", () => {
     mockChatComplete
       .mockReset()
       .mockResolvedValueOnce(decide("test", { personTitles: ["Nobody"] }))
+      .mockResolvedValueOnce(decide("test", FINAL_FILTERS))
+      .mockResolvedValueOnce(decide("test", FINAL_FILTERS))
+      .mockResolvedValueOnce(decide("test", FINAL_FILTERS))
+      .mockResolvedValueOnce(decide("test", FINAL_FILTERS))
       .mockResolvedValue(decide("final", FINAL_FILTERS, { matchesRequest: true }));
     setCounts(0, 42000);
 
@@ -537,8 +593,8 @@ describe("Apollo audience endpoints", () => {
       .send({ name: "n", description: "d", brandId: null })
       .expect(200);
 
-    // Only the second (non-empty) attempt sampled.
-    expect(apollo.pagesRequested.length).toBe(2);
+    // Only the non-empty attempts sampled (the zero-match first one did not).
+    expect(apollo.pagesRequested.length).toBe(10);
     expect(state.inserted.refineTrace[0].sample).toEqual([]);
   });
 });
