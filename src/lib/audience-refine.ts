@@ -3,22 +3,29 @@
  *
  * This logic moved OUT of human-service INTO apollo-service: given a segment
  * name + self-contained description, iterate Apollo People-Search filter sets,
- * use the FREE dry-run as live count feedback, and let the model explore
- * alternative encodings of the SAME target. The winning filter set + a count
- * snapshot are persisted by the caller (POST /audiences/suggest-from-segment).
+ * use the FREE dry-run as live count + sample feedback, and let the model
+ * explore alternative encodings of the SAME target. The winning filter set + a
+ * count snapshot are persisted by the caller (POST /audiences/suggest-from-segment).
  *
  * The LLM call goes through chat-service (which owns the LLM cost). The Apollo
  * people-search teaser consumes NO credits at any page size, so both the count
  * and the sample are free and this loop declares no cost of its own — same as
  * POST /search/dry-run.
  *
- * SHAPE (see CLAUDE.md "the refine loop is a strong model with a real budget"):
- * a strong model, the filter catalog, a plain goal, and ten dry-run attempts —
- * each answered with a live count AND a random sample of who it matched.
- * The set the model returns with `action:"final"` IS the result — no code
- * re-ranks, scores or overrides it. One closing question ("does this set match
- * what was asked?") populates `degraded` for the customer; it is read AFTER the
- * set is chosen and never selects anything.
+ * SHAPE (see CLAUDE.md): the model is given DATA and CONTEXT, never targeting
+ * rules. Every round it receives the original request verbatim, the cold-email
+ * business context (why volume matters AND that a genuinely small market is a
+ * correct answer), its round budget, and the full ordered history — each past
+ * round carrying its filters, its live count, 10 sample rows drawn from RANDOM
+ * pages, and the model's own three notes. It answers with a filter set, a
+ * factual `showable` (does this answer the client's filtering request?) and
+ * `toContinue`.
+ *
+ * SELECTION: the LARGEST `showable` round wins — not the last one. Runs that
+ * stopped early on a visibly over-constrained set (4, 30, 7, 9, 80, 14 people
+ * for a market of a few hundred) are why. With no showable round, the largest
+ * overall is returned and flagged `degraded`. Nothing here scores, re-ranks on
+ * content, or enforces a count floor.
  */
 
 import { z } from "zod";
@@ -31,38 +38,28 @@ import { SearchFiltersSchema } from "../schemas.js";
 /** The model this loop runs on: cheap AND smart, per the owner's instruction.
  *
  * A/B'd head-to-head against `deepseek/deepseek-pro` on the Swiss-drugstores
- * description, 3 runs each (2026-09-01). `glm-pro` returned 13 / 171 / 15 with
- * employers that are recognisably the target (Vita Drogerie AG, LANUR, PANVEGA,
- * Markthalle Luzern); `deepseek-pro` returned 268 / 203 / 1 with Emmi Group,
- * Transgourmet, Möbel Pfister and CALIDA in its samples — a wider spread AND
- * off-target companies. glm-pro wins.
+ * description, 3 runs each (2026-09-01). `glm-pro` returned recognisable target
+ * employers (Vita Drogerie AG, LANUR, PANVEGA); `deepseek-pro` returned a wider
+ * spread AND off-target companies (Emmi Group, Transgourmet, CALIDA).
  *
- * `google/pro` was the emergency swap after the platform Anthropic account hit
- * its usage cap (#236); Anthropic is off the table for this loop for good. */
+ * Anthropic is off the table for this loop for good (#236/#241). */
 const REFINE_PROVIDER = "zai" as const;
 const REFINE_MODEL = "glm-pro" as const;
 
-/** Real dry-run attempts. Each one gives the model a live count AND a sample of
- * who it matched, to react to. */
-const MAX_REAL_ATTEMPTS = 10;
-/** Attempts the model must actually SPEND before a `final` is accepted.
- *
- * This is an EXPLORATION MECHANIC, not a targeting rule: it says nothing about
- * WHAT to look for, only that the budget is there to be used. Six production
- * runs of the same description returned 25, 9, 25, 164721, 13 and 6643 — and the
- * two worst stopped at attempt 3 of 10 while their own sample showed the target
- * abandoned. A `final` before this floor is run and shown to the model exactly
- * like a `test`; the model keeps its set and can send it again. Nothing here
- * re-ranks or rejects a set on its content. */
-const MIN_REAL_ATTEMPTS = 6;
+/** Rounds of live dry-run feedback the model gets. Each one returns a count AND
+ * a sample of who matched. */
+const MAX_ROUNDS = 10;
 /** Extra budget for unusable model output (malformed decision JSON or filters
- * rejected by the faithful schema). These do NOT consume a real attempt — a
- * provider hiccup must not eat the exploration budget. */
+ * rejected by the faithful schema). These do NOT consume a round — a provider
+ * hiccup must not eat the exploration budget. */
 const MAX_INVALID_RETRIES = 3;
-/** People pulled per sampled page, and how many pages are sampled. ~20 rows is
- * enough to see a geography leak or an off-target sector at a glance. */
-const SAMPLE_PER_PAGE = 10;
+/** 10 sample rows, drawn 5 at a time from 2 RANDOM pages. Apollo RANKS results,
+ * so the head of the list is a biased sample — biased in the direction that
+ * hides the bug (a 10,791-count set can show an immaculate page 1 while the tail
+ * is manufacturers). */
+const SAMPLE_PAGE_SIZE = 10;
 const SAMPLE_PAGES = 2;
+const SAMPLE_ROWS_PER_PAGE = 5;
 /** Apollo serves at most 500 pages (see CLAUDE.md "pagination hard cap") — a
  * sampled page beyond it 422s. */
 const APOLLO_MAX_PAGE = 500;
@@ -72,29 +69,37 @@ const APOLLO_MAX_PAGE = 500;
  * Company + title is ALL there is: Apollo's free people-search teaser REDACTS
  * every location field — a person carries `id, first_name, last_name_obfuscated,
  * title, organization` plus `has_city` / `has_state` / `has_country` BOOLEANS,
- * and the nested organization carries only `name` + its own `has_*` flags
- * (verified live 2026-08-31). So city, country, domain and industry are not
- * obtainable here at zero credits — do not re-add them expecting values; they
- * come back `null` for every row. The company name is still the load-bearing
- * signal: it is what shows Emmi Group and World Vision sitting in a "drugstores"
- * audience. */
+ * and the nested organization carries only `name` (verified live 2026-08-31, #238).
+ * Do not re-add location expecting values; it comes back null for every row, and
+ * obtaining it for real would need paid enrichment. */
 export interface SampledPerson {
   company: string | null;
   title: string | null;
 }
 
+/** The model's three one-sentence notes, fed back to it in later rounds. */
+export interface RoundNotes {
+  whatWorked: string;
+  whatToImprove: string;
+  nextExperiment: string;
+}
+
 export interface RefineIteration {
   iteration: number;
-  action: "test" | "final" | "invalid";
+  action: "round" | "invalid";
   filters: Record<string, unknown> | null;
   count: number | null;
   /** Who the set actually matched. `null` on `invalid` rows (nothing was run). */
   sample?: SampledPerson[] | null;
+  /** Does this set answer the client's filtering request? The model's own
+   * factual answer, independent of whether the volume is good. Selection picks
+   * the LARGEST showable round. */
+  showable?: boolean;
+  /** The model asked to keep iterating (or not). */
+  toContinue?: boolean;
+  notes?: RoundNotes;
   reasoning: string;
   validationErrors?: string[];
-  /** The model's closing answer on its `final` row: does this set match what was
-   * asked? Absent on every other row. Reported, never used to choose. */
-  matchesRequest?: boolean;
 }
 
 export interface RefineInput {
@@ -110,11 +115,10 @@ export interface RefineResult {
   filters: Record<string, unknown>;
   count: number;
   status: "confirmed" | "exhausted";
-  /** TRUE when the model did not close with "yes, this matches what was asked"
-   * — it answered no, or the attempt budget ran out before it answered at all.
-   * The audience is usable but unblessed: the customer can look at it and reject
-   * it instead of seeing an error. Purely informational — the returned set is
-   * the model's own final set either way. */
+  /** TRUE when NO round was marked showable — the largest set is returned
+   * anyway (never nothing), unblessed, so the customer can look at it and reject
+   * it instead of seeing an error. human-service reads this and the dashboard
+   * renders it. */
   degraded: boolean;
   trace: RefineIteration[];
 }
@@ -130,10 +134,7 @@ export async function dryRunCount(
   return result.total_entries ?? result.pagination?.total_entries ?? 0;
 }
 
-/** Up to `n` distinct pages drawn at random from 1..totalPages. Apollo RANKS its
- * results, so the head of the list is a biased sample — biased in the direction
- * that hides the bug (a set leaking into French-speaking Switzerland can show a
- * clean first page while the leak sits on page 40). */
+/** Up to `n` distinct pages drawn at random from 1..totalPages. */
 function pickRandomPages(totalPages: number, n: number): number[] {
   if (totalPages <= n) return Array.from({ length: totalPages }, (_, i) => i + 1);
   const picked = new Set<number>();
@@ -146,8 +147,8 @@ function toSampledPerson(p: ApolloPerson): SampledPerson {
 }
 
 /**
- * Free Apollo dry-run with a real sample: the live count PLUS ~20 people drawn
- * from random pages of the result set. Apollo's people-search teaser costs zero
+ * Free Apollo dry-run with a real sample: the live count PLUS 10 people drawn
+ * from RANDOM pages of the result set. Apollo's people-search teaser costs zero
  * credits at any page size, so the sample is free — and a count is a scalar that
  * says how many, never who.
  */
@@ -160,25 +161,30 @@ export async function dryRunSample(
   if (count === 0) return { count, sample: [] };
 
   const apolloParams = toApolloSearchParams(filters);
-  const totalPages = Math.min(Math.ceil(count / SAMPLE_PER_PAGE), APOLLO_MAX_PAGE);
+  const totalPages = Math.min(Math.ceil(count / SAMPLE_PAGE_SIZE), APOLLO_MAX_PAGE);
   const sample: SampledPerson[] = [];
   for (const page of pickRandomPages(totalPages, SAMPLE_PAGES)) {
-    const res = await searchPeople(apolloApiKey, { ...apolloParams, page, per_page: SAMPLE_PER_PAGE }, alertIdentity);
-    sample.push(...(res.people ?? []).map(toSampledPerson));
+    const res = await searchPeople(
+      apolloApiKey,
+      { ...apolloParams, page, per_page: SAMPLE_PAGE_SIZE },
+      alertIdentity,
+    );
+    sample.push(...(res.people ?? []).slice(0, SAMPLE_ROWS_PER_PAGE).map(toSampledPerson));
   }
   return { count, sample };
 }
 
 const RefineDecisionSchema = z.object({
-  action: z.enum(["test", "final"]),
   /** Accepted as the object itself OR as a JSON string of it. Schemaless JSON
    * modes return the object; some providers wrap it in a string. Taking both is
-   * plain tolerance of the wire shape — it removes a class of unusable output
-   * and costs nothing. */
+   * plain tolerance of the wire shape. */
   filters: z.union([z.record(z.string(), z.unknown()), z.string()]),
+  showable: z.boolean().optional(),
+  toContinue: z.boolean().optional(),
+  whatWorked: z.string().optional(),
+  whatToImprove: z.string().optional(),
+  nextExperiment: z.string().optional(),
   reasoning: z.string().optional(),
-  /** Only meaningful on `final`. */
-  matchesRequest: z.boolean().optional(),
 });
 
 /** The decision's filters as an object. `null` when the model sent something that
@@ -195,11 +201,41 @@ function decodeFilters(raw: unknown): Record<string, unknown> | null {
   }
 }
 
+/** What the audience is FOR. This is the missing information the model never
+ * had: with only a description, precision is the only objective it can infer, so
+ * it stacks ANDed constraints with great diligence and returns an audience of 4.
+ *
+ * BOTH halves are load-bearing. The numbers explain why volume matters; they are
+ * NOT a floor. A model told "below 2,000 is pointless" without the counterweight
+ * loosens until it hits 2,000, and the only way to get there is by sweeping in
+ * manufacturers — precisely the failure this exists to prevent. */
+const COLD_EMAIL_CONTEXT = [
+  "=== WHAT THIS AUDIENCE IS FOR ===",
+  "The people you select will receive a COLD EMAIL campaign. That changes the trade-off:",
+  "",
+  "- Every filter you AND together SUBTRACTS people. A constraint that feels like sharpening is",
+  "  usually deleting most of the target: Apollo assigns roughly one industry per company, so",
+  "  listing four industries and missing the right one removes the target entirely, and a long",
+  "  exclusion list makes real targets exclude themselves on an incidental tag.",
+  "- A somewhat-too-large audience carrying some noise is BETTER than a too-narrow one. Noise",
+  "  costs a little budget. An audience of 4 people makes the whole engagement pointless.",
+  "- For orientation only: an engagement is hard to justify below roughly 2,000 contactable",
+  "  people, and a durably successful client looks more like 50,000.",
+  "",
+  "Those two numbers are CONTEXT, not a target and not a floor. Some markets are genuinely small.",
+  "A niche local trade can hold a few hundred people in Apollo and that is the whole market — a",
+  "genuinely small answer is a VALID, CORRECT answer and must be reported honestly rather than",
+  "inflated. Never loosen the request to reach a number: reaching a big count by sweeping in",
+  "companies nobody asked for is a worse answer than a small honest one.",
+  "=== END ===",
+].join("\n");
+
 function buildSystemPrompt(catalog: string): string {
   return [
     "You are apollo-service's audience builder. Given a natural-language description of a B2B",
-    "audience, find the Apollo People Search filter set that best answers that description.",
-    "Use your judgment and common sense — you are smart, act it.",
+    "audience, find the Apollo People Search filter set that both answers that description and",
+    "reaches as many relevant people as possible. Use your judgment and common sense — you are",
+    "smart, act it.",
     "",
     "Only use the filter fields below, with Apollo's exact accepted values. Do not invent field",
     "names or values; omit a field rather than guess. All filters AND together.",
@@ -208,76 +244,82 @@ function buildSystemPrompt(catalog: string): string {
     catalog,
     "=== END FILTERS ===",
     "",
-    "Every set you propose is run against Apollo. You get back the live number of people it matches,",
-    "plus a sample of who they actually are — the employer and the person's title — drawn from random",
-    `pages of the result set. You have up to ${MAX_REAL_ATTEMPTS} proposals. Stop when you have the set you want.`,
+    COLD_EMAIL_CONTEXT,
     "",
-    `The first ${MIN_REAL_ATTEMPTS} proposals are exploration and they are yours to spend: a "final" sent before`,
-    `you have used ${MIN_REAL_ATTEMPTS} of them is run and answered like a "test", and the loop continues. Keep the`,
-    "set if you still want it — you can send it again as your answer once the exploration budget is spent.",
+    `Every set you propose is run against Apollo. You get back the live number of people it matches`,
+    "(people with an SMTP-verified email — that is the contactable pool), plus 10 sample rows drawn",
+    "from RANDOM pages of the result set: the employer and the person's title. Apollo ranks results,",
+    "so the sample is deliberately not the head — it is what the tail of your set actually looks like.",
+    "",
+    `You have up to ${MAX_ROUNDS} rounds. Every round you see the full history of what you tried, what it`,
+    "counted, who it matched, and your own notes.",
     "",
     "Each turn, reply with ONLY a JSON object (no prose, no code fences):",
     "{",
-    '  "action": "test" | "final",',
     '  "filters": { ...filters... },',
-    '  "reasoning": "<one short line>",',
-    '  "matchesRequest": true | false',
+    '  "showable": true | false,',
+    '  "toContinue": true | false,',
+    '  "whatWorked": "<one sentence>",',
+    '  "whatToImprove": "<one sentence>",',
+    '  "nextExperiment": "<one sentence: what you are trying next and why>"',
     "}",
-    '- "test": you want the live count for this filter set before deciding.',
-    '- "final": this is your answer. The set you send with "final" is what we return — nothing',
-    "  re-ranks it, and no other round can win over it.",
-    '- "matchesRequest": on your "final" turn, does the set you are returning match what was',
-    "  asked? It does not change which set is used — it only tells the customer whether we are",
-    "  confident in the audience we built for them.",
+    '- "showable": does THIS filter set answer the client\'s filtering request? A factual question',
+    "  about the request, independent of whether the volume is good.",
+    '- "toContinue": true to keep iterating, false to stop here because you are satisfied.',
+    "",
+    "When the loop ends, the SHOWABLE set with the LARGEST count is what we return — not your last",
+    "one. So a good set stays in the running even after you move on from it.",
   ].join("\n");
 }
 
-function buildUserMessage(input: RefineInput, history: RefineIteration[], realAttemptsUsed: number): string {
+function buildUserMessage(input: RefineInput, history: RefineIteration[], roundsUsed: number): string {
   const lines: string[] = [
+    "=== THE REQUEST (verbatim) ===",
     `Segment name: ${input.name}`,
     `Segment description: ${input.description}`,
+    "=== END REQUEST ===",
     "",
   ];
 
   if (history.length === 0) {
-    lines.push('No filter sets tried yet. Propose your first filter set with action "test".');
+    lines.push(`Round 1 of ${MAX_ROUNDS}. No filter sets tried yet. Propose your first filter set.`);
     return lines.join("\n");
   }
 
-  lines.push("Filter sets tried so far (most recent last):");
+  lines.push("Rounds so far (oldest first):");
   for (const h of history) {
     if (h.action === "invalid") {
       lines.push(
         `- #${h.iteration} INVALID (rejected by schema): ${JSON.stringify(h.filters)} — errors: ${(h.validationErrors ?? []).join("; ")}`,
       );
-    } else {
-      lines.push(`- #${h.iteration} count=${h.count} filters=${JSON.stringify(h.filters)} — ${h.reasoning}`);
-      for (const s of h.sample ?? []) {
-        lines.push(`    · ${s.company ?? "?"} — ${s.title ?? "?"}`);
-      }
+      continue;
+    }
+    lines.push(
+      `- #${h.iteration} count=${h.count} showable=${h.showable === true} filters=${JSON.stringify(h.filters)}`,
+    );
+    for (const s of h.sample ?? []) {
+      lines.push(`    · ${s.company ?? "?"} — ${s.title ?? "?"}`);
+    }
+    if (h.notes) {
+      lines.push(`    worked: ${h.notes.whatWorked}`);
+      lines.push(`    to improve: ${h.notes.whatToImprove}`);
+      lines.push(`    next: ${h.notes.nextExperiment}`);
     }
   }
   lines.push("");
-  const mustSpend = Math.max(0, MIN_REAL_ATTEMPTS - realAttemptsUsed);
   lines.push(
-    `You have ${MAX_REAL_ATTEMPTS - realAttemptsUsed} proposal(s) left. Propose another set (action "test"), or give ` +
-      'your answer (action "final").',
+    `Round ${roundsUsed + 1} of ${MAX_ROUNDS} (${MAX_ROUNDS - roundsUsed} left). Propose the next filter set, or set ` +
+      '"toContinue": false to stop here.',
   );
-  if (mustSpend > 0) {
-    lines.push(
-      `${mustSpend} exploration proposal(s) remain to be spent — a "final" before that is run and answered like a ` +
-        '"test", and the loop continues.',
-    );
-  }
   return lines.join("\n");
 }
 
 /** Diagnostic of last resort: one structured line carrying the WHOLE trace when
- * the run ends degraded or with nothing usable — every iteration's filters,
- * count, action and reasoning. When the independent grader (#225) started
- * rejecting every set in production there was no way to tell an over-strict
- * judgement from a broken call, and the only option was a revert. Deliberately
- * NOT emitted on the happy path — this is not per-iteration chatter. */
+ * the run ends degraded or with nothing usable — every round's filters, count,
+ * sample and notes. When the independent grader (#225) started rejecting every
+ * set in production there was no way to tell an over-strict judgement from a
+ * broken call, and the only option was a revert. Deliberately NOT emitted on the
+ * happy path. */
 function logRefineTrace(input: RefineInput, trace: RefineIteration[], outcome: "degraded" | "no_usable_set"): void {
   console.warn(
     "[apollo-service][refineAudience] refine ended without a confident set " +
@@ -291,7 +333,9 @@ function logRefineTrace(input: RefineInput, trace: RefineIteration[], outcome: "
           count: h.count,
           filters: h.filters,
           sample: h.sample,
-          matchesRequest: h.matchesRequest,
+          showable: h.showable,
+          toContinue: h.toContinue,
+          notes: h.notes,
           validationErrors: h.validationErrors,
           reasoning: h.reasoning,
         })),
@@ -299,33 +343,33 @@ function logRefineTrace(input: RefineInput, trace: RefineIteration[], outcome: "
   );
 }
 
+type ScoredRound = RefineIteration & { filters: Record<string, unknown>; count: number };
+
+function isScored(h: RefineIteration): h is ScoredRound {
+  return h.action === "round" && h.filters !== null && h.count !== null;
+}
+
 export async function refineAudience(input: RefineInput): Promise<RefineResult> {
   const systemPrompt = buildSystemPrompt(input.filtersPromptCatalog);
   const trace: RefineIteration[] = [];
 
-  // Two separate budgets: MAX_REAL_ATTEMPTS live dry-runs (the exploration
-  // budget), plus MAX_INVALID_RETRIES extra turns for unusable model output that
-  // must NOT eat a real attempt. `step` numbers the trace rows in order.
-  let realAttempts = 0;
+  // Two separate budgets: MAX_ROUNDS live dry-runs (the exploration budget),
+  // plus MAX_INVALID_RETRIES extra turns for unusable model output that must NOT
+  // eat a round. `step` numbers the trace rows in order.
+  let rounds = 0;
   let invalidRetries = 0;
   let step = 0;
-  /** The model's own answer, once it gives one. */
-  let answered = false;
 
-  while (realAttempts < MAX_REAL_ATTEMPTS) {
+  while (rounds < MAX_ROUNDS) {
     step += 1;
-    const message = buildUserMessage(input, trace, realAttempts);
+    const message = buildUserMessage(input, trace, rounds);
     const res = await chatComplete(
       {
         message,
         systemPrompt,
         // Cheap AND smart, in SCHEMALESS JSON mode — the Zod guards below
-        // validate the shape, so no responseSchema is sent. Anthropic is off the
-        // table for this loop for good (the platform account is usage-capped and
-        // the loop is not worth an opus bill either way), and `google/pro` was
-        // only ever the emergency swap that replaced it.
-        // Reasoning stays ON: judgement is the whole job here, so no
-        // `disableThinking` and no thinkingLevel floor.
+        // validate the shape, so no responseSchema is sent. Reasoning stays ON:
+        // judgement is the whole job here.
         provider: REFINE_PROVIDER,
         model: REFINE_MODEL,
         responseFormat: "json",
@@ -337,21 +381,21 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
 
     const parsed = RefineDecisionSchema.safeParse(res.json);
     if (!parsed.success) {
-      // Unusable decision shape — burns the retry budget, NOT a real attempt.
+      // Unusable decision shape — burns the retry budget, NOT a round.
       invalidRetries += 1;
       trace.push({
         iteration: step,
         action: "invalid",
         filters: decodeFilters(res.json?.filters),
         count: null,
-        reasoning: "model decision did not match {action, filters}",
+        reasoning: "model decision did not match {filters, showable, toContinue}",
         validationErrors: parsed.error.issues.map((e) => `${e.path.join(".")}: ${e.message}`),
       });
       if (invalidRetries > MAX_INVALID_RETRIES) break;
       continue;
     }
 
-    const { action, reasoning, matchesRequest } = parsed.data;
+    const { showable, toContinue, whatWorked, whatToImprove, nextExperiment, reasoning } = parsed.data;
     const filters = decodeFilters(parsed.data.filters);
     if (filters === null) {
       // The filter string was not a JSON object — unusable output, retry budget.
@@ -376,7 +420,7 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
         ...flat.formErrors,
         ...Object.entries(flat.fieldErrors).flatMap(([k, v]) => (v ?? []).map((m) => `${k}: ${m}`)),
       ];
-      // Schema-invalid filters — burns the retry budget, NOT a real attempt.
+      // Schema-invalid filters — burns the retry budget, NOT a round.
       invalidRetries += 1;
       trace.push({
         iteration: step,
@@ -390,8 +434,8 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
       continue;
     }
 
-    // A valid filter set we can dry-run — this consumes one real attempt.
-    realAttempts += 1;
+    // A valid filter set we can dry-run — this consumes one round.
+    rounds += 1;
     const validFilters = filterCheck.data as Record<string, unknown>;
     const { count, sample } = await dryRunSample(
       input.apolloApiKey,
@@ -399,47 +443,44 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
       toCreditAlertIdentity(input.tracking),
     );
 
-    // A `final` sent before the exploration floor is DEFERRED: the set was just
-    // dry-run and its count + sample go back to the model like any other
-    // proposal, and the loop continues. The model keeps its set and may send it
-    // again once the budget is spent. Nothing about the set's CONTENT is judged
-    // here — only how much of the budget has been used.
-    const deferred = action === "final" && realAttempts < MIN_REAL_ATTEMPTS;
-
     trace.push({
       iteration: step,
-      action: deferred ? "test" : action,
+      action: "round",
       filters: validFilters,
       count,
       sample,
+      showable: showable === true,
+      toContinue: toContinue !== false,
+      notes: {
+        whatWorked: whatWorked ?? "",
+        whatToImprove: whatToImprove ?? "",
+        nextExperiment: nextExperiment ?? "",
+      },
       reasoning: reasoning ?? "",
-      ...(deferred && { finalDeferred: true }),
-      ...(action === "final" && !deferred && { matchesRequest: matchesRequest === true }),
     });
 
-    if (action === "final" && !deferred) {
-      answered = true;
-      break;
-    }
+    if (toContinue === false) break;
   }
 
-  // The model's own answer is the result: its `final` set, or — when the budget
-  // ran out before it gave one — its most recent proposal. Nothing re-ranks.
-  const chosen = [...trace]
-    .reverse()
-    .find(
-      (h): h is RefineIteration & { filters: Record<string, unknown>; count: number } =>
-        h.action !== "invalid" && h.filters !== null && h.count !== null,
-    );
+  // Selection: the LARGEST `showable` round across the whole run — not the last
+  // one. Nothing here judges the CONTENT of a set; the model's own factual
+  // "does this answer the request" is the only gate, and among the sets that
+  // pass it, more relevant people is strictly better for a cold-email campaign.
+  const scored = trace.filter(isScored).filter((h) => h.count > 0);
+  const showable = scored.filter((h) => h.showable === true);
+  const pool = showable.length > 0 ? showable : scored;
+  const chosen = pool.reduce<ScoredRound | undefined>(
+    (best, h) => (best === undefined || h.count > best.count ? h : best),
+    undefined,
+  );
 
-  // The closing question is read AFTER the set is chosen. No answer (budget
-  // exhausted, or the model omitted it) = not confident.
-  const degraded = chosen?.matchesRequest !== true;
+  // No round the model called showable = usable but unblessed. Never nothing.
+  const degraded = showable.length === 0;
 
-  // A set that matches NOBODY is not an audience — that is a real error, and
-  // fail-loud still holds for it (as it does for chat-service or Apollo being
-  // unreachable, which already threw above).
-  if (!chosen || chosen.count === 0) {
+  // A run where every set matched NOBODY is not an audience — that is a real
+  // error, and fail-loud still holds for it (as it does for chat-service or
+  // Apollo being unreachable, which already threw above).
+  if (!chosen) {
     logRefineTrace(input, trace, "no_usable_set");
     throw new Error("[apollo-service][refineAudience] no filter set validated and matched at least one person");
   }
@@ -449,7 +490,8 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
   return {
     filters: chosen.filters,
     count: chosen.count,
-    status: answered ? "confirmed" : "exhausted",
+    // "confirmed" = we have a set the model itself called showable.
+    status: degraded ? "exhausted" : "confirmed",
     degraded,
     trace,
   };

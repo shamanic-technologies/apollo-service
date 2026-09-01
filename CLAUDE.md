@@ -29,32 +29,60 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
   not in human-service. It calls **chat-service** for the LLM (chat-service owns
   the LLM cost — apollo-service declares NONE for it) and uses the FREE Apollo
   people-search teaser (zero credits at any page size) for live feedback.
-- **The refine loop is a strong model, a plain goal, a real budget, and its own
-  final answer. It is deliberately UNDER-instructed — do not add rules to it.**
-  The model gets three things: the audience description, the Apollo filter catalog
-  (`buildFiltersPrompt`), and the goal — find the filter set that best answers this
-  description. Each proposal is dry-run and the result comes back to it. Up to
-  **10** attempts (`MAX_REAL_ATTEMPTS`), plus a SEPARATE `MAX_INVALID_RETRIES` (3)
-  budget for malformed output, which must never eat a real attempt.
-  - **The budget is there to be SPENT: a `final` before `MIN_REAL_ATTEMPTS` (6) is
-    run and answered exactly like a `test`, and the loop continues.** This is the
-    ONLY instruction ever added back, and it is an EXPLORATION MECHANIC, not a
-    targeting rule — it says nothing about what to look for, only that stopping at
-    attempt 3 of 10 is not allowed. Six production runs of one description returned
-    25, 9, 25, 164,721, 13 and 6,643; the two worst stopped at attempt 3 with
-    World Health Organization, Mettler-Toledo and HORNBACH Baumarkt in their own
-    samples and answered `matchesRequest: true`. The deferred set is NOT rejected
-    or re-ranked — it is dry-run, fed back with its count and sample, traced as
-    `action:"test"` + `finalDeferred:true`, and the model may send it again as its
-    answer once the floor is passed.
-  - **The set the model returns with `action:"final"` IS the result.** No code
-    re-ranks, scores, filters or arbitrates. If the budget runs out before it
-    answers, its most recent proposal stands — that is still its own latest
-    answer, not a selection. There is no `pickBest`, no max-count rule, no
-    minimum-encodings gate, no premature-confirm rejection.
+- **The refine loop gets DATA and CONTEXT, never targeting rules — do not add
+  rules to it.** Every round the model receives: the original request VERBATIM,
+  the Apollo filter catalog (`buildFiltersPrompt`), the COLD-EMAIL business
+  context (below), its round budget, and the FULL ordered history of previous
+  rounds. Up to **10** rounds (`MAX_ROUNDS`), plus a SEPARATE
+  `MAX_INVALID_RETRIES` (3) budget for malformed output, which must never eat a
+  round.
+  - **The model has never been told what the audience is FOR — that was the root
+    cause, and the fix is the cold-email context, not another rule.** With only a
+    description, PRECISION is the only objective a model can infer, so it stacks
+    ANDed constraints with great diligence and ships an audience of 4. Ablating
+    one shipped final set one constraint at a time: 4 as shipped → 7 without the
+    employee ranges → 23 without seniorities → 161 without `organization_industries`
+    → **664** without the 27-term `q_not_organization_keyword_tags` blocklist →
+    10,791 without industries + both blocklists. Apollo assigns roughly ONE
+    industry per company (listing four and missing the right one deletes the
+    target) and a drugstore carrying an incidental `beauty` tag excludes itself
+    from its own audience. `COLD_EMAIL_CONTEXT` states the trade-off: noise costs
+    a little budget, an audience of 4 makes the engagement pointless.
+  - **BOTH halves of the volume guidance ship together, or the change is a
+    regression.** The orientation numbers (hard to justify below ~2,000
+    contactable, a durable client looks like ~50,000) are CONTEXT explaining why
+    volume matters — NOT a floor. A model told "below 2,000 is pointless" without
+    the counterweight loosens until it reaches 2,000, and the only way there is
+    Migros Industrie, ADM and Emmi. So the prompt says plainly, in the same
+    breath, that a genuinely small market is a VALID, CORRECT answer to be
+    reported honestly rather than inflated, and never to loosen the request to
+    reach a number. A numeric target in a prompt makes a model fabricate when
+    reality cannot meet it — documented in this codebase; this is its live case.
+  - **`showable` + `toContinue`, and selection is LARGEST-SHOWABLE.** Each round
+    the model returns `showable` (does THIS set answer the client's filtering
+    request? factual, independent of volume) and `toContinue` (keep going, or stop
+    here satisfied — `false` ends the loop). At the end the code returns the
+    showable round with the **largest count across the whole run — not the last
+    one**; if NO round is showable, the largest overall is returned anyway and
+    flagged `degraded` (never nothing). Returning the last attempt is what shipped
+    the 4s and 9s: runs stopped early on a visibly over-constrained set. Nothing
+    scores the CONTENT of a set — `showable` is the only gate, and among sets that
+    pass it more relevant people is strictly better for cold email. There is no
+    `pickBest` scoring function, no count floor, no target band.
+    - Known and accepted risk: `showable` DRIVES selection, so a model marking a
+      big loose set showable makes it win — the same incentive shape as the
+      self-grading removed in #225/#230. Accepted because the question is factual
+      rather than a quality self-assessment, and because the customer sees the
+      final filters in the onboarding UI. If verification shows huge sets marked
+      showable, SAY SO rather than tuning around it.
+  - **Each round's history entry carries filters, count, sample and the model's
+    own three one-sentence notes** (`whatWorked`, `whatToImprove`,
+    `nextExperiment`), plus its `showable`. The notes are the model's own memory
+    of what it was trying — they are fed back, never graded.
   - **Each dry-run returns a COUNT and a SAMPLE of who matched** (`dryRunSample`):
-    ~20 people drawn from up to 2 RANDOM pages (`SAMPLE_PAGES` × `SAMPLE_PER_PAGE`,
-    clamped to Apollo's 500-page cap), each rendered as `employer — title`.
+    **10** people drawn from up to 2 RANDOM pages (`SAMPLE_PAGES` ×
+    `SAMPLE_ROWS_PER_PAGE`, clamped to Apollo's 500-page cap), each rendered as
+    `employer — title`.
     **That is ALL Apollo's free teaser serves** — a person comes back as
     `id, first_name, last_name_obfuscated, title, organization` plus `has_city` /
     `has_state` / `has_country` BOOLEANS, and the nested organization carries only
@@ -86,13 +114,9 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
     them in the LOW HUNDREDS with verified emails, so a small count for a niche
     local trade is the correct answer, not a bug. Sample any reference set before
     comparing the loop to it — the same instrument the loop itself runs on.
-  - **ONE closing question, and it decides NOTHING.** `matchesRequest` on the
-    `final` turn ("does this set match what was asked?") populates the response's
-    `degraded` flag. It is read AFTER the set is chosen; an omitted answer, or an
-    exhausted budget, is also `degraded: true`. It must never influence selection —
-    that non-influence is the entire point (the model both issuing a verdict and
-    benefiting from it is what produced #225/#230). `degraded` stays on the
-    response: human-service reads it and the dashboard renders it.
+  - **`degraded` = no round was showable.** It stays on the response —
+    human-service reads it and the dashboard renders it. The old `matchesRequest`
+    closing question is GONE, folded into the per-round `showable`.
   - **Degrade, never throw, except for real errors.** chat-service or Apollo
     unreachable, missing config, and a chosen set that matches NOBODY (`count === 0`)
     still throw. Everything else returns a usable set with the flag.
@@ -118,8 +142,10 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
     `leavesTargetUnreached` self-grading fields, `pickBest`, `MIN_ENCODINGS_BEFORE_CONFIRM`,
     the 0-count "never drop the concept" rule, the "never invent a firmographic
     constraint" rule, the frozen-count "wrong lever" rule, a geography rule, or any
-    count floor, ambition, target band or scoring function. (`MIN_REAL_ATTEMPTS` is
-    not on this list: it bounds WHEN the model may stop, never WHICH set wins.) Every one of them was added after a specific
+    count floor, ambition, target band or scoring function. (`showable`-based
+    largest-set selection is not on this list — it is the loop's selection rule,
+    not a content score. Neither is `COLD_EMAIL_CONTEXT`: it is what the audience
+    is FOR, not what to look for.) Every one of them was added after a specific
     incident, and the pile is what made the results a lottery: the same request
     produced 2,640 (correct, 19 German-speaking cantons), 161 (an invented headcount
     clamp) and 1,222 (geography collapsed to bare `Switzerland`) in one day. If a
