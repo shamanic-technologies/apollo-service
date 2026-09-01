@@ -1236,14 +1236,50 @@ export const SuggestFromSegmentRequestSchema = z
   })
   .openapi("SuggestFromSegmentRequest");
 
+const SampledPersonSchema = z
+  .object({
+    company: z.string().nullable().openapi({ description: "Employer name." }),
+    title: z.string().nullable().openapi({ description: "The person's title." }),
+  })
+  .openapi("SampledPerson", {
+    description:
+      "One sampled person. Company + title is ALL Apollo's free teaser serves — every location field is redacted to a has_* boolean, so location is never present and obtaining it would need paid enrichment.",
+  });
+
+const RefineCandidateSchema = z
+  .object({
+    apolloAudienceId: z.string().openapi({ description: "Persisted apollo-audience id for THIS round's filter set." }),
+    round: z.number().int().openapi({ description: "1-based position in the run, in the order the rounds were explored." }),
+    filters: ApolloNativeSearchFiltersSchema.openapi({ description: "The Apollo-native filter object this round proposed." }),
+    count: z.number().int().openapi({ description: "Live match-count (verified-email contactable pool) for this round's filters." }),
+    sample: z
+      .array(SampledPersonSchema)
+      .openapi({ description: "10 people drawn from RANDOM pages of this round's result set — what the set actually matched." }),
+    notes: z
+      .object({
+        whatWorked: z.string(),
+        whatToImprove: z.string(),
+        nextExperiment: z.string(),
+      })
+      .openapi({ description: "The model's own three one-sentence notes for this round. Its memory of what it was trying — not a grade." }),
+  })
+  .openapi("RefineCandidate");
+
 const SuggestFromSegmentResponseSchema = z
   .object({
-    apolloAudienceId: z.string().openapi({ description: "Persisted apollo-audience id. human-service stores ONLY this pointer." }),
-    filters: ApolloNativeSearchFiltersSchema.openapi({ description: "The confirmed Apollo-native filter object." }),
-    count: z.number().int().openapi({ description: "Live match-count snapshot for the confirmed filters." }),
+    apolloAudienceId: z.string().openapi({
+      description:
+        "LEGACY single result — the persisted id of the largest non-empty round. Kept additively; read `candidates` instead.",
+    }),
+    filters: ApolloNativeSearchFiltersSchema.openapi({ description: "LEGACY single result — that round's Apollo-native filter object." }),
+    count: z.number().int().openapi({ description: "LEGACY single result — that round's live match-count." }),
     degraded: z.boolean().openapi({
       description:
-        "TRUE when no filter set was judged MECE with the described target and the refine loop fell back to its best available non-empty attempt. The audience is usable but unblessed — a quality signal, not an error. FALSE on the normal path.",
+        "LEGACY. There is no per-round self-grade left to withhold a blessing, so this is false whenever an audience is returned — which is what it already was in production. Read `candidates`.",
+    }),
+    candidates: z.array(RefineCandidateSchema).openapi({
+      description:
+        "EVERY round the loop explored, in ROUND ORDER — not ranked, not sorted, not filtered. apollo-service explores Apollo's filter space and reports what each round returned; choosing which audience serves the customer is the consumer's decision. The sample rows matter as much as the counts: they are what tells Mars and Lidl from Abderhalden Drogerie.",
     }),
   })
   .openapi("SuggestFromSegmentResponse");
@@ -1269,7 +1305,7 @@ registry.registerPath({
   path: "/audiences/suggest-from-segment",
   summary: "Build + persist a faithful Apollo audience from a natural-language segment",
   description:
-    "Runs the agentic NL→faithful-Apollo-filters refine loop (LLM via chat-service, free Apollo dry-runs for live counts), then persists the confirmed audience. Returns the apollo-audience id, the faithful filters, and the count snapshot. The LLM cost is owned by chat-service; this endpoint declares no cost (dry-runs are free).",
+    "Runs the agentic NL→faithful-Apollo-filters refine loop (LLM via chat-service, free Apollo dry-runs for live counts) and persists EVERY round it explored as its own apollo-audience row. Returns `candidates`: one entry per round, in round order, each with its persisted id, filters, live count, 10 random-page sample rows and the model's three notes. This service explores and reports; it does not judge, rank or sort. The legacy single-result fields are kept additively. The LLM cost is owned by chat-service; this endpoint declares no cost (dry-runs are free).",
   request: {
     headers: audienceHeaders,
     body: {

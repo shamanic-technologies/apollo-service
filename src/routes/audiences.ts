@@ -22,10 +22,18 @@ const FILTERS_PROMPT = `${buildFiltersPrompt(ApolloNativeSearchFiltersSchema)}\n
 /**
  * POST /audiences/suggest-from-segment — run the agentic NL→faithful-Apollo-
  * filters refine loop (LLM via chat-service, free dry-runs for live counts) and
- * persist the confirmed audience. Returns { apolloAudienceId, filters, count,
- * degraded }. `degraded` is true when the model did not close with "yes, this set
- * matches what was asked" — the audience is usable but unblessed. It never
- * changes WHICH set is returned; the model's own final set is the result.
+ * persist EVERY round it explored, each as its own apollo_audiences row.
+ *
+ * Returns `candidates`: one entry per round, in round order, carrying that
+ * round's persisted apolloAudienceId, its filters, its live count, its 10
+ * random-page sample rows and the model's three notes. This service explores and
+ * reports; WHICH audience serves the customer is a product decision made by
+ * human-service, which did not author the sets. Nothing here ranks or sorts.
+ *
+ * The single-result fields (apolloAudienceId / filters / count / degraded) are
+ * kept ADDITIVELY, behaving as before (largest non-empty round, degraded false),
+ * so human-service can migrate to `candidates` on its own schedule. A later PR
+ * removes them.
  */
 router.post("/audiences/suggest-from-segment", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
@@ -68,22 +76,45 @@ router.post("/audiences/suggest-from-segment", serviceAuth, async (req: Authenti
       },
     });
 
-    const [row] = await db
+    // One row per explored round. Rows are cheap and the ones nobody picks are a
+    // useful record of what the loop tried. Every row carries the WHOLE run's
+    // trace as its bronze — that is the run that produced it.
+    const rows = await db
       .insert(apolloAudiences)
-      .values({
-        orgId: req.orgId!,
-        userId: req.userId,
-        brandId: brandId ?? null,
-        name,
-        description,
-        filters: refined.filters,
-        count: refined.count,
-        refineTrace: refined.trace,
-        status: refined.status,
-      })
+      .values(
+        refined.candidates.map((c) => ({
+          orgId: req.orgId!,
+          userId: req.userId,
+          brandId: brandId ?? null,
+          name,
+          description,
+          filters: c.filters,
+          count: c.count,
+          refineTrace: refined.trace,
+          status: refined.status,
+        })),
+      )
       .returning();
 
-    res.json({ apolloAudienceId: row.id, filters: refined.filters, count: refined.count, degraded: refined.degraded });
+    const candidates = refined.candidates.map((c, i) => ({
+      apolloAudienceId: rows[i].id,
+      round: c.round,
+      filters: c.filters,
+      count: c.count,
+      sample: c.sample,
+      notes: c.notes,
+    }));
+
+    // The legacy single result points at the row of the largest non-empty round.
+    const legacy = candidates.find((c) => c.filters === refined.filters) ?? candidates[candidates.length - 1];
+
+    res.json({
+      apolloAudienceId: legacy.apolloAudienceId,
+      filters: refined.filters,
+      count: refined.count,
+      degraded: refined.degraded,
+      candidates,
+    });
   } catch (error) {
     console.error("[Apollo Service][POST /audiences/suggest-from-segment] ERROR:", error);
     res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
