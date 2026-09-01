@@ -34,7 +34,8 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
   the Apollo filter catalog (`buildFiltersPrompt`), the COLD-EMAIL business
   context (below), its round budget, and the FULL ordered history of previous
   rounds. Up to **10** rounds (`MAX_ROUNDS`), plus a SEPARATE
-  `MAX_INVALID_RETRIES` (3) budget for malformed output, which must never eat a
+  `MAX_INVALID_RETRIES` (3) budget for malformed output and a SEPARATE
+  `MAX_DUPLICATE_RETRIES` (3) budget for a repeated encoding — neither may eat a
   round.
   - **The model has never been told what the audience is FOR — that was the root
     cause, and the fix is the cold-email context, not another rule.** With only a
@@ -61,7 +62,7 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
   - **THIS SERVICE EXPLORES AND REPORTS — IT DOES NOT CHOOSE (#246).** Every round
     is persisted as its own `apollo_audiences` row and every round is returned, in
     ROUND ORDER, as `candidates[]` — each carrying its persisted apollo-audience
-    id, its filters, its live count, its 10 random-page sample rows and the model's
+    id, its filters, its live count, its 24 random-page sample rows and the model's
     three notes. Nothing here ranks, scores or sorts. WHICH audience serves the
     customer is a product decision made in **human-service**: it did not author the
     sets (so it has no stake in any of them) and choosing among N is COMPARATIVE,
@@ -87,9 +88,11 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
     they are fed back, never graded, and they ship on the candidate so whoever
     chooses can read what the round was for.
   - **Each dry-run returns a COUNT and a SAMPLE of who matched** (`dryRunSample`):
-    **10** people drawn from up to 2 RANDOM pages (`SAMPLE_PAGES` ×
+    **24** people drawn from up to 3 RANDOM pages (`SAMPLE_PAGES` ×
     `SAMPLE_ROWS_PER_PAGE`, clamped to Apollo's 500-page cap), each rendered as
-    `employer — title`.
+    `employer — title`. Ten rows was too thin a basis for judging the composition
+    of a several-thousand-person set and the teaser is free at any page size, so
+    #249 raised it; keep the RANDOM-page draw.
     **That is ALL Apollo's free teaser serves** — a person comes back as
     `id, first_name, last_name_obfuscated, title, organization` plus `has_city` /
     `has_state` / `has_country` BOOLEANS, and the nested organization carries only
@@ -148,6 +151,35 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
     still accepts `filters` as an object OR a JSON string — plain tolerance of the
     wire shape, not an Anthropic contortion. Do NOT set `disableThinking` or a
     thinkingLevel floor: judgement is the whole job here.
+  - **The prompt states Apollo's filter ALGEBRA, both halves — that is the
+    INSTRUMENT, not a targeting rule (#249).** It used to say only "All filters AND
+    together", which is true ACROSS fields and FALSE WITHIN one, i.e. exactly the
+    half that makes adding a field look safe when it is the most destructive move
+    available. Measured live on `person_locations:["Switzerland"]`: tags
+    `["drogerie"]` 429 + `["bioladen"]` 58 = `["drogerie","bioladen"]` **487** (a
+    clean union), `organization_industries` `["retail"]` 34,615 → with
+    `"consumer goods"` **45,190**, `person_titles` `["Owner"]` 9,873 →
+    `["Owner","Inhaber"]` **11,601**; but tags `["drogerie"]` AND
+    `organization_industries:["retail"]` = **372**, fewer than the tag alone.
+    `APOLLO_FILTER_ALGEBRA` states both halves with those numbers ANONYMISED (tag
+    A / tag B — a standing prompt must not name a vertical), and `buildUserMessage`
+    RESTATES the semantics next to the raw filter JSON so they do not decay across
+    turns. Same section carries the corollary: because values union, a value
+    matching 0 rows is INVISIBLE in the total (`drogerie` 429, `drogerien` 196,
+    `reformhaus` 2, `naturkost` 0), so an unchanged count after adding a value
+    means THAT VALUE IS DEAD, not that the concept is unreachable.
+  - **A round is never spent on a query already run (#249).** `encodingKey()`
+    canonicalises a filter set (keys sorted, values sorted, empty/null fields
+    dropped) — value order and empty fields do not make a set different. A repeat
+    burns a `MAX_DUPLICATE_RETRIES` turn instead of a round, is traced as
+    `action:"duplicate"` and is shown back to the model as
+    `#N DUPLICATE of an earlier round`. Production runs were losing a fifth of the
+    budget to it (574 twice, 931 twice, 2,321 twice in single runs).
+  - **Employee ranges behave CORRECTLY — do not "fix" them.** An
+    `organization_num_employees_ranges` filter does NOT drop rows whose headcount
+    Apollo does not know: all eight ranges cumulated returns the same count as no
+    filter at all (429 = 429), so every row carries a known headcount. A 1-50 cap
+    genuinely excludes larger employers, which is what it is for.
   - **DO NOT re-add:** the MECE vocabulary and its restated invariant, the
     "maximize volume among the MECE sets" objective, the `reachesOffTarget` /
     `leavesTargetUnreached` self-grading fields, `pickBest`, `MIN_ENCODINGS_BEFORE_CONFIRM`,

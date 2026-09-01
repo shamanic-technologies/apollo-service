@@ -95,7 +95,7 @@ vi.mock("../../src/lib/apollo-client.js", async (importOriginal) => ({
 
 /**
  * Apollo mock. The refine loop hits people-search twice per round: per_page=1
- * for the count, then 2 random pages of 10 (5 rows kept from each) for the
+ * for the count, then 3 random pages of 10 (8 rows kept from each) for the
  * sample. `counts` is consumed one per dry-run (the last value repeats);
  * `people` is what every sampled page returns.
  */
@@ -352,7 +352,7 @@ describe("Apollo audience endpoints", () => {
     expect(second).toContain("Round 2 of 10");
   });
 
-  it("AC2 — 10 sample rows, drawn from random pages, never past Apollo's 500-page cap", async () => {
+  it("AC2 — 24 sample rows, drawn from random pages, never past Apollo's 500-page cap", async () => {
     apollo.people = Array.from({ length: 10 }, (_, i) => person(`Co ${i}`, "Owner"));
     mockChatComplete.mockReset().mockResolvedValue(stop(FINAL_FILTERS));
     setCounts(42000); // 4,200 pages of 10, clamped to Apollo's 500
@@ -363,9 +363,9 @@ describe("Apollo audience endpoints", () => {
       .send({ name: "n", description: "d", brandId: null })
       .expect(200);
 
-    expect(state.inserted.refineTrace[0].sample).toHaveLength(10); // 2 pages x 5 rows
-    expect(apollo.pagesRequested.length).toBe(2);
-    expect(new Set(apollo.pagesRequested).size).toBe(2); // distinct pages
+    expect(state.inserted.refineTrace[0].sample).toHaveLength(24); // 3 pages x 8 rows
+    expect(apollo.pagesRequested.length).toBe(3);
+    expect(new Set(apollo.pagesRequested).size).toBe(3); // distinct pages
     for (const p of apollo.pagesRequested) {
       expect(p).toBeGreaterThanOrEqual(1);
       expect(p).toBeLessThanOrEqual(500);
@@ -386,7 +386,7 @@ describe("Apollo audience endpoints", () => {
       .send({ name: "n", description: "d", brandId: null })
       .expect(200);
 
-    expect(apollo.pagesRequested.length).toBe(2); // only the non-empty round sampled
+    expect(apollo.pagesRequested.length).toBe(3); // only the non-empty round sampled
     expect(state.inserted.refineTrace[0].sample).toEqual([]);
   });
 
@@ -516,7 +516,7 @@ describe("Apollo audience endpoints", () => {
     expect(res.body.candidates.map((x: any) => x.filters)).toEqual([a, b, c]);
     expect(res.body.candidates[1].notes).toEqual({ whatWorked: "w2", whatToImprove: "i2", nextExperiment: "n2" });
     expect(res.body.candidates[0].sample[0]).toEqual({ company: "Abderhalden Drogerie AG", title: "Inhaber" });
-    expect(res.body.candidates[0].sample).toHaveLength(10);
+    expect(res.body.candidates[0].sample).toHaveLength(24);
   });
 
   it("a round that matched NOBODY is still reported honestly", async () => {
@@ -542,11 +542,14 @@ describe("Apollo audience endpoints", () => {
   it("AC3 — up to 10 rounds; malformed output runs on its own budget", async () => {
     // 2 malformed decisions (retry budget) then rounds that never stop: the loop
     // spends exactly 10 dry-runs.
+    // Each round proposes a DIFFERENT set — an identical one would be caught as a
+    // duplicate and would not consume a round (see the dedup tests below).
+    let n = 0;
     mockChatComplete
       .mockReset()
       .mockResolvedValueOnce(chatRes({ garbage: true }))
       .mockResolvedValueOnce(chatRes({ still: "wrong" }))
-      .mockResolvedValue(round({ personTitles: ["Owner"] }));
+      .mockImplementation(() => Promise.resolve(round({ personTitles: ["Owner", `T${n++}`] })));
     setCounts(1000);
 
     const res = await request(app)
@@ -556,9 +559,91 @@ describe("Apollo audience endpoints", () => {
       .expect(200);
 
     expect(mockChatComplete).toHaveBeenCalledTimes(12); // 2 invalid + 10 rounds
-    expect(res.body.filters).toEqual({ personTitles: ["Owner"] });
+    expect(res.body.filters).toEqual({ personTitles: ["Owner", "T0"] }); // all counts equal → first largest
     expect(res.body.degraded).toBe(false);
     expect(state.inserted.status).toBe("confirmed");
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // #249 — the filter algebra, dedup, and dead values
+  // ────────────────────────────────────────────────────────────────────────
+
+  it("#249 AC1 — the prompt states BOTH halves of Apollo's filter algebra", async () => {
+    setCounts(42000);
+    mockChatComplete.mockReset().mockResolvedValue(stop(FINAL_FILTERS));
+
+    await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(200);
+
+    const [opts] = mockChatComplete.mock.calls[0];
+    // The old sentence stated only the narrowing half.
+    expect(opts.systemPrompt).not.toContain("All filters AND together.");
+    expect(opts.systemPrompt).toMatch(/WITHIN one field, the values OR together and WIDEN/);
+    expect(opts.systemPrompt).toMatch(/ACROSS fields, the filters AND together and NARROW/);
+    // #249 AC3 — an unchanged count after adding a value means the VALUE is dead.
+    expect(opts.systemPrompt).toMatch(/INVISIBLE in the total/);
+    expect(opts.systemPrompt).toMatch(/dead in Apollo's vocabulary/);
+  });
+
+  it("#249 AC1 — the per-round history says which filters union and which intersect", async () => {
+    setCounts(1000, 42000);
+    mockChatComplete
+      .mockReset()
+      .mockResolvedValueOnce(round(FIRST_ENCODING))
+      .mockResolvedValue(stop(FINAL_FILTERS));
+
+    await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(200);
+
+    const second = mockChatComplete.mock.calls[1][0].message as string;
+    expect(second).toMatch(/each FIELD is ANDed with the others/);
+    expect(second).toMatch(/VALUES inside one field are ORed/);
+  });
+
+  it("#249 AC2 — an encoding already dry-run is NOT re-run and does NOT consume a round", async () => {
+    // Same set proposed twice (second time with the values reordered and an
+    // empty field added — the same Apollo query), then a different one.
+    mockChatComplete
+      .mockReset()
+      .mockResolvedValueOnce(round({ personTitles: ["Owner", "Inhaber"] }))
+      .mockResolvedValueOnce(round({ personTitles: ["Inhaber", "Owner"], personSeniorities: [] }))
+      .mockResolvedValue(stop(FINAL_FILTERS));
+    setCounts(659, 42000);
+
+    const res = await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(200);
+
+    // Two rounds ran, not three: the duplicate cost a turn, not a round.
+    expect(res.body.candidates.map((c: any) => c.count)).toEqual([659, 42000]);
+    const dup = state.inserted.refineTrace.find((h: any) => h.action === "duplicate");
+    expect(dup).toBeDefined();
+    expect(dup.count).toBeNull();
+    expect(dup.validationErrors[0]).toContain("same query as round #1");
+    // The model is told about it in the next turn.
+    expect(mockChatComplete.mock.calls[2][0].message).toContain("DUPLICATE of an earlier round");
+  });
+
+  it("#249 AC2 — a run that only ever repeats itself ends instead of spinning", async () => {
+    mockChatComplete.mockReset().mockResolvedValue(round({ personTitles: ["Owner"] }));
+    setCounts(659);
+
+    const res = await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(200);
+
+    expect(res.body.candidates).toHaveLength(1); // 1 round + 4 duplicate turns
+    expect(mockChatComplete).toHaveBeenCalledTimes(5);
   });
 
   it("schema-invalid filters burn the retry budget, not a round", async () => {

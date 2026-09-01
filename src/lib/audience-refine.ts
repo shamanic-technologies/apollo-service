@@ -16,13 +16,13 @@
  * rules. Every round it receives the original request verbatim, the cold-email
  * business context (why volume matters AND that a genuinely small market is a
  * correct answer), its round budget, and the full ordered history — each past
- * round carrying its filters, its live count, 10 sample rows drawn from RANDOM
+ * round carrying its filters, its live count, 24 sample rows drawn from RANDOM
  * pages, and the model's own three notes. It answers with a filter set and
  * `toContinue`.
  *
  * NO SELF-GRADE, NO SELECTION (#246). This loop EXPLORES and REPORTS: it returns
  * EVERY round it ran (`candidates`, in round order, each with its filters, its
- * live count, its 10 sample rows and the model's three notes) and lets the
+ * live count, its 24 sample rows and the model's three notes) and lets the
  * consumer choose. `showable` is GONE — it was `true` on 60 of 60 rounds, the
  * third absolute per-round self-grade in this loop to degenerate to a constant
  * (after `reachesOffTarget`/`leavesTargetUnreached` and `matchesRequest`), which
@@ -63,13 +63,23 @@ const MAX_ROUNDS = 10;
  * rejected by the faithful schema). These do NOT consume a round — a provider
  * hiccup must not eat the exploration budget. */
 const MAX_INVALID_RETRIES = 3;
-/** 10 sample rows, drawn 5 at a time from 2 RANDOM pages. Apollo RANKS results,
+/** Extra turns for a filter set that resolves to a query ALREADY dry-run in this
+ * run. Like an invalid decision, a duplicate does NOT consume a round — running
+ * the same query twice buys nothing and production runs were losing a fifth of
+ * the budget to it (#249: 574 twice, 931 twice, 2,321 twice in single runs). The
+ * model is told which round it repeated and asked for something different. */
+const MAX_DUPLICATE_RETRIES = 3;
+/** 24 sample rows, drawn 8 at a time from 3 RANDOM pages. Apollo RANKS results,
  * so the head of the list is a biased sample — biased in the direction that
  * hides the bug (a 10,791-count set can show an immaculate page 1 while the tail
- * is manufacturers). */
+ * is manufacturers). Ten rows was a thin basis for judging the composition of a
+ * several-thousand-person set and the teaser costs zero credits at any page size
+ * (#249), so the evidence per round is roughly doubled for the price of tokens. */
 const SAMPLE_PAGE_SIZE = 10;
-const SAMPLE_PAGES = 2;
-const SAMPLE_ROWS_PER_PAGE = 5;
+const SAMPLE_PAGES = 3;
+const SAMPLE_ROWS_PER_PAGE = 8;
+/** Total rows a sample carries — 24, inside the 20-25 band of #249. */
+export const SAMPLE_SIZE = SAMPLE_PAGES * SAMPLE_ROWS_PER_PAGE;
 /** Apollo serves at most 500 pages (see CLAUDE.md "pagination hard cap") — a
  * sampled page beyond it 422s. */
 const APOLLO_MAX_PAGE = 500;
@@ -96,10 +106,10 @@ export interface RoundNotes {
 
 export interface RefineIteration {
   iteration: number;
-  action: "round" | "invalid";
+  action: "round" | "invalid" | "duplicate";
   filters: Record<string, unknown> | null;
   count: number | null;
-  /** Who the set actually matched. `null` on `invalid` rows (nothing was run). */
+  /** Who the set actually matched. `null` on `invalid`/`duplicate` rows (nothing was run). */
   sample?: SampledPerson[] | null;
   /** The model asked to keep iterating (or not). */
   toContinue?: boolean;
@@ -196,6 +206,33 @@ export async function dryRunSample(
   return { count, sample };
 }
 
+/** Canonical form of a filter set: object keys sorted, array VALUES sorted,
+ * empty arrays / null / undefined dropped. Two sets with the same canonical form
+ * send Apollo the same query — values within a field OR, so their order does not
+ * change what matches, and a field carrying nothing is not a filter at all. */
+function canonicalizeFilters(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    const items = value.map(canonicalizeFilters).filter((v) => v !== undefined && v !== null);
+    return items.map((v) => JSON.stringify(v)).sort();
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      const v = canonicalizeFilters((value as Record<string, unknown>)[key]);
+      if (v === undefined || v === null) continue;
+      if (Array.isArray(v) && v.length === 0) continue;
+      out[key] = v;
+    }
+    return out;
+  }
+  return value;
+}
+
+/** Identity of the QUERY a filter set produces — the dedup key. */
+export function encodingKey(filters: Record<string, unknown>): string {
+  return JSON.stringify(canonicalizeFilters(filters));
+}
+
 const RefineDecisionSchema = z.object({
   /** Accepted as the object itself OR as a JSON string of it. Schemaless JSON
    * modes return the object; some providers wrap it in a string. Taking both is
@@ -251,6 +288,29 @@ const COLD_EMAIL_CONTEXT = [
   "=== END ===",
 ].join("\n");
 
+/** How the INSTRUMENT behaves — measured live on Apollo, not a targeting rule.
+ *
+ * The prompt used to say "All filters AND together", which is true ACROSS fields
+ * and false WITHIN one, i.e. it stated only the half that makes adding a field
+ * look safe when it is the most destructive move available (#249). Both halves
+ * ship together, with the numbers that were measured. */
+const APOLLO_FILTER_ALGEBRA = [
+  "=== HOW APOLLO COMBINES FILTERS (measured, not opinion) ===",
+  "- WITHIN one field, the values OR together and WIDEN the set. Measured, one country held fixed:",
+  "  q_organization_keyword_tags with tag A alone = 429 people, tag B alone = 58, [A, B] = 487 —",
+  "  a clean union. organization_industries with one industry = 34,615, with two = 45,190.",
+  "  person_titles with one title = 9,873, with a second spelling of the same role = 11,601.",
+  "  Adding a value to a field you already use NEVER removes anyone.",
+  "- ACROSS fields, the filters AND together and NARROW the set. Same baseline: tag A alone = 429,",
+  "  but tag A PLUS an organization_industries field = 372 — adding a second field DELETED people.",
+  "  Adding a field to 'sharpen' a set is the most destructive move available to you.",
+  "- A value that matches NOBODY is INVISIBLE in the total, because values union. Measured on four",
+  "  tags for the same concept: 429, 196, 2 and 0. So when you add a value to a field and the count",
+  "  does not move, that VALUE is dead in Apollo's vocabulary — it does NOT mean the concept is",
+  "  unreachable. The only way to learn what a value is worth is to run it on its own in a round.",
+  "=== END ===",
+].join("\n");
+
 function buildSystemPrompt(catalog: string): string {
   return [
     "You are apollo-service's audience builder. Given a natural-language description of a B2B",
@@ -259,7 +319,9 @@ function buildSystemPrompt(catalog: string): string {
     "smart, act it.",
     "",
     "Only use the filter fields below, with Apollo's exact accepted values. Do not invent field",
-    "names or values; omit a field rather than guess. All filters AND together.",
+    "names or values; omit a field rather than guess.",
+    "",
+    APOLLO_FILTER_ALGEBRA,
     "",
     "=== AVAILABLE FILTERS (Apollo vocabulary) ===",
     catalog,
@@ -268,7 +330,7 @@ function buildSystemPrompt(catalog: string): string {
     COLD_EMAIL_CONTEXT,
     "",
     `Every set you propose is run against Apollo. You get back the live number of people it matches`,
-    "(people with an SMTP-verified email — that is the contactable pool), plus 10 sample rows drawn",
+    `(people with an SMTP-verified email — that is the contactable pool), plus ${SAMPLE_SIZE} sample rows drawn`,
     "from RANDOM pages of the result set: the employer and the person's title. Apollo ranks results,",
     "so the sample is deliberately not the head — it is what the tail of your set actually looks like.",
     "",
@@ -288,6 +350,10 @@ function buildSystemPrompt(catalog: string): string {
     "EVERY round you run is reported back, with its count, its sample and your notes — none of them is",
     "discarded, and you are not asked to pick. Explore the space: a round that turns out too narrow or",
     "too broad is still a useful data point for whoever chooses.",
+    "",
+    "A set that resolves to a query you already ran is NOT run again — you are told which round it",
+    "repeated and asked for a different one, and it does not consume a round. Value order and empty",
+    "fields do not make a set different.",
   ].join("\n");
 }
 
@@ -305,8 +371,22 @@ function buildUserMessage(input: RefineInput, history: RefineIteration[], rounds
     return lines.join("\n");
   }
 
-  lines.push("Rounds so far (oldest first):");
+  // The semantics are restated HERE, next to the raw filter JSON, so they do not
+  // decay across turns: the history shows fields and values, and nothing in the
+  // JSON says which of the two combines by union and which by intersection.
+  lines.push(
+    "Rounds so far (oldest first). Reading a filter set: each FIELD is ANDed with the others" +
+      " (more fields = fewer people), and the VALUES inside one field are ORed (more values = more" +
+      " people, and a value matching nobody adds nothing and is invisible in the count).",
+  );
   for (const h of history) {
+    if (h.action === "duplicate") {
+      lines.push(
+        `- #${h.iteration} DUPLICATE of an earlier round — not run: ${JSON.stringify(h.filters)}` +
+          ` — ${(h.validationErrors ?? []).join("; ")}`,
+      );
+      continue;
+    }
     if (h.action === "invalid") {
       lines.push(
         `- #${h.iteration} INVALID (rejected by schema): ${JSON.stringify(h.filters)} — errors: ${(h.validationErrors ?? []).join("; ")}`,
@@ -376,7 +456,10 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
   // eat a round. `step` numbers the trace rows in order.
   let rounds = 0;
   let invalidRetries = 0;
+  let duplicateRetries = 0;
   let step = 0;
+  /** encodingKey → the round number that already ran that exact query. */
+  const seenEncodings = new Map<string, number>();
 
   while (rounds < MAX_ROUNDS) {
     step += 1;
@@ -452,9 +535,32 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
       continue;
     }
 
-    // A valid filter set we can dry-run — this consumes one round.
-    rounds += 1;
     const validFilters = filterCheck.data as Record<string, unknown>;
+
+    // Already dry-run in this run? Re-running the same query buys nothing and
+    // the round is the scarce resource — spend a duplicate turn instead, and
+    // tell the model which round it repeated.
+    const key = encodingKey(validFilters);
+    const seenAt = seenEncodings.get(key);
+    if (seenAt !== undefined) {
+      duplicateRetries += 1;
+      trace.push({
+        iteration: step,
+        action: "duplicate",
+        filters: validFilters,
+        count: null,
+        reasoning: reasoning ?? "",
+        validationErrors: [
+          `same query as round #${seenAt} (value order and empty fields do not make a set different) — propose a different one`,
+        ],
+      });
+      if (duplicateRetries > MAX_DUPLICATE_RETRIES) break;
+      continue;
+    }
+
+    // A valid, not-yet-run filter set we can dry-run — this consumes one round.
+    rounds += 1;
+    seenEncodings.set(key, rounds);
     const { count, sample } = await dryRunSample(
       input.apolloApiKey,
       validFilters,
