@@ -82,10 +82,10 @@ vi.mock("../../src/lib/apollo-client.js", async (importOriginal) => ({
 }));
 
 /**
- * Apollo mock. The refine loop hits people-search twice per attempt: per_page=1
- * for the count, then SAMPLE_PAGES pages of 10 for the sample. `counts` is
- * consumed one per dry-run (the last value repeats); `people` is what every
- * sampled page returns.
+ * Apollo mock. The refine loop hits people-search twice per round: per_page=1
+ * for the count, then 2 random pages of 10 (5 rows kept from each) for the
+ * sample. `counts` is consumed one per dry-run (the last value repeats);
+ * `people` is what every sampled page returns.
  */
 const apollo: { counts: number[]; people: any[]; pagesRequested: number[] } = {
   counts: [42000],
@@ -113,12 +113,24 @@ const FINAL_FILTERS = { personSeniorities: ["head"], personTitles: ["Head of Gro
 const FIRST_ENCODING = { personSeniorities: ["head"], qOrganizationKeywordTags: ["fintech"] };
 
 const chatRes = (json: unknown) => ({ json, content: "", tokensInput: 1, tokensOutput: 1, model: "m" });
-/** One model turn. `extra` carries the closing answer on a "final" turn. */
-const decide = (
-  action: "test" | "final",
+/** One model turn: a filter set plus the two booleans and the three notes. */
+const round = (
   filters: Record<string, unknown>,
   extra: Record<string, unknown> = {},
-) => chatRes({ action, filters, reasoning: "r", ...extra });
+) =>
+  chatRes({
+    filters,
+    showable: true,
+    toContinue: true,
+    whatWorked: "w",
+    whatToImprove: "i",
+    nextExperiment: "n",
+    reasoning: "r",
+    ...extra,
+  });
+/** The model's last round: satisfied, stop here. */
+const stop = (filters: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
+  round(filters, { toContinue: false, ...extra });
 
 async function createApp() {
   const app = express();
@@ -140,20 +152,15 @@ describe("Apollo audience endpoints", () => {
     apollo.people = [person("Drogerie Müller", "Owner")];
     apollo.pagesRequested = [];
     mockSearchPeople.mockImplementation(apolloImpl);
-    // Default: five exploratory proposals (the exploration floor), then the
-    // model's own final answer on its 6th.
+    // Default: one exploratory round, then the model stops on FINAL_FILTERS.
     mockChatComplete
-      .mockResolvedValueOnce(decide("test", FIRST_ENCODING))
-      .mockResolvedValueOnce(decide("test", FIRST_ENCODING))
-      .mockResolvedValueOnce(decide("test", FIRST_ENCODING))
-      .mockResolvedValueOnce(decide("test", FIRST_ENCODING))
-      .mockResolvedValueOnce(decide("test", FIRST_ENCODING))
-      .mockResolvedValue(decide("final", FINAL_FILTERS, { matchesRequest: true }));
+      .mockResolvedValueOnce(round(FIRST_ENCODING, { showable: false }))
+      .mockResolvedValue(stop(FINAL_FILTERS));
     app = await createApp();
   });
 
   it("POST /suggest-from-segment persists and returns {apolloAudienceId, filters, count}", async () => {
-    setCounts(1000, 1000, 1000, 1000, 1000, 42000);
+    setCounts(1000, 42000);
 
     const res = await request(app)
       .post("/audiences/suggest-from-segment")
@@ -165,7 +172,7 @@ describe("Apollo audience endpoints", () => {
     expect(res.body.filters).toEqual(FINAL_FILTERS);
     expect(res.body.count).toBe(42000);
     expect(res.body.degraded).toBe(false);
-    expect(mockChatComplete).toHaveBeenCalledTimes(6);
+    expect(mockChatComplete).toHaveBeenCalledTimes(2);
     // Schemaless JSON mode on the cheap-and-smart model (zai/glm-pro). No
     // Anthropic, no google/pro.
     expect(mockChatComplete).toHaveBeenCalledWith(
@@ -235,10 +242,10 @@ describe("Apollo audience endpoints", () => {
   });
 
   // ────────────────────────────────────────────────────────────────────────
-  // A strong model, a plain goal, a real budget, and its own final answer
+  // AC1 — the prompt gives DATA and CONTEXT, never targeting rules
   // ────────────────────────────────────────────────────────────────────────
 
-  it("AC1 — the prompt states the goal and carries none of the deleted rules", async () => {
+  it("AC1 — the prompt states the goal, the cold-email context (both halves) and the budget", async () => {
     await request(app)
       .post("/audiences/suggest-from-segment")
       .set(HEADERS)
@@ -247,110 +254,197 @@ describe("Apollo audience endpoints", () => {
 
     const [[opts]] = mockChatComplete.mock.calls;
     // The goal, plainly stated, and the loop's own mechanics.
-    expect(opts.systemPrompt).toContain("find the Apollo People Search filter set that best answers");
-    expect(opts.systemPrompt).toContain("You have up to 10 proposals");
-    expect(opts.systemPrompt).toContain("The first 6 proposals are exploration");
-    expect(opts.systemPrompt).toContain("Stop when you have the set you want");
+    expect(opts.systemPrompt).toContain("reaches as many relevant people as possible");
+    expect(opts.systemPrompt).toContain("You have up to 10 rounds");
+    // Half one: why volume matters, with the orientation numbers.
+    expect(opts.systemPrompt).toContain("COLD EMAIL campaign");
+    expect(opts.systemPrompt).toContain("2,000 contactable");
+    expect(opts.systemPrompt).toContain("50,000");
+    expect(opts.systemPrompt).toContain("An audience of 4 people makes the whole engagement pointless");
+    // Half two — without it the model loosens until it hits the number.
+    expect(opts.systemPrompt).toContain("CONTEXT, not a target and not a floor");
+    expect(opts.systemPrompt).toContain("genuinely small answer is a VALID, CORRECT answer");
+    expect(opts.systemPrompt).toContain("Never loosen the request to reach a number");
+    // Selection rule is stated, so a good early set is known to stay in the running.
+    expect(opts.systemPrompt).toContain("SHOWABLE set with the LARGEST count is what we return");
 
     const allPrompts = mockChatComplete.mock.calls
       .map(([o]: any[]) => `${o.systemPrompt}\n${o.message}`)
       .join("\n");
 
-    // The MECE vocabulary and its invariant are gone.
+    // AC5 — no targeting rule, count floor or threshold came back.
     expect(allPrompts).not.toMatch(/MECE/);
-    expect(allPrompts).not.toContain("we do not add people who should not be there");
-    expect(allPrompts).not.toContain("we do not leave out people who should be there");
     expect(allPrompts).not.toMatch(/reachesOffTarget|leavesTargetUnreached/);
-    // The volume objective is gone.
     expect(allPrompts).not.toMatch(/maximize volume/i);
-    expect(allPrompts).not.toContain("the biggest count wins");
-    // The accumulated patch rules are gone — each of them, by its own words.
     expect(allPrompts).not.toContain("FIRMOGRAPHIC CONSTRAINTS ARE NEVER INVENTED");
     expect(allPrompts).not.toContain("Do not infer a size band");
-    expect(allPrompts).not.toContain("READ THE COUNTS");
     expect(allPrompts).not.toContain("Never drop the concept");
-    expect(allPrompts).not.toContain("NOT a signal that the constraint is superfluous");
-    expect(allPrompts).not.toContain("ALTERNATIVE");
-    // No size steering ever came back either.
     expect(allPrompts).not.toMatch(/ambition|aim for|at least [0-9~]/i);
+    // No drugstore / geography / industry / company-size instruction in the
+    // standing prompt (the SAMPLE legitimately names companies — that is data).
+    expect(opts.systemPrompt.toLowerCase()).not.toContain("drogerie");
+    expect(opts.systemPrompt).not.toMatch(/German-speaking|canton/i);
   });
 
-  it("AC2 — the model's own final set is returned, even when an earlier round counted 20x more", async () => {
-    // The 82,522 regression, from the other end: nothing re-ranks on count, so
-    // the sector-less monster loses simply by not being the model's answer.
-    const sectorless = { personTitles: ["Owner"], personLocations: ["United States"] };
-    const withSector = { ...sectorless, qOrganizationKeywordTags: ["chiropractic"] };
+  it("AC1 — the request is repeated verbatim every round", async () => {
+    setCounts(1000, 42000);
+    await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "Drogerien", description: "People who run drugstores", brandId: null })
+      .expect(200);
+
+    for (const [opts] of mockChatComplete.mock.calls) {
+      expect(opts.message).toContain("=== THE REQUEST (verbatim) ===");
+      expect(opts.message).toContain("Segment description: People who run drugstores");
+    }
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // AC2 — history carries filters, count, 10 sample rows and the three notes
+  // ────────────────────────────────────────────────────────────────────────
+
+  it("AC2 — history entries carry filters, count, sample rows and the model's three notes", async () => {
+    apollo.people = [person("Drogerie Meer", "Inhaber"), person("Rolex", "Head of Retail")];
     mockChatComplete
       .mockReset()
-      .mockResolvedValueOnce(decide("test", sectorless))
-      .mockResolvedValueOnce(decide("test", sectorless))
-      .mockResolvedValueOnce(decide("test", sectorless))
-      .mockResolvedValueOnce(decide("test", sectorless))
-      .mockResolvedValueOnce(decide("test", sectorless))
-      .mockResolvedValue(decide("final", withSector, { matchesRequest: true }));
-    setCounts(82522, 82522, 82522, 82522, 82522, 4100);
+      .mockResolvedValueOnce(
+        round(FIRST_ENCODING, {
+          showable: false,
+          whatWorked: "tags found shops",
+          whatToImprove: "too narrow",
+          nextExperiment: "drop the industry filter",
+        }),
+      )
+      .mockResolvedValue(stop(FINAL_FILTERS));
+    setCounts(1222, 2640);
+
+    await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(200);
+
+    const second = mockChatComplete.mock.calls[1][0].message as string;
+    expect(second).toContain("count=1222");
+    expect(second).toContain("showable=false");
+    expect(second).toContain('"qOrganizationKeywordTags":["fintech"]');
+    expect(second).toContain("Drogerie Meer — Inhaber");
+    expect(second).toContain("Rolex — Head of Retail");
+    expect(second).toContain("worked: tags found shops");
+    expect(second).toContain("to improve: too narrow");
+    expect(second).toContain("next: drop the industry filter");
+    expect(second).toContain("Round 2 of 10");
+  });
+
+  it("AC2 — 10 sample rows, drawn from random pages, never past Apollo's 500-page cap", async () => {
+    apollo.people = Array.from({ length: 10 }, (_, i) => person(`Co ${i}`, "Owner"));
+    mockChatComplete.mockReset().mockResolvedValue(stop(FINAL_FILTERS));
+    setCounts(42000); // 4,200 pages of 10, clamped to Apollo's 500
+
+    await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(200);
+
+    expect(state.inserted.refineTrace[0].sample).toHaveLength(10); // 2 pages x 5 rows
+    expect(apollo.pagesRequested.length).toBe(2);
+    expect(new Set(apollo.pagesRequested).size).toBe(2); // distinct pages
+    for (const p of apollo.pagesRequested) {
+      expect(p).toBeGreaterThanOrEqual(1);
+      expect(p).toBeLessThanOrEqual(500);
+    }
+    expect(mockSearchPeople).toHaveBeenCalledWith("apollo-key", expect.objectContaining({ per_page: 10 }), expect.anything());
+  });
+
+  it("a zero-match set costs no sample requests", async () => {
+    mockChatComplete
+      .mockReset()
+      .mockResolvedValueOnce(round({ personTitles: ["Nobody"] }, { showable: false }))
+      .mockResolvedValue(stop(FINAL_FILTERS));
+    setCounts(0, 42000);
+
+    await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(200);
+
+    expect(apollo.pagesRequested.length).toBe(2); // only the non-empty round sampled
+    expect(state.inserted.refineTrace[0].sample).toEqual([]);
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // AC3/AC4 — showable + toContinue, and largest-showable selection
+  // ────────────────────────────────────────────────────────────────────────
+
+  it("AC3 — toContinue:false ends the loop early", async () => {
+    mockChatComplete.mockReset().mockResolvedValue(stop(FINAL_FILTERS));
+    setCounts(42000);
+
+    await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(200);
+
+    expect(mockChatComplete).toHaveBeenCalledTimes(1);
+    expect(state.inserted.refineTrace[0]).toMatchObject({ action: "round", showable: true, toContinue: false });
+  });
+
+  it("AC4 — the LARGEST showable round wins, not the last one", async () => {
+    // The failure this exists to fix: the loop shipped its final over-constrained
+    // set (4 people) while an earlier showable round reached 659.
+    const wide = { personTitles: ["Owner"], qOrganizationKeywordTags: ["drogerie"] };
+    const narrow = { ...wide, organizationNumEmployeesRanges: ["1,5"] };
+    mockChatComplete
+      .mockReset()
+      .mockResolvedValueOnce(round(wide))
+      .mockResolvedValue(stop(narrow));
+    setCounts(659, 4);
 
     const res = await request(app)
       .post("/audiences/suggest-from-segment")
       .set(HEADERS)
-      .send({ name: "n", description: "Owners of US chiropractic clinics", brandId: null })
+      .send({ name: "n", description: "d", brandId: null })
       .expect(200);
 
-    expect(res.body.filters).toEqual(withSector);
-    expect(res.body.count).toBe(4100);
-    expect(state.inserted.count).toBe(4100);
-    // The rejected set is still traced (bronze).
-    expect(state.inserted.refineTrace[0]).toMatchObject({ count: 82522, action: "test" });
+    expect(res.body.filters).toEqual(wide);
+    expect(res.body.count).toBe(659);
+    expect(res.body.degraded).toBe(false);
+    // The losing round is still traced (bronze).
+    expect(state.inserted.refineTrace[1]).toMatchObject({ count: 4, action: "round" });
   });
 
-  it("AC2b — a final before the exploration floor is run like a test and the loop continues", async () => {
-    // The 164,721 run stopped at attempt 3 of 10 on a sample that showed the
-    // target abandoned. The floor is an EXPLORATION mechanic: the premature set
-    // is still dry-run and fed back, and the model can send it again later.
-    const early = { personTitles: ["Owner"] };
+  it("AC4 — a bigger NON-showable round never beats a smaller showable one", async () => {
+    const offTarget = { personTitles: ["Owner"] };
     mockChatComplete
       .mockReset()
-      .mockResolvedValueOnce(decide("final", early, { matchesRequest: true }))
-      .mockResolvedValueOnce(decide("final", early, { matchesRequest: true }))
-      .mockResolvedValueOnce(decide("test", { personTitles: ["Founder"] }))
-      .mockResolvedValueOnce(decide("test", { personTitles: ["Founder"] }))
-      .mockResolvedValueOnce(decide("test", { personTitles: ["Founder"] }))
-      .mockResolvedValue(decide("final", FINAL_FILTERS, { matchesRequest: true }));
-    setCounts(164721, 164721, 900, 900, 900, 1919);
+      .mockResolvedValueOnce(round(offTarget, { showable: false }))
+      .mockResolvedValue(stop(FINAL_FILTERS, { showable: true }));
+    setCounts(164721, 659);
 
     const res = await request(app)
       .post("/audiences/suggest-from-segment")
       .set(HEADERS)
-      .send({ name: "n", description: "drugstores in German-speaking Switzerland", brandId: null })
+      .send({ name: "n", description: "d", brandId: null })
       .expect(200);
 
-    // The 6th attempt is the first `final` that counts — nothing before it wins.
-    expect(mockChatComplete).toHaveBeenCalledTimes(6);
     expect(res.body.filters).toEqual(FINAL_FILTERS);
-    expect(res.body.count).toBe(1919);
-    // The deferred rounds are traced as what they were: dry-run proposals.
-    expect(state.inserted.refineTrace[0]).toMatchObject({ action: "test", count: 164721, finalDeferred: true });
-    expect(state.inserted.refineTrace[0].matchesRequest).toBeUndefined();
-    // And the model was told, in its own budget line, that it still had to spend.
-    expect(mockChatComplete.mock.calls[1][0].message).toContain("exploration proposal(s) remain to be spent");
-    // The accepted final carries the closing answer and nothing was re-ranked.
-    expect(state.inserted.refineTrace[5]).toMatchObject({ action: "final", matchesRequest: true });
+    expect(res.body.count).toBe(659);
+    expect(res.body.degraded).toBe(false);
   });
 
-  it("AC4 — degraded carries the model's closing answer and does NOT change the set", async () => {
+  it("AC4 — with NO showable round, the largest overall is returned, marked degraded", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const chosen = { personTitles: ["Owner"] };
-    const bigger = { personTitles: ["Founder"] };
+    const a = { personTitles: ["Owner"] };
+    const b = { personTitles: ["Founder"] };
     mockChatComplete
       .mockReset()
-      .mockResolvedValueOnce(decide("test", bigger))
-      .mockResolvedValueOnce(decide("test", bigger))
-      .mockResolvedValueOnce(decide("test", bigger))
-      .mockResolvedValueOnce(decide("test", bigger))
-      .mockResolvedValueOnce(decide("test", bigger))
-      // Says no — and still gets its own set back, unchanged.
-      .mockResolvedValue(decide("final", chosen, { matchesRequest: false }));
-    setCounts(90000, 90000, 90000, 90000, 90000, 300);
+      .mockResolvedValueOnce(round(a, { showable: false }))
+      .mockResolvedValue(stop(b, { showable: false }));
+    setCounts(300, 90);
 
     const res = await request(app)
       .post("/audiences/suggest-from-segment")
@@ -359,15 +453,17 @@ describe("Apollo audience endpoints", () => {
       .expect(200);
 
     expect(res.body.degraded).toBe(true);
-    expect(res.body.filters).toEqual(chosen);
+    expect(res.body.filters).toEqual(a);
     expect(res.body.count).toBe(300);
-    expect(state.inserted.refineTrace[5].matchesRequest).toBe(false);
+    expect(state.inserted.status).toBe("exhausted");
     warn.mockRestore();
   });
 
-  it("an omitted closing answer is not confidence — degraded, same set", async () => {
+  it("an omitted showable is not confidence — degraded, largest set still returned", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    mockChatComplete.mockReset().mockResolvedValue(decide("final", FINAL_FILTERS));
+    mockChatComplete
+      .mockReset()
+      .mockResolvedValue(chatRes({ filters: FINAL_FILTERS, toContinue: false, reasoning: "r" }));
     setCounts(42000);
 
     const res = await request(app)
@@ -381,16 +477,15 @@ describe("Apollo audience endpoints", () => {
     warn.mockRestore();
   });
 
-  it("AC3 — up to 10 real attempts; malformed output runs on its own budget", async () => {
-    // 2 malformed decisions (retry budget) then 10 "test" turns (real budget):
-    // the loop never gets a final and spends exactly 10 dry-runs.
+  it("AC3 — up to 10 rounds; malformed output runs on its own budget", async () => {
+    // 2 malformed decisions (retry budget) then rounds that never stop: the loop
+    // spends exactly 10 dry-runs.
     mockChatComplete
       .mockReset()
       .mockResolvedValueOnce(chatRes({ garbage: true }))
       .mockResolvedValueOnce(chatRes({ still: "wrong" }))
-      .mockResolvedValue(decide("test", { personTitles: ["Owner"] }));
+      .mockResolvedValue(round({ personTitles: ["Owner"] }));
     setCounts(1000);
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const res = await request(app)
       .post("/audiences/suggest-from-segment")
@@ -398,19 +493,17 @@ describe("Apollo audience endpoints", () => {
       .send({ name: "n", description: "d", brandId: null })
       .expect(200);
 
-    expect(mockChatComplete).toHaveBeenCalledTimes(12); // 2 invalid + 10 real
-    // No closing answer was ever given → the last proposal stands, unblessed.
+    expect(mockChatComplete).toHaveBeenCalledTimes(12); // 2 invalid + 10 rounds
     expect(res.body.filters).toEqual({ personTitles: ["Owner"] });
-    expect(res.body.degraded).toBe(true);
-    expect(state.inserted.status).toBe("exhausted");
-    warn.mockRestore();
+    expect(res.body.degraded).toBe(false);
+    expect(state.inserted.status).toBe("confirmed");
   });
 
-  it("schema-invalid filters burn the retry budget, not a real attempt", async () => {
+  it("schema-invalid filters burn the retry budget, not a round", async () => {
     mockChatComplete
       .mockReset()
-      .mockResolvedValueOnce(decide("test", { notAnApolloField: ["x"] }))
-      .mockResolvedValue(decide("final", FINAL_FILTERS, { matchesRequest: true }));
+      .mockResolvedValueOnce(round({ notAnApolloField: ["x"] }))
+      .mockResolvedValue(stop(FINAL_FILTERS));
     setCounts(42000);
 
     const res = await request(app)
@@ -427,7 +520,9 @@ describe("Apollo audience endpoints", () => {
   it("filters sent as a JSON STRING are accepted — a strict-schema provider can only send that", async () => {
     mockChatComplete
       .mockReset()
-      .mockResolvedValue(chatRes({ action: "final", filters: JSON.stringify(FINAL_FILTERS), reasoning: "r", matchesRequest: true }));
+      .mockResolvedValue(
+        chatRes({ filters: JSON.stringify(FINAL_FILTERS), showable: true, toContinue: false, reasoning: "r" }),
+      );
     setCounts(42000);
 
     const res = await request(app)
@@ -440,11 +535,11 @@ describe("Apollo audience endpoints", () => {
     expect(res.body.degraded).toBe(false);
   });
 
-  it("a filters string that is not a JSON object burns the retry budget, not a real attempt", async () => {
+  it("a filters string that is not a JSON object burns the retry budget, not a round", async () => {
     mockChatComplete
       .mockReset()
-      .mockResolvedValueOnce(chatRes({ action: "test", filters: "not json at all", reasoning: "r", matchesRequest: false }))
-      .mockResolvedValue(decide("final", FINAL_FILTERS, { matchesRequest: true }));
+      .mockResolvedValueOnce(chatRes({ filters: "not json at all", showable: false, toContinue: true }))
+      .mockResolvedValue(stop(FINAL_FILTERS));
     setCounts(42000);
 
     const res = await request(app)
@@ -473,9 +568,8 @@ describe("Apollo audience endpoints", () => {
     warn.mockRestore();
   });
 
-  it("a set matching NOBODY is not an audience — still throws, nothing persisted", async () => {
-    // Fail loud survives for real errors: every candidate matched zero people.
-    mockChatComplete.mockReset().mockResolvedValue(decide("final", { personTitles: ["Nobody"] }, { matchesRequest: true }));
+  it("a run where every set matched NOBODY still throws, nothing persisted", async () => {
+    mockChatComplete.mockReset().mockResolvedValue(stop({ personTitles: ["Nobody"] }));
     setCounts(0);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -490,23 +584,19 @@ describe("Apollo audience endpoints", () => {
     warn.mockRestore();
   });
 
-  it("AC5 — a degraded run logs its full trace; the happy path logs nothing", async () => {
+  it("a degraded run logs its full trace; the happy path logs nothing", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     mockChatComplete
       .mockReset()
-      .mockResolvedValueOnce(decide("test", { personTitles: ["Founder"] }))
-      .mockResolvedValueOnce(decide("test", { personTitles: ["Founder"] }))
-      .mockResolvedValueOnce(decide("test", { personTitles: ["Founder"] }))
-      .mockResolvedValueOnce(decide("test", { personTitles: ["Founder"] }))
-      .mockResolvedValueOnce(decide("test", { personTitles: ["Founder"] }))
-      .mockResolvedValue(decide("final", { personTitles: ["Owner"] }, { matchesRequest: false }));
-    setCounts(90000, 90000, 90000, 90000, 90000, 1959);
+      .mockResolvedValueOnce(round({ personTitles: ["Founder"] }, { showable: false }))
+      .mockResolvedValue(stop({ personTitles: ["Owner"] }, { showable: false }));
+    setCounts(90000, 1959);
     apollo.people = [person("Procter & Gamble", "Owner")];
 
     await request(app)
       .post("/audiences/suggest-from-segment")
       .set(HEADERS)
-      .send({ name: "n", description: "drugstores in German-speaking Switzerland", brandId: null })
+      .send({ name: "n", description: "drugstores", brandId: null })
       .expect(200);
 
     const line = warn.mock.calls.map((c) => c.join(" ")).find((l) => l.includes("refine ended without a confident set"));
@@ -514,12 +604,13 @@ describe("Apollo audience endpoints", () => {
     expect(line).toContain('"outcome":"degraded"');
     expect(line).toContain('"count":90000');
     expect(line).toContain('"count":1959');
-    // The sample is in the log — that is what makes a bad run diagnosable.
+    // The sample and the notes are in the log — that is what makes a bad run diagnosable.
     expect(line).toContain("Procter & Gamble");
+    expect(line).toContain('"whatWorked":"w"');
 
     // Happy path: nothing logged.
     warn.mockClear();
-    mockChatComplete.mockReset().mockResolvedValue(decide("final", FINAL_FILTERS, { matchesRequest: true }));
+    mockChatComplete.mockReset().mockResolvedValue(stop(FINAL_FILTERS));
     setCounts(42000);
     const ok = await request(app)
       .post("/audiences/suggest-from-segment")
@@ -529,72 +620,5 @@ describe("Apollo audience endpoints", () => {
     expect(ok.body.degraded).toBe(false);
     expect(warn.mock.calls.some((c) => c.join(" ").includes("refine ended without a confident set"))).toBe(false);
     warn.mockRestore();
-  });
-
-  // ────────────────────────────────────────────────────────────────────────
-  // The sample: a count says how many, never who
-  // ────────────────────────────────────────────────────────────────────────
-
-  it("shows the model the employer and title of real matched people", async () => {
-    apollo.people = [
-      person("Drogerie Müller", "Inhaber"),
-      person("Rolex", "Head of Retail"),
-    ];
-    setCounts(1222, 2640, 2640, 2640, 2640, 2640);
-
-    await request(app)
-      .post("/audiences/suggest-from-segment")
-      .set(HEADERS)
-      .send({ name: "n", description: "drugstores in German-speaking Switzerland", brandId: null })
-      .expect(200);
-
-    // Round 2 sees what round 1 actually returned — the Genève row is the leak.
-    const second = mockChatComplete.mock.calls[1][0].message as string;
-    expect(second).toContain("count=1222");
-    expect(second).toContain("Drogerie Müller — Inhaber");
-    expect(second).toContain("Rolex — Head of Retail");
-  });
-
-  it("samples random pages, not just the head — and never past Apollo's 500-page cap", async () => {
-    // 42,000 matches = 4,200 pages of 10, clamped to Apollo's 500.
-    mockChatComplete.mockReset().mockResolvedValue(decide("final", FINAL_FILTERS, { matchesRequest: true }));
-    setCounts(42000);
-
-    await request(app)
-      .post("/audiences/suggest-from-segment")
-      .set(HEADERS)
-      .send({ name: "n", description: "d", brandId: null })
-      .expect(200);
-
-    expect(apollo.pagesRequested.length).toBe(12); // 6 dry-runs x 2 sampled pages
-    expect(new Set(apollo.pagesRequested.slice(0, 2)).size).toBe(2); // distinct pages
-    for (const p of apollo.pagesRequested) {
-      expect(p).toBeGreaterThanOrEqual(1);
-      expect(p).toBeLessThanOrEqual(500);
-    }
-    // Sampled pages are pulled at 10/page, not 1.
-    expect(mockSearchPeople).toHaveBeenCalledWith("apollo-key", expect.objectContaining({ per_page: 10 }), expect.anything());
-  });
-
-  it("a zero-match set costs no sample requests", async () => {
-    mockChatComplete
-      .mockReset()
-      .mockResolvedValueOnce(decide("test", { personTitles: ["Nobody"] }))
-      .mockResolvedValueOnce(decide("test", FINAL_FILTERS))
-      .mockResolvedValueOnce(decide("test", FINAL_FILTERS))
-      .mockResolvedValueOnce(decide("test", FINAL_FILTERS))
-      .mockResolvedValueOnce(decide("test", FINAL_FILTERS))
-      .mockResolvedValue(decide("final", FINAL_FILTERS, { matchesRequest: true }));
-    setCounts(0, 42000);
-
-    await request(app)
-      .post("/audiences/suggest-from-segment")
-      .set(HEADERS)
-      .send({ name: "n", description: "d", brandId: null })
-      .expect(200);
-
-    // Only the non-empty attempts sampled (the zero-match first one did not).
-    expect(apollo.pagesRequested.length).toBe(10);
-    expect(state.inserted.refineTrace[0].sample).toEqual([]);
   });
 });
