@@ -239,6 +239,13 @@ then requires — minutes later, not in the response.
   The ONE 5xx case is a cost reconciliation we could not complete: the phone is
   already committed by then, `costReconciledAt` is still null, and the
   redelivery re-runs only the reconcile.
+- **The callback's field names are `_cd`-SUFFIXED — read both spellings.**
+  Verified live 2026-09-05: the async delivery sends `type_cd: "mobile"`,
+  `status_cd: "valid_number"`, `dnc_status_cd: null`, `confidence_cd: "high"`,
+  while the synchronous enrichment shape uses the unsuffixed names. Reading only
+  `dnc_status` makes every number report as clear to dial — the exact failure
+  this feature exists to prevent. `normalizePhoneNumbers` accepts both;
+  `phone-reveal.test.ts` pins Apollo's real production payload.
 - **DNC survives to the consumer.** Every number carries Apollo's `dnc_status`
   verbatim plus a derived `doNotCall`. An UNKNOWN dnc value is treated as
   do-not-call — announcing a clean number as DNC is recoverable, dialling a

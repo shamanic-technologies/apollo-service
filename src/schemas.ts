@@ -1390,6 +1390,7 @@ const RevealedPhoneSchema = z
     dncStatus: z.string().nullable().openapi({ description: "Apollo's do-not-call status for THIS number, verbatim." }),
     dncOtherInfo: z.string().nullable(),
     position: z.number().nullable(),
+    confidence: z.string().nullable().openapi({ description: "Apollo's confidence in the number, when it sends one." }),
     doNotCall: z.boolean().openapi({
       description:
         "Derived from dncStatus/dialer flags: true means the number must never be dialled. Unknown DNC values are treated as true.",

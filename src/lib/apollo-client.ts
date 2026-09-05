@@ -144,14 +144,27 @@ export interface ApolloTechnology {
   category?: string;
 }
 
+/**
+ * A phone Apollo returns. The SYNCHRONOUS people-search/enrichment shape uses
+ * `type` / `status` / `dnc_status`; the ASYNCHRONOUS phone-reveal callback
+ * sends the same fields with Apollo's internal `_cd` suffix (verified live
+ * 2026-09-05: `type_cd: "mobile"`, `status_cd: "valid_number"`,
+ * `dnc_status_cd: null`, plus `confidence_cd`). Both spellings are declared
+ * because both arrive in production — reading only the unsuffixed ones makes
+ * every DNC flag read as null.
+ */
 export interface ApolloPhoneNumber {
   raw_number?: string;
   sanitized_number?: string;
   type?: string;
+  type_cd?: string;
   position?: number;
   status?: string;
-  dnc_status?: string;
-  dnc_other_info?: string;
+  status_cd?: string;
+  confidence_cd?: string;
+  dnc_status?: string | null;
+  dnc_status_cd?: string | null;
+  dnc_other_info?: string | null;
   dialer_flags?: Record<string, unknown>;
 }
 
