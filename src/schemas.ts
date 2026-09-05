@@ -1360,3 +1360,113 @@ registry.registerPath({
     500: { description: "Internal server error", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
+
+// ─── Phone reveal ────────────────────────────────────────────────────────────
+// Apollo does not return phone numbers by default: the reveal is OPT-IN, billed
+// separately, and ASYNCHRONOUS. Hence a route of its own (no existing caller can
+// trip it) + a read that says which of the four states the reveal is in.
+
+const phoneRevealHeaders = z.object({
+  "x-org-id": z.string(),
+  "x-user-id": z.string(),
+  "x-run-id": z.string().openapi({ description: "Caller's run ID — parent of the phone-reveal run this cost hangs on", example: "run-abc-123" }),
+  "x-brand-id": z.string().optional().openapi({ description: "Brand ID(s) — single UUID or comma-separated list" }),
+  "x-campaign-id": z.string().optional().openapi({ description: "Campaign ID" }),
+  "x-audience-id": z.string().optional(),
+  "x-feature-slug": z.string().optional(),
+  "x-workflow-slug": z.string().optional(),
+});
+
+const phoneRevealReadHeaders = z.object({
+  "x-org-id": z.string(),
+});
+
+const RevealedPhoneSchema = z
+  .object({
+    rawNumber: z.string().nullable(),
+    sanitizedNumber: z.string().nullable(),
+    type: z.string().nullable().openapi({ description: 'Apollo phone type, e.g. "mobile", "work_hq".' }),
+    status: z.string().nullable(),
+    dncStatus: z.string().nullable().openapi({ description: "Apollo's do-not-call status for THIS number, verbatim." }),
+    dncOtherInfo: z.string().nullable(),
+    position: z.number().nullable(),
+    doNotCall: z.boolean().openapi({
+      description:
+        "Derived from dncStatus/dialer flags: true means the number must never be dialled. Unknown DNC values are treated as true.",
+    }),
+  })
+  .openapi("RevealedPhone");
+
+const PhoneRevealResponseSchema = z
+  .object({
+    revealId: z.string().uuid(),
+    apolloPersonId: z.string(),
+    status: z.enum(["pending", "found", "not_found", "failed"]).openapi({
+      description:
+        "pending = Apollo has not delivered yet; found = a number arrived; not_found = Apollo has no number for this person (a real answer, zero credits); failed = the reveal itself failed.",
+    }),
+    mobilePhone: z.string().nullable().openapi({ description: "The number to connect a rep on — the mobile when Apollo returned one." }),
+    dncStatus: z.string().nullable(),
+    doNotCall: z.boolean(),
+    phoneNumbers: z.array(RevealedPhoneSchema),
+    failureReason: z.string().nullable(),
+    creditsConsumed: z.number().nullable().openapi({ description: "Credits Apollo actually charged. 0 when nothing was found." }),
+    requestedAt: z.string().nullable(),
+    completedAt: z.string().nullable(),
+    reused: z.boolean().optional().openapi({ description: "True when an earlier reveal was served instead of spending again." }),
+  })
+  .openapi("PhoneRevealResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/people/{apolloPersonId}/phone-reveal",
+  summary: "Ask Apollo to reveal this person's phone number (opt-in, billed)",
+  description:
+    "Opt-in phone reveal. Apollo answers WITHOUT the number and delivers it asynchronously (minutes) to this service's callback, so this returns 202 with status \"pending\"; poll the GET for the result. Declares apollo-credit with quantity 8 (the worst case) as a provisioned hold before calling; the callback actualizes it when a number arrives and CANCELS it when none does, so a fruitless reveal costs nothing. Existing enrichment endpoints are untouched and never reveal a phone.",
+  request: {
+    headers: phoneRevealHeaders,
+    params: z.object({ apolloPersonId: z.string() }),
+  },
+  responses: {
+    200: { description: "A number was already available (or arrived synchronously)", content: { "application/json": { schema: PhoneRevealResponseSchema } } },
+    202: { description: "Reveal requested — Apollo will deliver the number to the callback", content: { "application/json": { schema: PhoneRevealResponseSchema } } },
+    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponseSchema } } },
+    402: { description: "Insufficient credits", content: { "application/json": { schema: ErrorResponseSchema } } },
+    500: { description: "Internal server error", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/people/{apolloPersonId}/phone-reveal",
+  summary: "Has the revealed phone number arrived yet?",
+  description:
+    "Reads the latest reveal for this person. `status` distinguishes not-here-yet from Apollo-found-nothing from the-reveal-failed. 404 means no reveal was ever requested for this person.",
+  request: {
+    headers: phoneRevealReadHeaders,
+    params: z.object({ apolloPersonId: z.string() }),
+  },
+  responses: {
+    200: { description: "The reveal's current state", content: { "application/json": { schema: PhoneRevealResponseSchema } } },
+    404: { description: "No reveal requested for this person", content: { "application/json": { schema: ErrorResponseSchema } } },
+    500: { description: "Internal server error", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+const PhoneRevealWebhookAckSchema = z
+  .object({ received: z.boolean(), updated: z.number() })
+  .openapi("PhoneRevealWebhookAck");
+
+registry.registerPath({
+  method: "post",
+  path: "/webhook/phone-reveal",
+  summary: "Apollo's asynchronous phone delivery callback",
+  description:
+    "Apollo POSTs a revealed phone here minutes after the reveal request. Authenticated by the ?secret query param (APOLLO_PHONE_REVEAL_WEBHOOK_SECRET). Answers 200 for any parseable body — Apollo disables a webhook that keeps failing — except when cost reconciliation could not complete, which answers 500 so Apollo redelivers.",
+  request: { params: z.object({}) },
+  responses: {
+    200: { description: "Delivery ingested", content: { "application/json": { schema: PhoneRevealWebhookAckSchema } } },
+    401: { description: "Invalid webhook secret", content: { "application/json": { schema: ErrorResponseSchema } } },
+    500: { description: "Phone stored, cost reconciliation failed — Apollo should retry", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});

@@ -45,6 +45,22 @@ export function buildWaterfallWebhookUrl(): string | undefined {
   return `${publicUrl}/webhook/waterfall?secret=${encodeURIComponent(secret)}`;
 }
 
+/**
+ * Build the callback URL Apollo delivers a revealed phone number to.
+ *
+ * Apollo REQUIRES a webhook_url whenever `reveal_phone_number` is true: the
+ * enrichment response comes back immediately WITHOUT the number and the phone
+ * is POSTed here minutes later. Returns undefined when either env var is
+ * missing, which makes the reveal endpoint fail loud rather than spend credits
+ * on a number nobody can receive.
+ */
+export function buildPhoneRevealWebhookUrl(): string | undefined {
+  const publicUrl = process.env.APOLLO_SERVICE_PUBLIC_URL;
+  const secret = process.env.APOLLO_PHONE_REVEAL_WEBHOOK_SECRET;
+  if (!publicUrl || !secret) return undefined;
+  return `${publicUrl}/webhook/phone-reveal?secret=${encodeURIComponent(secret)}`;
+}
+
 export interface ApolloSearchParams {
   person_titles?: string[];
   q_organization_keyword_tags?: string[];
@@ -466,11 +482,22 @@ export async function searchPeople(
 /**
  * Enrich a single person using Apollo API
  */
+export interface EnrichPersonOptions {
+  /**
+   * Opt IN to Apollo's phone reveal. OFF by default, and every existing caller
+   * omits it, so their request body — and therefore their cost — is unchanged.
+   * When true Apollo bills separately (~8 credits, 0 when nothing is found) and
+   * delivers the number ASYNCHRONOUSLY to `webhookUrl`, which it then requires.
+   */
+  revealPhoneNumber?: boolean;
+}
+
 export async function enrichPerson(
   apiKey: string,
   personId: string,
   webhookUrl?: string,
-  alertIdentity?: CreditAlertIdentity
+  alertIdentity?: CreditAlertIdentity,
+  options: EnrichPersonOptions = {}
 ): Promise<ApolloEnrichResponse> {
   const response = await fetchWithTimeout(`${APOLLO_API_BASE}/people/match`, {
     method: "POST",
@@ -485,6 +512,9 @@ export async function enrichPerson(
       // Revive by flipping to `true` + uncommenting surfaces in
       // waterfall.ts, search.ts, match.ts, webhook.ts, schemas.ts.
       run_waterfall_email: false,
+      // Opt-in only: absent from the body unless the caller asked for a reveal,
+      // so an ordinary enrichment stays byte-identical to what it always sent.
+      ...(options.revealPhoneNumber && { reveal_phone_number: true }),
       ...(webhookUrl && { webhook_url: webhookUrl }),
     }),
   });

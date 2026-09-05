@@ -203,6 +203,54 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
   break boot or any existing endpoint — only `/audiences/suggest-from-segment`
   would 500 until they are set.
 
+## Phone reveal is OPT-IN, ASYNCHRONOUS, and lives on its own route
+
+Apollo does not return phone numbers by default and never has — that is why
+`apollo_people_enrichments` held 63,907 rows with zero phones: the reveal was
+never requested. A reveal is opt-in on Apollo's side (`reveal_phone_number`),
+billed separately (~8 credits when a mobile comes back, ZERO when nothing is
+found), and the number is delivered ASYNCHRONOUSLY to a `webhook_url` Apollo
+then requires — minutes later, not in the response.
+
+- **Its own route, so nobody reveals by accident.** `POST
+  /people/{apolloPersonId}/phone-reveal` (request) + `GET` the same path (read)
+  + `POST /webhook/phone-reveal?secret=` (Apollo's delivery). `/enrich`,
+  `/match` and `/search/next` are untouched and send no `reveal_phone_number`
+  key at all — `phone-optin.regression.test.ts` asserts the key is ABSENT from
+  their request bodies, not merely false. Do NOT fold the reveal into
+  enrichment "for convenience": that would put reveal credits on every existing
+  caller.
+- **`status` is the contract, not the phone column.** `pending` (Apollo has not
+  delivered yet) / `found` / `not_found` (Apollo has no number — a REAL answer,
+  zero credits) / `failed` (the reveal itself failed). A null number cannot
+  express those four, which is the whole reason `apollo_phone_reveals` exists.
+  The consumer (instantly-service, on a qualified sales reply) polls the GET for
+  a bounded ~90s and proceeds either way, so the three non-`found` states must
+  stay distinguishable. Never collapse them.
+- **Cost: `apollo-credit`, quantity 8 — quantity is the lever, the name is
+  reused.** PROVISION 8 as a hold + AUTHORIZE (platform key only) BEFORE the
+  call; the callback ACTUALIZES it when a number arrives and CANCELS it when
+  none does, so a fruitless reveal costs the org nothing. Apollo's own
+  `credits_consumed` wins when it differs from 8 (post the truth, cancel the
+  hold — runs PATCH is status-only).
+- **The callback answers 200 for anything parseable.** Apollo counts a 4xx like
+  a 5xx and disables a webhook that keeps failing, which would lose every future
+  reveal (the same mechanism that took instantly-service's webhook down twice).
+  The ONE 5xx case is a cost reconciliation we could not complete: the phone is
+  already committed by then, `costReconciledAt` is still null, and the
+  redelivery re-runs only the reconcile.
+- **DNC survives to the consumer.** Every number carries Apollo's `dnc_status`
+  verbatim plus a derived `doNotCall`. An UNKNOWN dnc value is treated as
+  do-not-call — announcing a clean number as DNC is recoverable, dialling a
+  flagged one is not.
+- **A number is never fabricated, guessed or pattern-matched.** Only what Apollo
+  sent: `phone_numbers[]` plus the `mobile_phone` scalar when it sends one.
+  Empty means `not_found`.
+- **Env vars:** `APOLLO_SERVICE_PUBLIC_URL` (already set) +
+  `APOLLO_PHONE_REVEAL_WEBHOOK_SECRET`. Without both, `buildPhoneRevealWebhookUrl`
+  returns undefined and the route fails loud BEFORE spending a credit — a reveal
+  with nowhere to land is a credit thrown away.
+
 ## Running out of Apollo credits raises a STAFF EMAIL — never let it stay silent
 
 Apollo signals credit exhaustion two ways, and BOTH used to be silent here: a
