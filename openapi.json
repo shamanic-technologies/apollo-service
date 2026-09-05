@@ -3994,6 +3994,144 @@
         "required": [
           "count"
         ]
+      },
+      "PhoneRevealResponse": {
+        "type": "object",
+        "properties": {
+          "revealId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "apolloPersonId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "found",
+              "not_found",
+              "failed"
+            ],
+            "description": "pending = Apollo has not delivered yet; found = a number arrived; not_found = Apollo has no number for this person (a real answer, zero credits); failed = the reveal itself failed."
+          },
+          "mobilePhone": {
+            "type": "string",
+            "nullable": true,
+            "description": "The number to connect a rep on — the mobile when Apollo returned one."
+          },
+          "dncStatus": {
+            "type": "string",
+            "nullable": true
+          },
+          "doNotCall": {
+            "type": "boolean"
+          },
+          "phoneNumbers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RevealedPhone"
+            }
+          },
+          "failureReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "creditsConsumed": {
+            "type": "number",
+            "nullable": true,
+            "description": "Credits Apollo actually charged. 0 when nothing was found."
+          },
+          "requestedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "completedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "reused": {
+            "type": "boolean",
+            "description": "True when an earlier reveal was served instead of spending again."
+          }
+        },
+        "required": [
+          "revealId",
+          "apolloPersonId",
+          "status",
+          "mobilePhone",
+          "dncStatus",
+          "doNotCall",
+          "phoneNumbers",
+          "failureReason",
+          "creditsConsumed",
+          "requestedAt",
+          "completedAt"
+        ]
+      },
+      "RevealedPhone": {
+        "type": "object",
+        "properties": {
+          "rawNumber": {
+            "type": "string",
+            "nullable": true
+          },
+          "sanitizedNumber": {
+            "type": "string",
+            "nullable": true
+          },
+          "type": {
+            "type": "string",
+            "nullable": true,
+            "description": "Apollo phone type, e.g. \"mobile\", \"work_hq\"."
+          },
+          "status": {
+            "type": "string",
+            "nullable": true
+          },
+          "dncStatus": {
+            "type": "string",
+            "nullable": true,
+            "description": "Apollo's do-not-call status for THIS number, verbatim."
+          },
+          "dncOtherInfo": {
+            "type": "string",
+            "nullable": true
+          },
+          "position": {
+            "type": "number",
+            "nullable": true
+          },
+          "doNotCall": {
+            "type": "boolean",
+            "description": "Derived from dncStatus/dialer flags: true means the number must never be dialled. Unknown DNC values are treated as true."
+          }
+        },
+        "required": [
+          "rawNumber",
+          "sanitizedNumber",
+          "type",
+          "status",
+          "dncStatus",
+          "dncOtherInfo",
+          "position",
+          "doNotCall"
+        ]
+      },
+      "PhoneRevealWebhookAck": {
+        "type": "object",
+        "properties": {
+          "received": {
+            "type": "boolean"
+          },
+          "updated": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "received",
+          "updated"
+        ]
       }
     },
     "parameters": {
@@ -5146,6 +5284,237 @@
           },
           "500": {
             "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/people/{apolloPersonId}/phone-reveal": {
+      "post": {
+        "summary": "Ask Apollo to reveal this person's phone number (opt-in, billed)",
+        "description": "Opt-in phone reveal. Apollo answers WITHOUT the number and delivers it asynchronously (minutes) to this service's callback, so this returns 202 with status \"pending\"; poll the GET for the result. Declares apollo-credit with quantity 8 (the worst case) as a provisioned hold before calling; the callback actualizes it when a number arrives and CANCELS it when none does, so a fruitless reveal costs nothing. Existing enrichment endpoints are untouched and never reveal a phone.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "apolloPersonId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Caller's run ID — parent of the phone-reveal run this cost hangs on",
+              "example": "run-abc-123"
+            },
+            "required": true,
+            "description": "Caller's run ID — parent of the phone-reveal run this cost hangs on",
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) — single UUID or comma-separated list"
+            },
+            "required": false,
+            "description": "Brand ID(s) — single UUID or comma-separated list",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID"
+            },
+            "required": false,
+            "description": "Campaign ID",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A number was already available (or arrived synchronously)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhoneRevealResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Reveal requested — Apollo will deliver the number to the callback",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhoneRevealResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Insufficient credits",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Has the revealed phone number arrived yet?",
+        "description": "Reads the latest reveal for this person. `status` distinguishes not-here-yet from Apollo-found-nothing from the-reveal-failed. 404 means no reveal was ever requested for this person.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "apolloPersonId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The reveal's current state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhoneRevealResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No reveal requested for this person",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/webhook/phone-reveal": {
+      "post": {
+        "summary": "Apollo's asynchronous phone delivery callback",
+        "description": "Apollo POSTs a revealed phone here minutes after the reveal request. Authenticated by the ?secret query param (APOLLO_PHONE_REVEAL_WEBHOOK_SECRET). Answers 200 for any parseable body — Apollo disables a webhook that keeps failing — except when cost reconciliation could not complete, which answers 500 so Apollo redelivers.",
+        "responses": {
+          "200": {
+            "description": "Delivery ingested",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhoneRevealWebhookAck"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid webhook secret",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Phone stored, cost reconciliation failed — Apollo should retry",
             "content": {
               "application/json": {
                 "schema": {

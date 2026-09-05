@@ -14,6 +14,7 @@ import referenceRoutes from "./routes/reference.js";
 import validateRoutes from "./routes/validate.js";
 import matchRoutes from "./routes/match.js";
 import transferBrandRoutes from "./routes/transfer-brand.js";
+import phoneRevealRoutes from "./routes/phone-reveal.js";
 import webhookRoutes from "./routes/webhook.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -51,6 +52,7 @@ app.use(audienceRoutes);
 app.use(referenceRoutes);
 app.use(validateRoutes);
 app.use(matchRoutes);
+app.use(phoneRevealRoutes);
 app.use(transferBrandRoutes);
 app.use(webhookRoutes);
 
