@@ -31,6 +31,8 @@ export interface RevealedPhone {
   dncStatus: string | null;
   dncOtherInfo: string | null;
   position: number | null;
+  /** Apollo's own confidence in the number, when it sends one. */
+  confidence: string | null;
   /** Derived: true when this number must never be dialled. */
   doNotCall: boolean;
 }
@@ -49,8 +51,13 @@ function str(value: unknown): string | null {
   return s === "" ? null : s;
 }
 
+/** Apollo sends `dnc_status` synchronously and `dnc_status_cd` on the callback. */
+function dncStatusOf(phone: ApolloPhoneNumber): string | null {
+  return str(phone.dnc_status) ?? str(phone.dnc_status_cd);
+}
+
 function isDoNotCall(phone: ApolloPhoneNumber): boolean {
-  const status = (str(phone.dnc_status) ?? "").toLowerCase();
+  const status = (dncStatusOf(phone) ?? "").toLowerCase();
   if (status && !CLEAR_TO_DIAL_DNC_STATUSES.has(status)) return true;
   const flags = phone.dialer_flags as Record<string, unknown> | undefined;
   return flags?.do_not_call === true;
@@ -64,11 +71,12 @@ export function normalizePhoneNumbers(phones: ApolloPhoneNumber[] | undefined | 
     .map((p) => ({
       rawNumber: str(p.raw_number),
       sanitizedNumber: str(p.sanitized_number),
-      type: str(p.type),
-      status: str(p.status),
-      dncStatus: str(p.dnc_status),
+      type: str(p.type) ?? str(p.type_cd),
+      status: str(p.status) ?? str(p.status_cd),
+      dncStatus: dncStatusOf(p),
       dncOtherInfo: str(p.dnc_other_info),
       position: typeof p.position === "number" ? p.position : null,
+      confidence: str(p.confidence_cd),
       doNotCall: isDoNotCall(p),
     }));
 }
@@ -134,6 +142,7 @@ export function phonesForPerson(person: Partial<ApolloPerson>): RevealedPhone[] 
       dncStatus: null,
       dncOtherInfo: null,
       position: null,
+      confidence: null,
       doNotCall: false,
     });
   }
@@ -147,7 +156,20 @@ export function phonesForPerson(person: Partial<ApolloPerson>): RevealedPhone[] 
  * answer and must be reported as one.
  */
 export function webhookSaysFailed(payload: PhoneRevealWebhookPayload): boolean {
-  const status = (str(payload.status) ?? "").toLowerCase();
+  return isFailureStatus(payload.status);
+}
+
+/**
+ * Apollo repeats a per-person `status` inside each entry of `people`
+ * (verified live 2026-09-05: `"success"`). A person-level failure is that
+ * person's reveal failing, even when the envelope says success.
+ */
+export function personSaysFailed(person: Partial<ApolloPerson>): boolean {
+  return isFailureStatus((person as { status?: string }).status);
+}
+
+function isFailureStatus(value: unknown): boolean {
+  const status = (str(value) ?? "").toLowerCase();
   if (!status) return false;
   return status.includes("fail") || status.includes("error");
 }

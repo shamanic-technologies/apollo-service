@@ -384,6 +384,72 @@ describe("POST /webhook/phone-reveal", () => {
     expect(stored.phoneNumbers[0].doNotCall).toBe(true);
   });
 
+  it("reads Apollo's REAL callback shape — the _cd suffixed fields (verified in prod 2026-09-05)", async () => {
+    selectRows = [PENDING];
+    const app = await buildApp();
+    const res = await request(app)
+      .post("/webhook/phone-reveal?secret=test-secret")
+      .send({
+        status: "success",
+        credits_consumed: 8,
+        missing_records: 0,
+        unique_enriched_records: 1,
+        total_requested_enrichments: 1,
+        people: [
+          {
+            id: "person-1",
+            status: "success",
+            phone_numbers: [
+              {
+                id: "6a7ec7cfa3077100010153cb",
+                type_cd: "work_direct",
+                status_cd: "valid_number",
+                raw_number: "+1 626-304-9023",
+                confidence_cd: "high",
+                dnc_status_cd: "dnc",
+                dnc_other_info: null,
+                sanitized_number: "+16263049023",
+              },
+              {
+                id: "6a7ec7cfa3077100010153cc",
+                type_cd: "mobile",
+                status_cd: "valid_number",
+                raw_number: "+1 310-980-7320",
+                confidence_cd: "high",
+                dnc_status_cd: null,
+                sanitized_number: "+13109807320",
+              },
+            ],
+          },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    const stored = updates.find((u) => u.status === "found") as any;
+    // The mobile wins even though it is second — `type_cd` is where Apollo puts
+    // the type on the callback.
+    expect(stored.mobilePhone).toBe("+13109807320");
+    expect(stored.phoneNumbers[0].type).toBe("work_direct");
+    expect(stored.phoneNumbers[0].status).toBe("valid_number");
+    expect(stored.phoneNumbers[0].confidence).toBe("high");
+    // DNC arrives as `dnc_status_cd`; reading only `dnc_status` would silently
+    // report every number as clear to dial.
+    expect(stored.phoneNumbers[0].dncStatus).toBe("dnc");
+    expect(stored.phoneNumbers[0].doNotCall).toBe(true);
+    expect(stored.phoneNumbers[1].doNotCall).toBe(false);
+  });
+
+  it("marks a person-level failure as failed, not as not_found", async () => {
+    selectRows = [PENDING];
+    const app = await buildApp();
+    await request(app)
+      .post("/webhook/phone-reveal?secret=test-secret")
+      .send({ status: "success", credits_consumed: 0, people: [{ id: "person-1", status: "failed", phone_numbers: [] }] });
+
+    expect(updates.some((u) => u.status === "failed")).toBe(true);
+    expect(mockUpdateCostStatus).toHaveBeenCalledWith("reveal-run-1", "cost-1", "cancelled", expect.anything());
+  });
+
   it("answers 200 with updated:0 when nothing matches (never a 4xx Apollo would count against us)", async () => {
     selectRows = [];
     const app = await buildApp();

@@ -8,6 +8,7 @@ import {
   PHONE_REVEAL_COST_NAME,
   PHONE_REVEAL_MAX_CREDITS,
   peopleFromWebhook,
+  personSaysFailed,
   phonesForPerson,
   pickPrimaryPhone,
   primaryNumber,
@@ -157,9 +158,11 @@ router.post("/webhook/phone-reveal", async (req: Request, res: Response) => {
   }
 
   const phonesByPersonId = new Map<string, RevealedPhone[]>();
+  const failedPersonIds = new Set<string>();
   for (const person of people) {
     if (!person.id) continue;
     phonesByPersonId.set(String(person.id), phonesForPerson(person));
+    if (personSaysFailed(person)) failedPersonIds.add(String(person.id));
   }
 
   const failed = webhookSaysFailed(payload);
@@ -174,7 +177,7 @@ router.post("/webhook/phone-reveal", async (req: Request, res: Response) => {
     const found = phones.length > 0;
     // Absent is a real answer: no number is reported as `not_found`, never as a
     // failure and never as a guess.
-    const status = found ? "found" : failed ? "failed" : "not_found";
+    const status = found ? "found" : failed || failedPersonIds.has(row.apolloPersonId) ? "failed" : "not_found";
     const creditsConsumed = reportedCredits ?? (found ? PHONE_REVEAL_MAX_CREDITS : 0);
 
     // Persist the number FIRST so a reconcile failure can never lose it.

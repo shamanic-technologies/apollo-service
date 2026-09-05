@@ -4102,6 +4102,11 @@
             "type": "number",
             "nullable": true
           },
+          "confidence": {
+            "type": "string",
+            "nullable": true,
+            "description": "Apollo's confidence in the number, when it sends one."
+          },
           "doNotCall": {
             "type": "boolean",
             "description": "Derived from dncStatus/dialer flags: true means the number must never be dialled. Unknown DNC values are treated as true."
@@ -4115,6 +4120,7 @@
           "dncStatus",
           "dncOtherInfo",
           "position",
+          "confidence",
           "doNotCall"
         ]
       },
