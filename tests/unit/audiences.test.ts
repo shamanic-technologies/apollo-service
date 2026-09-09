@@ -715,6 +715,94 @@ describe("Apollo audience endpoints", () => {
     warn.mockRestore();
   });
 
+  it("a chat-service rejection burns the retry budget, not the run", async () => {
+    // chat-service answers 502 when the model's output does not parse as JSON.
+    // That used to escape the whole run and discard every explored round.
+    mockChatComplete
+      .mockReset()
+      .mockRejectedValueOnce(
+        new Error(
+          '[apollo-service][chat-client] POST /complete returned 502: {"error":"LLM returned invalid JSON."}',
+        ),
+      )
+      .mockResolvedValue(stop(FINAL_FILTERS));
+    setCounts(42000);
+
+    const res = await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(200);
+
+    expect(res.body.count).toBe(42000);
+    expect(res.body.stoppedReason).toBe("model_stopped");
+    // Visible in the trace exactly like any other unusable-output turn — the
+    // provider error is never swallowed.
+    expect(state.inserted.refineTrace[0].action).toBe("invalid");
+    expect(state.inserted.refineTrace[0].validationErrors[0]).toContain("LLM returned invalid JSON");
+    expect(mockChatComplete).toHaveBeenCalledTimes(2);
+  });
+
+  it("exhausting the budget on chat-service rejections returns the rounds already explored", async () => {
+    mockChatComplete
+      .mockReset()
+      .mockResolvedValueOnce(round(FIRST_ENCODING))
+      .mockRejectedValue(new Error("[apollo-service][chat-client] POST /complete returned 502: {}"));
+    setCounts(1000);
+
+    const res = await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(200);
+
+    // The run ends on the budget, NOT by throwing: the explored round is served.
+    expect(res.body.candidates).toHaveLength(1);
+    expect(res.body.candidates[0].count).toBe(1000);
+    expect(res.body.stoppedReason).toBe("invalid_budget_exhausted");
+    expect(mockChatComplete).toHaveBeenCalledTimes(5); // 1 round + 4 rejections (4th trips the budget)
+  });
+
+  it("the wall-clock deadline stops the loop mid-run and is reported", async () => {
+    // Each model turn "takes" 80s of wall clock, so the 210s bound trips on the
+    // third — before its dry-run, which nobody is waiting for any more.
+    let clock = 0;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => clock);
+    let turn = 0;
+    mockChatComplete.mockReset().mockImplementation(async () => {
+      clock += 80_000;
+      turn += 1;
+      return round({ personTitles: [`Title ${turn}`] });
+    });
+    setCounts(1000, 2000);
+
+    const res = await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(200);
+
+    expect(res.body.stoppedReason).toBe("deadline");
+    expect(res.body.candidates).toHaveLength(2);
+    expect(mockChatComplete).toHaveBeenCalledTimes(3);
+    // No dry-run was run for the aborted third turn.
+    expect(state.inserted.refineTrace.at(-1).action).toBe("deadline");
+    nowSpy.mockRestore();
+  });
+
+  it("the model stopping on its own terms is NOT reported as a deadline", async () => {
+    mockChatComplete.mockReset().mockResolvedValue(stop(FINAL_FILTERS));
+    setCounts(42000);
+
+    const res = await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(200);
+
+    expect(res.body.stoppedReason).toBe("model_stopped");
+  });
+
   it("a run where every set matched NOBODY still throws, nothing persisted", async () => {
     mockChatComplete.mockReset().mockResolvedValue(stop({ personTitles: ["Nobody"] }));
     setCounts(0);

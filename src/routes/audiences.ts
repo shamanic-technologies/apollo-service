@@ -113,6 +113,7 @@ router.post("/audiences/suggest-from-segment", serviceAuth, async (req: Authenti
       filters: refined.filters,
       count: refined.count,
       degraded: refined.degraded,
+      stoppedReason: refined.stoppedReason,
       candidates,
     });
   } catch (error) {

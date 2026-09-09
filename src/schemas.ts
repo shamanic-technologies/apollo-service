@@ -1277,6 +1277,12 @@ const SuggestFromSegmentResponseSchema = z
       description:
         "LEGACY. There is no per-round self-grade left to withhold a blessing, so this is false whenever an audience is returned — which is what it already was in production. Read `candidates`.",
     }),
+    stoppedReason: z
+      .enum(["model_stopped", "rounds_exhausted", "deadline", "invalid_budget_exhausted", "duplicate_budget_exhausted"])
+      .openapi({
+        description:
+          "Why the loop stopped. `deadline` means the run hit this endpoint's 210s wall-clock bound and the exploration was cut short — the candidates returned are what it had explored by then, all of them persisted. Every other value means the run finished on its own terms.",
+      }),
     candidates: z.array(RefineCandidateSchema).openapi({
       description:
         "EVERY round the loop explored, in ROUND ORDER — not ranked, not sorted, not filtered. apollo-service explores Apollo's filter space and reports what each round returned; choosing which audience serves the customer is the consumer's decision. The sample rows matter as much as the counts: they are what tells Mars and Lidl from Abderhalden Drogerie.",

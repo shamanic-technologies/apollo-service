@@ -59,10 +59,29 @@ const REFINE_MODEL = "glm-pro" as const;
 /** Rounds of live dry-run feedback the model gets. Each one returns a count AND
  * a sample of who matched. */
 const MAX_ROUNDS = 10;
-/** Extra budget for unusable model output (malformed decision JSON or filters
- * rejected by the faithful schema). These do NOT consume a round — a provider
- * hiccup must not eat the exploration budget. */
+/** Extra budget for unusable model output (malformed decision JSON, filters
+ * rejected by the faithful schema, or chat-service REJECTING the completion
+ * outright). These do NOT consume a round — a provider hiccup must not eat the
+ * exploration budget.
+ *
+ * chat-service answers 502 when the model's output does not parse as JSON
+ * ("LLM returned invalid JSON"). That is the SAME class of provider hiccup as a
+ * response that parses into the wrong shape, and it used to be fatal: the throw
+ * escaped the whole run and discarded every round already explored, returning a
+ * 500 to the caller. It now burns one unit of this budget like any other
+ * unusable turn, and only exhausting the budget ends the run. */
 const MAX_INVALID_RETRIES = 3;
+/** Wall-clock bound the endpoint imposes on itself.
+ *
+ * A full run is ~10 model turns at 13-16s each (149s measured in production on
+ * 2026-09-09), plus extra turns for invalid output and duplicate queries — so
+ * the real worst case runs well past any caller's patience. The caller
+ * (human-service) waits 240s; 210s leaves margin for the network and for the
+ * caller's own work. No new turn starts past the deadline and an in-flight
+ * completion is aborted at it, so the endpoint always answers with whatever it
+ * has explored instead of being cut off mid-flight. Every round is already
+ * persisted as it goes, so answering early costs nothing. */
+export const REFINE_DEADLINE_MS = 210_000;
 /** Extra turns for a filter set that resolves to a query ALREADY dry-run in this
  * run. Like an invalid decision, a duplicate does NOT consume a round — running
  * the same query twice buys nothing and production runs were losing a fifth of
@@ -106,7 +125,9 @@ export interface RoundNotes {
 
 export interface RefineIteration {
   iteration: number;
-  action: "round" | "invalid" | "duplicate";
+  /** `deadline` is the terminal row of a run cut short by the wall-clock bound —
+   * nothing was proposed or run on it, it records WHY the run stopped. */
+  action: "round" | "invalid" | "duplicate" | "deadline";
   filters: Record<string, unknown> | null;
   count: number | null;
   /** Who the set actually matched. `null` on `invalid`/`duplicate` rows (nothing was run). */
@@ -125,7 +146,19 @@ export interface RefineInput {
   filtersPromptCatalog: string;
   apolloApiKey: string;
   tracking: ChatTrackingHeaders;
+  /** Wall-clock bound for this run. Defaults to REFINE_DEADLINE_MS; the route
+   * does not pass it, tests do. */
+  deadlineMs?: number;
 }
+
+/** Why the loop stopped. A run cut short by the wall-clock bound is
+ * distinguishable from one that finished on its own terms. */
+export type RefineStopReason =
+  | "model_stopped"
+  | "rounds_exhausted"
+  | "deadline"
+  | "invalid_budget_exhausted"
+  | "duplicate_budget_exhausted";
 
 /** One explored round, reported as-is. No score, no rank, no self-grade — the
  * count and the sample are the evidence, the notes are the model's own account
@@ -152,6 +185,9 @@ export interface RefineResult {
   degraded: boolean;
   /** EVERY round that was dry-run, in round order. The deliverable. */
   candidates: RefineCandidate[];
+  /** Why the loop stopped — `deadline` means the run was cut short by the
+   * wall-clock bound and the exploration was NOT finished. */
+  stoppedReason: RefineStopReason;
   trace: RefineIteration[];
 }
 
@@ -461,24 +497,73 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
   /** encodingKey → the round number that already ran that exact query. */
   const seenEncodings = new Map<string, number>();
 
+  // Wall-clock bound. The endpoint answers within it in every case, returning
+  // whatever it has explored by then — the caller cannot pick a sensible timeout
+  // for an endpoint that offers no bound at all.
+  const deadlineAt = Date.now() + (input.deadlineMs ?? REFINE_DEADLINE_MS);
+  /** Nothing left to stop it: the loop ran its full round budget. */
+  let stoppedReason: RefineStopReason = "rounds_exhausted";
+  const stopOnDeadline = (): void => {
+    stoppedReason = "deadline";
+    step += 1;
+    trace.push({
+      iteration: step,
+      action: "deadline",
+      filters: null,
+      count: null,
+      reasoning: `stopped: the ${input.deadlineMs ?? REFINE_DEADLINE_MS}ms wall-clock bound was reached after ${rounds} round(s)`,
+    });
+  };
+
   while (rounds < MAX_ROUNDS) {
+    if (Date.now() >= deadlineAt) {
+      stopOnDeadline();
+      break;
+    }
     step += 1;
     const message = buildUserMessage(input, trace, rounds);
-    const res = await chatComplete(
-      {
-        message,
-        systemPrompt,
-        // Cheap AND smart, in SCHEMALESS JSON mode — the Zod guards below
-        // validate the shape, so no responseSchema is sent. Reasoning stays ON:
-        // judgement is the whole job here.
-        provider: REFINE_PROVIDER,
-        model: REFINE_MODEL,
-        responseFormat: "json",
-        temperature: 0.2,
-        maxTokens: 2000,
-      },
-      input.tracking,
-    );
+    let res: Awaited<ReturnType<typeof chatComplete>>;
+    try {
+      res = await chatComplete(
+        {
+          message,
+          systemPrompt,
+          // Cheap AND smart, in SCHEMALESS JSON mode — the Zod guards below
+          // validate the shape, so no responseSchema is sent. Reasoning stays ON:
+          // judgement is the whole job here.
+          provider: REFINE_PROVIDER,
+          model: REFINE_MODEL,
+          responseFormat: "json",
+          temperature: 0.2,
+          maxTokens: 2000,
+          // A completion still in flight at the deadline is worthless: the run
+          // has to answer with what it has.
+          signal: AbortSignal.timeout(Math.max(deadlineAt - Date.now(), 1)),
+        },
+        input.tracking,
+      );
+    } catch (error) {
+      // chat-service REJECTED the model response (502 "LLM returned invalid
+      // JSON") or the call itself failed. Same class as a response that parses
+      // into the wrong shape: unusable model output. It burns the retry budget,
+      // NOT a round, and it is recorded in the trace like any other unusable
+      // turn — never swallowed. Only exhausting the budget ends the run, and it
+      // ends by returning the rounds already explored.
+      invalidRetries += 1;
+      trace.push({
+        iteration: step,
+        action: "invalid",
+        filters: null,
+        count: null,
+        reasoning: "chat-service did not return a usable model response",
+        validationErrors: [error instanceof Error ? error.message : String(error)],
+      });
+      if (invalidRetries > MAX_INVALID_RETRIES) {
+        stoppedReason = "invalid_budget_exhausted";
+        break;
+      }
+      continue;
+    }
 
     const parsed = RefineDecisionSchema.safeParse(res.json);
     if (!parsed.success) {
@@ -492,7 +577,10 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
         reasoning: "model decision did not match {filters, toContinue}",
         validationErrors: parsed.error.issues.map((e) => `${e.path.join(".")}: ${e.message}`),
       });
-      if (invalidRetries > MAX_INVALID_RETRIES) break;
+      if (invalidRetries > MAX_INVALID_RETRIES) {
+        stoppedReason = "invalid_budget_exhausted";
+        break;
+      }
       continue;
     }
 
@@ -509,7 +597,10 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
         reasoning: reasoning ?? "",
         validationErrors: [`filters: not a JSON object (${String(parsed.data.filters).slice(0, 200)})`],
       });
-      if (invalidRetries > MAX_INVALID_RETRIES) break;
+      if (invalidRetries > MAX_INVALID_RETRIES) {
+        stoppedReason = "invalid_budget_exhausted";
+        break;
+      }
       continue;
     }
 
@@ -531,7 +622,10 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
         reasoning: reasoning ?? "",
         validationErrors,
       });
-      if (invalidRetries > MAX_INVALID_RETRIES) break;
+      if (invalidRetries > MAX_INVALID_RETRIES) {
+        stoppedReason = "invalid_budget_exhausted";
+        break;
+      }
       continue;
     }
 
@@ -554,8 +648,19 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
           `same query as round #${seenAt} (value order and empty fields do not make a set different) — propose a different one`,
         ],
       });
-      if (duplicateRetries > MAX_DUPLICATE_RETRIES) break;
+      if (duplicateRetries > MAX_DUPLICATE_RETRIES) {
+        stoppedReason = "duplicate_budget_exhausted";
+        break;
+      }
       continue;
+    }
+
+    // The completion can come back with the deadline already past. Running four
+    // more Apollo calls for a round nobody is waiting for only overshoots the
+    // bound — stop here and report what was explored.
+    if (Date.now() >= deadlineAt) {
+      stopOnDeadline();
+      break;
     }
 
     // A valid, not-yet-run filter set we can dry-run — this consumes one round.
@@ -582,7 +687,10 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
       reasoning: reasoning ?? "",
     });
 
-    if (toContinue === false) break;
+    if (toContinue === false) {
+      stoppedReason = "model_stopped";
+      break;
+    }
   }
 
   // EVERY round that ran, in round order — the deliverable. Nothing is scored,
@@ -611,7 +719,9 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
   // Apollo being unreachable, which already threw above).
   if (!chosen) {
     logRefineTrace(input, trace, "no_usable_set");
-    throw new Error("[apollo-service][refineAudience] no filter set validated and matched at least one person");
+    throw new Error(
+      `[apollo-service][refineAudience] no filter set validated and matched at least one person (stopped: ${stoppedReason})`,
+    );
   }
 
   return {
@@ -620,6 +730,7 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
     status: "confirmed",
     degraded: false,
     candidates,
+    stoppedReason,
     trace,
   };
 }
