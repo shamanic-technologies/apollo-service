@@ -14,7 +14,7 @@
 
 import { fetchWithRetry } from "./fetch-retry.js";
 
-export type ChatProvider = "google" | "anthropic" | "deepseek" | "zai";
+export type ChatProvider = "google" | "anthropic" | "deepseek" | "zai" | "openai";
 export type ChatModel =
   | "flash"
   | "flash-lite"
@@ -27,7 +27,10 @@ export type ChatModel =
   // `json_schema`), which suits this loop: it runs schemaless JSON validated by
   // Zod guards, exactly like Gemini JSON mode.
   | "deepseek-pro"
-  | "glm-pro";
+  | "glm-pro"
+  // OpenAI GPT-6 Astra. It REJECTS `temperature` != 1 and `top_p` outright
+  // (400 `unsupported_value`), so no sampling parameter may be sent with it.
+  | "gpt-pro";
 
 export interface ChatCompleteParams {
   message: string;
