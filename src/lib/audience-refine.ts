@@ -45,16 +45,24 @@ import { toCreditAlertIdentity, type CreditAlertIdentity } from "./credit-alert.
 import { searchPeople, type ApolloPerson } from "./apollo-client.js";
 import { SearchFiltersSchema } from "../schemas.js";
 
-/** The model this loop runs on: cheap AND smart, per the owner's instruction.
+/** The model this loop runs on: OpenAI GPT-6 Astra, since 2026-09-09.
  *
- * A/B'd head-to-head against `deepseek/deepseek-pro` on the Swiss-drugstores
+ * The owner moved every onboarding step that PRE-FILLS something for a user
+ * onto Astra for quality ("les users doivent vraiment avoir le meilleur service
+ * possible"); the cost is accepted. Two Astra constraints hold here: it rejects
+ * `temperature` != 1 and `top_p` with a 400, so this call sends NO sampling
+ * parameter, and `disableThinking` maps to its lowest reasoning level — which
+ * this loop does not set, because judgement is the whole job.
+ *
+ * History, kept: the loop previously ran on `zai/glm-pro`, picked after a
+ * head-to-head against `deepseek/deepseek-pro` on the Swiss-drugstores
  * description, 3 runs each (2026-09-01). `glm-pro` returned recognisable target
  * employers (Vita Drogerie AG, LANUR, PANVEGA); `deepseek-pro` returned a wider
  * spread AND off-target companies (Emmi Group, Transgourmet, CALIDA).
  *
  * Anthropic is off the table for this loop for good (#236/#241). */
-const REFINE_PROVIDER = "zai" as const;
-const REFINE_MODEL = "glm-pro" as const;
+const REFINE_PROVIDER = "openai" as const;
+const REFINE_MODEL = "gpt-pro" as const;
 
 /** Rounds of live dry-run feedback the model gets. Each one returns a count AND
  * a sample of who matched. */
@@ -528,13 +536,12 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
         {
           message,
           systemPrompt,
-          // Cheap AND smart, in SCHEMALESS JSON mode — the Zod guards below
-          // validate the shape, so no responseSchema is sent. Reasoning stays ON:
-          // judgement is the whole job here.
+          // SCHEMALESS JSON mode — the Zod guards below validate the shape, so
+          // no responseSchema is sent. Reasoning stays ON: judgement is the
+          // whole job here. No `temperature`/`top_p`: Astra 400s on both.
           provider: REFINE_PROVIDER,
           model: REFINE_MODEL,
           responseFormat: "json",
-          temperature: 0.2,
           maxTokens: 2000,
           // A completion still in flight at the deadline is worthless: the run
           // has to answer with what it has.

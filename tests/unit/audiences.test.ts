@@ -189,12 +189,14 @@ describe("Apollo audience endpoints", () => {
     expect(res.body.count).toBe(42000);
     expect(res.body.degraded).toBe(false);
     expect(mockChatComplete).toHaveBeenCalledTimes(2);
-    // Schemaless JSON mode on the cheap-and-smart model (zai/glm-pro). No
-    // Anthropic, no google/pro.
+    // Schemaless JSON mode on OpenAI GPT-6 Astra. No Anthropic, no google/pro,
+    // no zai/glm-pro.
     expect(mockChatComplete).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "zai", model: "glm-pro", responseFormat: "json" }),
+      expect.objectContaining({ provider: "openai", model: "gpt-pro", responseFormat: "json" }),
       expect.anything(),
     );
+    // Astra 400s on any sampling parameter — none is sent.
+    expect(mockChatComplete.mock.calls[0][0].temperature).toBeUndefined();
     // Reasoning stays ON.
     expect(mockChatComplete.mock.calls[0][0].disableThinking).toBeUndefined();
     // Schemaless: no responseSchema is sent — the Zod guards validate.
