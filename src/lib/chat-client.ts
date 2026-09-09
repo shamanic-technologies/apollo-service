@@ -44,6 +44,10 @@ export interface ChatCompleteParams {
   /** Minimize the model's internal reasoning. Provider-floored: Gemini 3 (incl.
    * flash-pro) drops to its lowest level (`minimal`), not full-off. */
   disableThinking?: boolean;
+  /** Abort the outbound call. Used by callers that own a wall-clock bound (the
+   * audience refine loop): a completion still in flight when the caller's
+   * deadline passes is worthless, and the caller must answer regardless. */
+  signal?: AbortSignal;
 }
 
 export interface ChatCompleteResult {
@@ -138,6 +142,7 @@ export async function chatComplete(
     method: "POST",
     headers: isPlatform ? buildPlatformHeaders() : buildHeaders(tracking),
     body: JSON.stringify(body),
+    ...(params.signal && { signal: params.signal }),
   });
 
   if (!res.ok) {

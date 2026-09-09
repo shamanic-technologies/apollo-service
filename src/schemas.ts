@@ -1236,14 +1236,56 @@ export const SuggestFromSegmentRequestSchema = z
   })
   .openapi("SuggestFromSegmentRequest");
 
+const SampledPersonSchema = z
+  .object({
+    company: z.string().nullable().openapi({ description: "Employer name." }),
+    title: z.string().nullable().openapi({ description: "The person's title." }),
+  })
+  .openapi("SampledPerson", {
+    description:
+      "One sampled person. Company + title is ALL Apollo's free teaser serves — every location field is redacted to a has_* boolean, so location is never present and obtaining it would need paid enrichment.",
+  });
+
+const RefineCandidateSchema = z
+  .object({
+    apolloAudienceId: z.string().openapi({ description: "Persisted apollo-audience id for THIS round's filter set." }),
+    round: z.number().int().openapi({ description: "1-based position in the run, in the order the rounds were explored." }),
+    filters: ApolloNativeSearchFiltersSchema.openapi({ description: "The Apollo-native filter object this round proposed." }),
+    count: z.number().int().openapi({ description: "Live match-count (verified-email contactable pool) for this round's filters." }),
+    sample: z
+      .array(SampledPersonSchema)
+      .openapi({ description: "10 people drawn from RANDOM pages of this round's result set — what the set actually matched." }),
+    notes: z
+      .object({
+        whatWorked: z.string(),
+        whatToImprove: z.string(),
+        nextExperiment: z.string(),
+      })
+      .openapi({ description: "The model's own three one-sentence notes for this round. Its memory of what it was trying — not a grade." }),
+  })
+  .openapi("RefineCandidate");
+
 const SuggestFromSegmentResponseSchema = z
   .object({
-    apolloAudienceId: z.string().openapi({ description: "Persisted apollo-audience id. human-service stores ONLY this pointer." }),
-    filters: ApolloNativeSearchFiltersSchema.openapi({ description: "The confirmed Apollo-native filter object." }),
-    count: z.number().int().openapi({ description: "Live match-count snapshot for the confirmed filters." }),
+    apolloAudienceId: z.string().openapi({
+      description:
+        "LEGACY single result — the persisted id of the largest non-empty round. Kept additively; read `candidates` instead.",
+    }),
+    filters: ApolloNativeSearchFiltersSchema.openapi({ description: "LEGACY single result — that round's Apollo-native filter object." }),
+    count: z.number().int().openapi({ description: "LEGACY single result — that round's live match-count." }),
     degraded: z.boolean().openapi({
       description:
-        "TRUE when no filter set was judged MECE with the described target and the refine loop fell back to its best available non-empty attempt. The audience is usable but unblessed — a quality signal, not an error. FALSE on the normal path.",
+        "LEGACY. There is no per-round self-grade left to withhold a blessing, so this is false whenever an audience is returned — which is what it already was in production. Read `candidates`.",
+    }),
+    stoppedReason: z
+      .enum(["model_stopped", "rounds_exhausted", "deadline", "invalid_budget_exhausted", "duplicate_budget_exhausted"])
+      .openapi({
+        description:
+          "Why the loop stopped. `deadline` means the run hit this endpoint's 210s wall-clock bound and the exploration was cut short — the candidates returned are what it had explored by then, all of them persisted. Every other value means the run finished on its own terms.",
+      }),
+    candidates: z.array(RefineCandidateSchema).openapi({
+      description:
+        "EVERY round the loop explored, in ROUND ORDER — not ranked, not sorted, not filtered. apollo-service explores Apollo's filter space and reports what each round returned; choosing which audience serves the customer is the consumer's decision. The sample rows matter as much as the counts: they are what tells Mars and Lidl from Abderhalden Drogerie.",
     }),
   })
   .openapi("SuggestFromSegmentResponse");
@@ -1269,7 +1311,7 @@ registry.registerPath({
   path: "/audiences/suggest-from-segment",
   summary: "Build + persist a faithful Apollo audience from a natural-language segment",
   description:
-    "Runs the agentic NL→faithful-Apollo-filters refine loop (LLM via chat-service, free Apollo dry-runs for live counts), then persists the confirmed audience. Returns the apollo-audience id, the faithful filters, and the count snapshot. The LLM cost is owned by chat-service; this endpoint declares no cost (dry-runs are free).",
+    "Runs the agentic NL→faithful-Apollo-filters refine loop (LLM via chat-service, free Apollo dry-runs for live counts) and persists EVERY round it explored as its own apollo-audience row. Returns `candidates`: one entry per round, in round order, each with its persisted id, filters, live count, 10 random-page sample rows and the model's three notes. This service explores and reports; it does not judge, rank or sort. The legacy single-result fields are kept additively. The LLM cost is owned by chat-service; this endpoint declares no cost (dry-runs are free).",
   request: {
     headers: audienceHeaders,
     body: {
@@ -1322,5 +1364,116 @@ registry.registerPath({
     },
     404: { description: "Not found", content: { "application/json": { schema: ErrorResponseSchema } } },
     500: { description: "Internal server error", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+// ─── Phone reveal ────────────────────────────────────────────────────────────
+// Apollo does not return phone numbers by default: the reveal is OPT-IN, billed
+// separately, and ASYNCHRONOUS. Hence a route of its own (no existing caller can
+// trip it) + a read that says which of the four states the reveal is in.
+
+const phoneRevealHeaders = z.object({
+  "x-org-id": z.string(),
+  "x-user-id": z.string(),
+  "x-run-id": z.string().openapi({ description: "Caller's run ID — parent of the phone-reveal run this cost hangs on", example: "run-abc-123" }),
+  "x-brand-id": z.string().optional().openapi({ description: "Brand ID(s) — single UUID or comma-separated list" }),
+  "x-campaign-id": z.string().optional().openapi({ description: "Campaign ID" }),
+  "x-audience-id": z.string().optional(),
+  "x-feature-slug": z.string().optional(),
+  "x-workflow-slug": z.string().optional(),
+});
+
+const phoneRevealReadHeaders = z.object({
+  "x-org-id": z.string(),
+});
+
+const RevealedPhoneSchema = z
+  .object({
+    rawNumber: z.string().nullable(),
+    sanitizedNumber: z.string().nullable(),
+    type: z.string().nullable().openapi({ description: 'Apollo phone type, e.g. "mobile", "work_hq".' }),
+    status: z.string().nullable(),
+    dncStatus: z.string().nullable().openapi({ description: "Apollo's do-not-call status for THIS number, verbatim." }),
+    dncOtherInfo: z.string().nullable(),
+    position: z.number().nullable(),
+    confidence: z.string().nullable().openapi({ description: "Apollo's confidence in the number, when it sends one." }),
+    doNotCall: z.boolean().openapi({
+      description:
+        "Derived from dncStatus/dialer flags: true means the number must never be dialled. Unknown DNC values are treated as true.",
+    }),
+  })
+  .openapi("RevealedPhone");
+
+const PhoneRevealResponseSchema = z
+  .object({
+    revealId: z.string().uuid(),
+    apolloPersonId: z.string(),
+    status: z.enum(["pending", "found", "not_found", "failed"]).openapi({
+      description:
+        "pending = Apollo has not delivered yet; found = a number arrived; not_found = Apollo has no number for this person (a real answer, zero credits); failed = the reveal itself failed.",
+    }),
+    mobilePhone: z.string().nullable().openapi({ description: "The number to connect a rep on — the mobile when Apollo returned one." }),
+    dncStatus: z.string().nullable(),
+    doNotCall: z.boolean(),
+    phoneNumbers: z.array(RevealedPhoneSchema),
+    failureReason: z.string().nullable(),
+    creditsConsumed: z.number().nullable().openapi({ description: "Credits Apollo actually charged. 0 when nothing was found." }),
+    requestedAt: z.string().nullable(),
+    completedAt: z.string().nullable(),
+    reused: z.boolean().optional().openapi({ description: "True when an earlier reveal was served instead of spending again." }),
+  })
+  .openapi("PhoneRevealResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/people/{apolloPersonId}/phone-reveal",
+  summary: "Ask Apollo to reveal this person's phone number (opt-in, billed)",
+  description:
+    "Opt-in phone reveal. Apollo answers WITHOUT the number and delivers it asynchronously (minutes) to this service's callback, so this returns 202 with status \"pending\"; poll the GET for the result. Declares apollo-credit with quantity 8 (the worst case) as a provisioned hold before calling; the callback actualizes it when a number arrives and CANCELS it when none does, so a fruitless reveal costs nothing. Existing enrichment endpoints are untouched and never reveal a phone.",
+  request: {
+    headers: phoneRevealHeaders,
+    params: z.object({ apolloPersonId: z.string() }),
+  },
+  responses: {
+    200: { description: "A number was already available (or arrived synchronously)", content: { "application/json": { schema: PhoneRevealResponseSchema } } },
+    202: { description: "Reveal requested — Apollo will deliver the number to the callback", content: { "application/json": { schema: PhoneRevealResponseSchema } } },
+    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponseSchema } } },
+    402: { description: "Insufficient credits", content: { "application/json": { schema: ErrorResponseSchema } } },
+    500: { description: "Internal server error", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/people/{apolloPersonId}/phone-reveal",
+  summary: "Has the revealed phone number arrived yet?",
+  description:
+    "Reads the latest reveal for this person. `status` distinguishes not-here-yet from Apollo-found-nothing from the-reveal-failed. 404 means no reveal was ever requested for this person.",
+  request: {
+    headers: phoneRevealReadHeaders,
+    params: z.object({ apolloPersonId: z.string() }),
+  },
+  responses: {
+    200: { description: "The reveal's current state", content: { "application/json": { schema: PhoneRevealResponseSchema } } },
+    404: { description: "No reveal requested for this person", content: { "application/json": { schema: ErrorResponseSchema } } },
+    500: { description: "Internal server error", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+const PhoneRevealWebhookAckSchema = z
+  .object({ received: z.boolean(), updated: z.number() })
+  .openapi("PhoneRevealWebhookAck");
+
+registry.registerPath({
+  method: "post",
+  path: "/webhook/phone-reveal",
+  summary: "Apollo's asynchronous phone delivery callback",
+  description:
+    "Apollo POSTs a revealed phone here minutes after the reveal request. Authenticated by the ?secret query param (APOLLO_PHONE_REVEAL_WEBHOOK_SECRET). Answers 200 for any parseable body — Apollo disables a webhook that keeps failing — except when cost reconciliation could not complete, which answers 500 so Apollo redelivers.",
+  request: { params: z.object({}) },
+  responses: {
+    200: { description: "Delivery ingested", content: { "application/json": { schema: PhoneRevealWebhookAckSchema } } },
+    401: { description: "Invalid webhook secret", content: { "application/json": { schema: ErrorResponseSchema } } },
+    500: { description: "Phone stored, cost reconciliation failed — Apollo should retry", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });

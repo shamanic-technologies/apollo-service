@@ -162,6 +162,13 @@
       "when": 1779321600000,
       "tag": "0022_add_time_zone",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1779408000000,
+      "tag": "0023_add_phone_reveals",
+      "breakpoints": true
     }
   ]
 }

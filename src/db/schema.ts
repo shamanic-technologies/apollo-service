@@ -228,6 +228,80 @@ export const apolloAudiences = pgTable(
   ]
 );
 
+// ─── Apollo phone reveals ────────────────────────────────────────────────────
+// Apollo does NOT return phone numbers by default: a reveal is opt-in, charged
+// separately (~8 credits, and ZERO when nothing is found), and ASYNCHRONOUS —
+// Apollo answers the enrichment call immediately WITHOUT the number, then POSTs
+// the phone to a callback URL minutes later. This table is the reveal's whole
+// lifecycle: one row per (org, apollo person) reveal request.
+//
+// Layering:
+//   bronze → `webhookPayload` (Apollo's raw callback body, verbatim)
+//   silver → `phoneNumbers` (Apollo's phone objects, incl. per-number dnc)
+//   gold   → `status` + `mobilePhone` + `dncStatus` (what a consumer reads)
+//
+// `status` is the whole point of the table for the consumer: it distinguishes
+// "not here yet" (pending) from "Apollo found nothing" (not_found) from "the
+// reveal failed" (failed) — three states a null phone column cannot express.
+export const apolloPhoneReveals = pgTable(
+  "apollo_phone_reveals",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id").notNull(),
+    userId: text("user_id"),
+
+    // Who we asked Apollo about.
+    apolloPersonId: text("apollo_person_id").notNull(),
+
+    // Inbound caller run + the child run this reveal's cost hangs on.
+    runId: text("run_id"),
+    revealRunId: text("reveal_run_id"),
+
+    // Hierarchy IDs (same tracking dimensions as every other table here).
+    brandIds: text("brand_ids").array(),
+    campaignId: text("campaign_id"),
+    audienceId: text("audience_id"),
+    featureSlug: text("feature_slug"),
+    workflowSlug: text("workflow_slug"),
+
+    // Apollo's request_id from the synchronous response — the join key the
+    // async callback carries back.
+    apolloRequestId: text("apollo_request_id"),
+
+    // "pending" | "found" | "not_found" | "failed"
+    status: text("status").notNull().default("pending"),
+
+    // Gold: the number a rep would be connected on, and its DNC flag.
+    mobilePhone: text("mobile_phone"),
+    dncStatus: text("dnc_status"),
+    // Silver: every phone Apollo returned, each with its own dnc status.
+    phoneNumbers: jsonb("phone_numbers"),
+
+    // Bronze: Apollo's raw callback body.
+    webhookPayload: jsonb("webhook_payload"),
+
+    failureReason: text("failure_reason"),
+
+    // Cost accounting: the pre-call hold, what Apollo says it charged, and when
+    // the hold was reconciled (actualized or cancelled). NULL `costReconciledAt`
+    // on a terminal row means the reconcile still owes — the callback retries it.
+    keySource: text("key_source"),
+    provisionedCostId: text("provisioned_cost_id"),
+    creditsConsumed: integer("credits_consumed"),
+    costReconciledAt: timestamp("cost_reconciled_at", { withTimezone: true }),
+
+    requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_phone_reveals_org_person").on(table.orgId, table.apolloPersonId),
+    index("idx_phone_reveals_request").on(table.apolloRequestId),
+    index("idx_phone_reveals_status").on(table.status),
+  ]
+);
+
 export type ApolloPeopleSearch = typeof apolloPeopleSearches.$inferSelect;
 export type NewApolloPeopleSearch = typeof apolloPeopleSearches.$inferInsert;
 export type ApolloPeopleEnrichment = typeof apolloPeopleEnrichments.$inferSelect;
@@ -236,3 +310,5 @@ export type ApolloSearchCursor = typeof apolloSearchCursors.$inferSelect;
 export type NewApolloSearchCursor = typeof apolloSearchCursors.$inferInsert;
 export type ApolloAudience = typeof apolloAudiences.$inferSelect;
 export type NewApolloAudience = typeof apolloAudiences.$inferInsert;
+export type ApolloPhoneReveal = typeof apolloPhoneReveals.$inferSelect;
+export type NewApolloPhoneReveal = typeof apolloPhoneReveals.$inferInsert;

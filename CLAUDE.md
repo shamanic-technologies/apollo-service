@@ -29,21 +29,70 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
   not in human-service. It calls **chat-service** for the LLM (chat-service owns
   the LLM cost — apollo-service declares NONE for it) and uses the FREE Apollo
   people-search teaser (zero credits at any page size) for live feedback.
-- **The refine loop is a strong model, a plain goal, a real budget, and its own
-  final answer. It is deliberately UNDER-instructed — do not add rules to it.**
-  The model gets three things: the audience description, the Apollo filter catalog
-  (`buildFiltersPrompt`), and the goal — find the filter set that best answers this
-  description. Each proposal is dry-run and the result comes back to it. Up to
-  **10** attempts (`MAX_REAL_ATTEMPTS`), plus a SEPARATE `MAX_INVALID_RETRIES` (3)
-  budget for malformed output, which must never eat a real attempt.
-  - **The set the model returns with `action:"final"` IS the result.** No code
-    re-ranks, scores, filters or arbitrates. If the budget runs out before it
-    answers, its most recent proposal stands — that is still its own latest
-    answer, not a selection. There is no `pickBest`, no max-count rule, no
-    minimum-encodings gate, no premature-confirm rejection.
+- **The refine loop gets DATA and CONTEXT, never targeting rules — do not add
+  rules to it.** Every round the model receives: the original request VERBATIM,
+  the Apollo filter catalog (`buildFiltersPrompt`), the COLD-EMAIL business
+  context (below), its round budget, and the FULL ordered history of previous
+  rounds. Up to **10** rounds (`MAX_ROUNDS`), plus a SEPARATE
+  `MAX_INVALID_RETRIES` (3) budget for malformed output and a SEPARATE
+  `MAX_DUPLICATE_RETRIES` (3) budget for a repeated encoding — neither may eat a
+  round.
+  - **The model has never been told what the audience is FOR — that was the root
+    cause, and the fix is the cold-email context, not another rule.** With only a
+    description, PRECISION is the only objective a model can infer, so it stacks
+    ANDed constraints with great diligence and ships an audience of 4. Ablating
+    one shipped final set one constraint at a time: 4 as shipped → 7 without the
+    employee ranges → 23 without seniorities → 161 without `organization_industries`
+    → **664** without the 27-term `q_not_organization_keyword_tags` blocklist →
+    10,791 without industries + both blocklists. Apollo assigns roughly ONE
+    industry per company (listing four and missing the right one deletes the
+    target) and a drugstore carrying an incidental `beauty` tag excludes itself
+    from its own audience. `COLD_EMAIL_CONTEXT` states the trade-off: noise costs
+    a little budget, an audience of 4 makes the engagement pointless.
+  - **BOTH halves of the volume guidance ship together, or the change is a
+    regression.** The orientation numbers (hard to justify below ~2,000
+    contactable, a durable client looks like ~50,000) are CONTEXT explaining why
+    volume matters — NOT a floor. A model told "below 2,000 is pointless" without
+    the counterweight loosens until it reaches 2,000, and the only way there is
+    Migros Industrie, ADM and Emmi. So the prompt says plainly, in the same
+    breath, that a genuinely small market is a VALID, CORRECT answer to be
+    reported honestly rather than inflated, and never to loosen the request to
+    reach a number. A numeric target in a prompt makes a model fabricate when
+    reality cannot meet it — documented in this codebase; this is its live case.
+  - **THIS SERVICE EXPLORES AND REPORTS — IT DOES NOT CHOOSE (#246).** Every round
+    is persisted as its own `apollo_audiences` row and every round is returned, in
+    ROUND ORDER, as `candidates[]` — each carrying its persisted apollo-audience
+    id, its filters, its live count, its 24 random-page sample rows and the model's
+    three notes. Nothing here ranks, scores or sorts. WHICH audience serves the
+    customer is a product decision made in **human-service**: it did not author the
+    sets (so it has no stake in any of them) and choosing among N is COMPARATIVE,
+    which is exactly what does not degenerate. `toContinue` stays — the model may
+    still stop early when satisfied. Rows are cheap and the unchosen ones are a
+    useful record of what was explored.
+  - **`showable` is DELETED and no per-round self-grade replaces it, under any
+    name.** It was `true` on 60 of 60 rounds. That is the THIRD absolute
+    self-judgement in this loop to degenerate to a constant —
+    `reachesOffTarget`/`leavesTargetUnreached` were always clean, `matchesRequest`
+    was always true (including on World Health Organization and HORNBACH
+    Baumarkt), `showable` was always true — so selection collapsed to plain
+    argmax-count and the loosest round of each run won (179,156 people at Mars,
+    Lidl, Bucherer and Manor, marked showable). The pattern is settled: a model
+    grading its own proposal in isolation answers the same way every time. The
+    exploration was never the problem — nearly every run already contains a round
+    in the low hundreds to ~2,000 with recognisable targets. The model writes the
+    right filter set; it cannot pick it. Do NOT re-introduce a per-round
+    self-grade, and do NOT convert one into a ranking.
+  - **Each round's history entry carries filters, count, sample and the model's
+    own three one-sentence notes** (`whatWorked`, `whatToImprove`,
+    `nextExperiment`). The notes are the model's own memory of what it was trying —
+    they are fed back, never graded, and they ship on the candidate so whoever
+    chooses can read what the round was for.
   - **Each dry-run returns a COUNT and a SAMPLE of who matched** (`dryRunSample`):
-    ~20 people drawn from up to 2 RANDOM pages (`SAMPLE_PAGES` × `SAMPLE_PER_PAGE`,
-    clamped to Apollo's 500-page cap), each rendered as `employer — title`.
+    **24** people drawn from up to 3 RANDOM pages (`SAMPLE_PAGES` ×
+    `SAMPLE_ROWS_PER_PAGE`, clamped to Apollo's 500-page cap), each rendered as
+    `employer — title`. Ten rows was too thin a basis for judging the composition
+    of a several-thousand-person set and the teaser is free at any page size, so
+    #249 raised it; keep the RANDOM-page draw.
     **That is ALL Apollo's free teaser serves** — a person comes back as
     `id, first_name, last_name_obfuscated, title, organization` plus `has_city` /
     `has_state` / `has_country` BOOLEANS, and the nested organization carries only
@@ -52,51 +101,131 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
     values. Consequence worth knowing: the sample exposes an off-target SECTOR
     (Emmi Group and World Vision in a "drugstores" audience) but cannot expose a
     GEOGRAPHY leak, so a bare `Switzerland` where cantons were asked for gets no
-    feedback from it. Random pages, never the head: Apollo RANKS results, so page 1 is
+    feedback from it. **That is ACCEPTED, by design: geography is out of scope for
+    the loop's feedback and the CUSTOMER is the feedback loop for that axis** — the
+    resulting Apollo filters are rendered in the onboarding UI, so a missing canton
+    constraint is visible to the human who wrote the request. Do NOT "fix" it with a
+    geography rule in the prompt, and do NOT try to re-derive location from company
+    names. Real per-person location would need paid enrichment, which turns a free
+    sample into a billed one. Random pages, never the head: Apollo RANKS results, so page 1 is
     biased in the direction that hides the bug (a set leaking into Romandie shows
     clean German-Swiss shops on page 1 while Geneva sits on page 40). The sample
     is what REPLACES the deleted rules — the model sees Procter & Gamble and Rolex
     in a "drugstores" audience and draws its own conclusion, and sees a sample thin
     out when it invented a headcount clamp. Do NOT re-add the rules alongside it.
-  - **ONE closing question, and it decides NOTHING.** `matchesRequest` on the
-    `final` turn ("does this set match what was asked?") populates the response's
-    `degraded` flag. It is read AFTER the set is chosen; an omitted answer, or an
-    exhausted budget, is also `degraded: true`. It must never influence selection —
-    that non-influence is the entire point (the model both issuing a verdict and
-    benefiting from it is what produced #225/#230). `degraded` stays on the
-    response: human-service reads it and the dashboard renders it.
-  - **Degrade, never throw, except for real errors.** chat-service or Apollo
-    unreachable, missing config, and a chosen set that matches NOBODY (`count === 0`)
-    still throw. Everything else returns a usable set with the flag.
-  - **A degraded or failed run logs its FULL trace** (`logRefineTrace`): every
+  - **A COUNT WITHOUT A SAMPLE IS NOT A CALIBRATION — never judge the loop against
+    a hand-built number nobody looked at.** A "1,919-person hand-built equivalent"
+    was used to call six prod runs (4-80) a 24x-480x under-reach; sampling that set
+    live returned ADM, Omya, Emmi Group, HOCHDORF and DocMorris — ingredient and
+    food multinationals matched by broad tags (`organic products`, `natural foods`,
+    `nutritional supplements`), not drugstore owners. The count was real, the
+    relevance was never checked, and the whole judgement inverted once it was
+    (2026-09-01, #241/#242). Swiss Drogerien are 2-5-person shops: Apollo holds
+    them in the LOW HUNDREDS with verified emails, so a small count for a niche
+    local trade is the correct answer, not a bug. Sample any reference set before
+    comparing the loop to it — the same instrument the loop itself runs on.
+  - **The single-result fields are LEGACY and additive.** `apolloAudienceId` /
+    `filters` / `count` / `degraded` stay on the response beside `candidates`,
+    behaving exactly as they did: the largest non-empty round, and `degraded:false`
+    — which is what it already was in production, since `showable` came back true
+    on every round. Additive on purpose: human-service migrates to `candidates` on
+    its own schedule, so there is no deploy-ordering constraint in either
+    direction. A LATER PR removes them once human-service reads `candidates`.
+  - **Never throw, except for real errors.** Missing config, and a run that ends
+    with NO round having matched anybody (`count === 0` everywhere, including a
+    run where every turn failed), still throw. Everything else returns the
+    candidate list.
+  - **A REJECTED model response burns the invalid-retry budget, it does not end
+    the run.** chat-service answers **502** when the model's output does not parse
+    (`{"error":"LLM returned invalid JSON.", …}`), and that throw used to escape
+    `refineAudience` and discard every round already explored — one bad turn out
+    of ten returned a 500 and the customer saw a generic chat error. A response
+    that fails to PARSE and one that parses into the WRONG SHAPE are the same
+    class of provider hiccup, so the `chatComplete` call is wrapped and a failure
+    is traced as `action:"invalid"` carrying the upstream message verbatim
+    (never swallowed), costing one `MAX_INVALID_RETRIES` unit and no round. Only
+    exhausting that budget ends the run, and it ends by RETURNING the rounds
+    already explored. Do NOT retry the run as a whole.
+  - **The endpoint bounds its own wall clock: `REFINE_DEADLINE_MS` = 210s.** A
+    measured full run is ~149s (10 turns × 13-16s) and extra turns for invalid
+    output or duplicates push the real worst case well past that, so three
+    consecutive attempts died at the caller's 120s abort — with ten candidates
+    already persisted on our side each time, and nothing delivered. A caller
+    cannot pick a sensible timeout for an endpoint that offers no bound, so the
+    bound lives HERE: no new turn starts past the deadline, an in-flight
+    completion is aborted at it (`AbortSignal.timeout`, and `fetchWithRetry` does
+    not retry an aborted call), and a round whose completion lands after it is not
+    dry-run. The run then answers with what it explored. **210s is paired with
+    human-service's 240s wait** — the margin covers the network and the caller's
+    own work; changing one without the other re-opens the bug.
+  - **`stoppedReason` says whether the run finished on its own terms.**
+    `model_stopped` / `rounds_exhausted` / `deadline` /
+    `invalid_budget_exhausted` / `duplicate_budget_exhausted`, additive on the
+    response beside `candidates`, with a terminal `action:"deadline"` row in the
+    trace for a truncated run. A consumer must be able to tell a complete
+    exploration from a cut-short one; every round is persisted as it goes, so
+    answering early costs nothing.
+  - **A run with no usable set logs its FULL trace** (`logRefineTrace`): every
     attempt's filters, count, sample and reasoning, in one structured `console.warn`.
     Nothing on the happy path. Without it, an over-strict judgement is
     indistinguishable from a broken call and the only option is a revert (#227).
-  - **The loop runs on `provider:"google", model:"pro"`, schemaless JSON, reasoning ON.**
-    `anthropic`/`opus` was the target and its JSON shape IS solved — chat-service REJECTS
-    Anthropic JSON mode without a `responseSchema` (`400 "Anthropic JSON mode requires
-    responseSchema"`; the OpenAPI text implying plain `responseFormat:"json"` suffices is
-    wrong for that provider), and an Anthropic schema must be STRICT (every property in
-    `required`, `additionalProperties:false`), which cannot describe the SPARSE filter
-    object the model emits — so the filter set is sent as a JSON STRING, which a strict
-    schema describes exactly. What blocks opus is not the shape but the platform Anthropic
-    account: it is usage-capped (`"You have reached your specified API usage limits"`, prod
-    2026-08-31), so every refine call 500s. Flipping back is one provider/model pair plus
-    the strict `responseSchema` — `chatComplete` already forwards `responseSchema`, and the
-    decision guard already accepts `filters` as an object OR a JSON string. Do NOT set
-    `disableThinking` or a thinkingLevel floor: judgement is the whole job here.
+  - **The loop runs on `provider:"zai", model:"glm-pro"`, schemaless JSON, reasoning ON.**
+    Cheap AND smart, per the owner's instruction. A/B'd against `deepseek/deepseek-pro`
+    on the Swiss-drugstores description, 3 runs each (2026-09-01): glm-pro returned
+    13 / 171 / 15 with employers that are recognisably the target (Vita Drogerie AG,
+    LANUR, PANVEGA, Markthalle Luzern); deepseek-pro returned 268 / 203 / 1 with
+    Emmi Group, Transgourmet, Möbel Pfister and CALIDA in its samples — a wider
+    spread AND off-target companies. **Anthropic is off the table for this loop for
+    good** (do NOT return to `opus` when the platform account's usage cap lifts), and
+    `google/pro` was only the emergency swap that replaced it (#236). No
+    `responseSchema` is sent: the Zod guards validate the decision, and the guard
+    still accepts `filters` as an object OR a JSON string — plain tolerance of the
+    wire shape, not an Anthropic contortion. Do NOT set `disableThinking` or a
+    thinkingLevel floor: judgement is the whole job here.
+  - **The prompt states Apollo's filter ALGEBRA, both halves — that is the
+    INSTRUMENT, not a targeting rule (#249).** It used to say only "All filters AND
+    together", which is true ACROSS fields and FALSE WITHIN one, i.e. exactly the
+    half that makes adding a field look safe when it is the most destructive move
+    available. Measured live on `person_locations:["Switzerland"]`: tags
+    `["drogerie"]` 429 + `["bioladen"]` 58 = `["drogerie","bioladen"]` **487** (a
+    clean union), `organization_industries` `["retail"]` 34,615 → with
+    `"consumer goods"` **45,190**, `person_titles` `["Owner"]` 9,873 →
+    `["Owner","Inhaber"]` **11,601**; but tags `["drogerie"]` AND
+    `organization_industries:["retail"]` = **372**, fewer than the tag alone.
+    `APOLLO_FILTER_ALGEBRA` states both halves with those numbers ANONYMISED (tag
+    A / tag B — a standing prompt must not name a vertical), and `buildUserMessage`
+    RESTATES the semantics next to the raw filter JSON so they do not decay across
+    turns. Same section carries the corollary: because values union, a value
+    matching 0 rows is INVISIBLE in the total (`drogerie` 429, `drogerien` 196,
+    `reformhaus` 2, `naturkost` 0), so an unchanged count after adding a value
+    means THAT VALUE IS DEAD, not that the concept is unreachable.
+  - **A round is never spent on a query already run (#249).** `encodingKey()`
+    canonicalises a filter set (keys sorted, values sorted, empty/null fields
+    dropped) — value order and empty fields do not make a set different. A repeat
+    burns a `MAX_DUPLICATE_RETRIES` turn instead of a round, is traced as
+    `action:"duplicate"` and is shown back to the model as
+    `#N DUPLICATE of an earlier round`. Production runs were losing a fifth of the
+    budget to it (574 twice, 931 twice, 2,321 twice in single runs).
+  - **Employee ranges behave CORRECTLY — do not "fix" them.** An
+    `organization_num_employees_ranges` filter does NOT drop rows whose headcount
+    Apollo does not know: all eight ranges cumulated returns the same count as no
+    filter at all (429 = 429), so every row carries a known headcount. A 1-50 cap
+    genuinely excludes larger employers, which is what it is for.
   - **DO NOT re-add:** the MECE vocabulary and its restated invariant, the
     "maximize volume among the MECE sets" objective, the `reachesOffTarget` /
     `leavesTargetUnreached` self-grading fields, `pickBest`, `MIN_ENCODINGS_BEFORE_CONFIRM`,
     the 0-count "never drop the concept" rule, the "never invent a firmographic
-    constraint" rule, the frozen-count "wrong lever" rule, or any floor, ambition,
-    target band or scoring function. Every one of them was added after a specific
+    constraint" rule, the frozen-count "wrong lever" rule, a geography rule, or any
+    count floor, ambition, target band or scoring function — and `showable`, or any
+    per-round self-grade wearing a different name. (`COLD_EMAIL_CONTEXT` is not on
+    this list: it is what the audience is FOR, not what to look for.) Every one of them was added after a specific
     incident, and the pile is what made the results a lottery: the same request
     produced 2,640 (correct, 19 German-speaking cantons), 161 (an invented headcount
     clamp) and 1,222 (geography collapsed to bare `Switzerland`) in one day. If a
     fix adds an instruction to this prompt, it is the wrong fix — the model has the
     count, the sample and its own judgement, which is the whole design.
-- **Endpoints:** `POST /audiences/suggest-from-segment`, `GET /audiences/{id}`,
+- **Endpoints:** `POST /audiences/suggest-from-segment` (returns `candidates[]` —
+  every explored round, in round order, each persisted), `GET /audiences/{id}`,
   `POST /audiences/{id}/dry-run`. A serve-next-by-audience-id endpoint is a
   later wave (designed with human-service) — do NOT build it here yet.
 - **Env vars (NEW consumer of chat-service):** `CHAT_SERVICE_URL` +
@@ -104,6 +233,61 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
   endpoints. They are read lazily inside the handler, so their absence does NOT
   break boot or any existing endpoint — only `/audiences/suggest-from-segment`
   would 500 until they are set.
+
+## Phone reveal is OPT-IN, ASYNCHRONOUS, and lives on its own route
+
+Apollo does not return phone numbers by default and never has — that is why
+`apollo_people_enrichments` held 63,907 rows with zero phones: the reveal was
+never requested. A reveal is opt-in on Apollo's side (`reveal_phone_number`),
+billed separately (~8 credits when a mobile comes back, ZERO when nothing is
+found), and the number is delivered ASYNCHRONOUSLY to a `webhook_url` Apollo
+then requires — minutes later, not in the response.
+
+- **Its own route, so nobody reveals by accident.** `POST
+  /people/{apolloPersonId}/phone-reveal` (request) + `GET` the same path (read)
+  + `POST /webhook/phone-reveal?secret=` (Apollo's delivery). `/enrich`,
+  `/match` and `/search/next` are untouched and send no `reveal_phone_number`
+  key at all — `phone-optin.regression.test.ts` asserts the key is ABSENT from
+  their request bodies, not merely false. Do NOT fold the reveal into
+  enrichment "for convenience": that would put reveal credits on every existing
+  caller.
+- **`status` is the contract, not the phone column.** `pending` (Apollo has not
+  delivered yet) / `found` / `not_found` (Apollo has no number — a REAL answer,
+  zero credits) / `failed` (the reveal itself failed). A null number cannot
+  express those four, which is the whole reason `apollo_phone_reveals` exists.
+  The consumer (instantly-service, on a qualified sales reply) polls the GET for
+  a bounded ~90s and proceeds either way, so the three non-`found` states must
+  stay distinguishable. Never collapse them.
+- **Cost: `apollo-credit`, quantity 8 — quantity is the lever, the name is
+  reused.** PROVISION 8 as a hold + AUTHORIZE (platform key only) BEFORE the
+  call; the callback ACTUALIZES it when a number arrives and CANCELS it when
+  none does, so a fruitless reveal costs the org nothing. Apollo's own
+  `credits_consumed` wins when it differs from 8 (post the truth, cancel the
+  hold — runs PATCH is status-only).
+- **The callback answers 200 for anything parseable.** Apollo counts a 4xx like
+  a 5xx and disables a webhook that keeps failing, which would lose every future
+  reveal (the same mechanism that took instantly-service's webhook down twice).
+  The ONE 5xx case is a cost reconciliation we could not complete: the phone is
+  already committed by then, `costReconciledAt` is still null, and the
+  redelivery re-runs only the reconcile.
+- **The callback's field names are `_cd`-SUFFIXED — read both spellings.**
+  Verified live 2026-09-05: the async delivery sends `type_cd: "mobile"`,
+  `status_cd: "valid_number"`, `dnc_status_cd: null`, `confidence_cd: "high"`,
+  while the synchronous enrichment shape uses the unsuffixed names. Reading only
+  `dnc_status` makes every number report as clear to dial — the exact failure
+  this feature exists to prevent. `normalizePhoneNumbers` accepts both;
+  `phone-reveal.test.ts` pins Apollo's real production payload.
+- **DNC survives to the consumer.** Every number carries Apollo's `dnc_status`
+  verbatim plus a derived `doNotCall`. An UNKNOWN dnc value is treated as
+  do-not-call — announcing a clean number as DNC is recoverable, dialling a
+  flagged one is not.
+- **A number is never fabricated, guessed or pattern-matched.** Only what Apollo
+  sent: `phone_numbers[]` plus the `mobile_phone` scalar when it sends one.
+  Empty means `not_found`.
+- **Env vars:** `APOLLO_SERVICE_PUBLIC_URL` (already set) +
+  `APOLLO_PHONE_REVEAL_WEBHOOK_SECRET`. Without both, `buildPhoneRevealWebhookUrl`
+  returns undefined and the route fails loud BEFORE spending a credit — a reveal
+  with nowhere to land is a credit thrown away.
 
 ## Running out of Apollo credits raises a STAFF EMAIL — never let it stay silent
 
