@@ -3305,6 +3305,17 @@
             "type": "boolean",
             "description": "LEGACY. There is no per-round self-grade left to withhold a blessing, so this is false whenever an audience is returned — which is what it already was in production. Read `candidates`."
           },
+          "stoppedReason": {
+            "type": "string",
+            "enum": [
+              "model_stopped",
+              "rounds_exhausted",
+              "deadline",
+              "invalid_budget_exhausted",
+              "duplicate_budget_exhausted"
+            ],
+            "description": "Why the loop stopped. `deadline` means the run hit this endpoint's 210s wall-clock bound and the exploration was cut short — the candidates returned are what it had explored by then, all of them persisted. Every other value means the run finished on its own terms."
+          },
           "candidates": {
             "type": "array",
             "items": {
@@ -3318,6 +3329,7 @@
           "filters",
           "count",
           "degraded",
+          "stoppedReason",
           "candidates"
         ]
       },

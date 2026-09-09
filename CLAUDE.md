@@ -131,9 +131,40 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
     on every round. Additive on purpose: human-service migrates to `candidates` on
     its own schedule, so there is no deploy-ordering constraint in either
     direction. A LATER PR removes them once human-service reads `candidates`.
-  - **Never throw, except for real errors.** chat-service or Apollo unreachable,
-    missing config, and a run where EVERY set matched NOBODY (`count === 0`) still
-    throw. Everything else returns the candidate list.
+  - **Never throw, except for real errors.** Missing config, and a run that ends
+    with NO round having matched anybody (`count === 0` everywhere, including a
+    run where every turn failed), still throw. Everything else returns the
+    candidate list.
+  - **A REJECTED model response burns the invalid-retry budget, it does not end
+    the run.** chat-service answers **502** when the model's output does not parse
+    (`{"error":"LLM returned invalid JSON.", …}`), and that throw used to escape
+    `refineAudience` and discard every round already explored — one bad turn out
+    of ten returned a 500 and the customer saw a generic chat error. A response
+    that fails to PARSE and one that parses into the WRONG SHAPE are the same
+    class of provider hiccup, so the `chatComplete` call is wrapped and a failure
+    is traced as `action:"invalid"` carrying the upstream message verbatim
+    (never swallowed), costing one `MAX_INVALID_RETRIES` unit and no round. Only
+    exhausting that budget ends the run, and it ends by RETURNING the rounds
+    already explored. Do NOT retry the run as a whole.
+  - **The endpoint bounds its own wall clock: `REFINE_DEADLINE_MS` = 210s.** A
+    measured full run is ~149s (10 turns × 13-16s) and extra turns for invalid
+    output or duplicates push the real worst case well past that, so three
+    consecutive attempts died at the caller's 120s abort — with ten candidates
+    already persisted on our side each time, and nothing delivered. A caller
+    cannot pick a sensible timeout for an endpoint that offers no bound, so the
+    bound lives HERE: no new turn starts past the deadline, an in-flight
+    completion is aborted at it (`AbortSignal.timeout`, and `fetchWithRetry` does
+    not retry an aborted call), and a round whose completion lands after it is not
+    dry-run. The run then answers with what it explored. **210s is paired with
+    human-service's 240s wait** — the margin covers the network and the caller's
+    own work; changing one without the other re-opens the bug.
+  - **`stoppedReason` says whether the run finished on its own terms.**
+    `model_stopped` / `rounds_exhausted` / `deadline` /
+    `invalid_budget_exhausted` / `duplicate_budget_exhausted`, additive on the
+    response beside `candidates`, with a terminal `action:"deadline"` row in the
+    trace for a truncated run. A consumer must be able to tell a complete
+    exploration from a cut-short one; every round is persisted as it goes, so
+    answering early costs nothing.
   - **A run with no usable set logs its FULL trace** (`logRefineTrace`): every
     attempt's filters, count, sample and reasoning, in one structured `console.warn`.
     Nothing on the happy path. Without it, an over-strict judgement is

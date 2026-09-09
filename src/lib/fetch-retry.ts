@@ -74,6 +74,11 @@ export async function fetchWithRetry(
       return await fetch(input, init);
     } catch (err) {
       lastErr = err;
+      // An aborted call is the caller's own decision (it owns a deadline), not a
+      // transient socket failure — retrying it would sleep out the backoff and
+      // fail again. Checked explicitly because an AbortSignal.timeout rejection
+      // carries the word "timeout" and would otherwise match as transient.
+      if (init?.signal?.aborted) throw err;
       if (attempt < RETRY_BACKOFF_MS.length && isTransientConnectError(err)) {
         await sleep(RETRY_BACKOFF_MS[attempt]);
         continue;
