@@ -169,7 +169,13 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
     attempt's filters, count, sample and reasoning, in one structured `console.warn`.
     Nothing on the happy path. Without it, an over-strict judgement is
     indistinguishable from a broken call and the only option is a revert (#227).
-  - **The loop runs on `provider:"zai", model:"glm-pro"`, schemaless JSON, reasoning ON.**
+  - **The loop runs on `provider:"openai", model:"gpt-pro"` (GPT-6 Astra), schemaless
+    JSON, reasoning ON — since 2026-09-09.** The owner moved every onboarding step that
+    PRE-FILLS something for a user onto Astra for quality; the cost is accepted. Astra
+    REJECTS `temperature` != 1 and `top_p` with a 400 `unsupported_value`, so this call
+    sends NO sampling parameter — do not re-add one. Everything else below still holds
+    (schemaless, reasoning ON, no `disableThinking`).
+  - **Model history, kept: the loop previously ran on `provider:"zai", model:"glm-pro"`.**
     Cheap AND smart, per the owner's instruction. A/B'd against `deepseek/deepseek-pro`
     on the Swiss-drugstores description, 3 runs each (2026-09-01): glm-pro returned
     13 / 171 / 15 with employers that are recognisably the target (Vita Drogerie AG,
