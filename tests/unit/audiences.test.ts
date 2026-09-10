@@ -856,4 +856,125 @@ describe("Apollo audience endpoints", () => {
     expect(warn.mock.calls.some((c) => c.join(" ").includes("refine ended without a confident set"))).toBe(false);
     warn.mockRestore();
   });
+
+  // ── #259: the constraints that cost the audience are now observable ──
+
+  it("#259 AC1 — the catalog states what included_organization_keyword_fields costs and defaults to", async () => {
+    setCounts(42000);
+    mockChatComplete.mockReset().mockResolvedValue(stop(FINAL_FILTERS));
+
+    await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(200);
+
+    const { systemPrompt } = mockChatComplete.mock.calls[0][0];
+    expect(systemPrompt).toMatch(/OMIT IT to match against employer TAGS/);
+    expect(systemPrompt).toMatch(/from 100 people to 7/);
+  });
+
+  it("#259 AC3 — the catalog distinguishes person_locations from organization_locations", async () => {
+    setCounts(42000);
+    mockChatComplete.mockReset().mockResolvedValue(stop(FINAL_FILTERS));
+
+    await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(200);
+
+    const { systemPrompt } = mockChatComplete.mock.calls[0][0];
+    expect(systemPrompt).toMatch(/Filter by where the PERSON is/);
+    expect(systemPrompt).toMatch(/Filter by where the EMPLOYER is headquartered/);
+  });
+
+  it("#259 AC2 — an exclusion is measured for free and the measurement reaches the model", async () => {
+    // Round 1 excludes; round 2 does not. Counts are consumed one per dry-run:
+    // the round itself (106), then the SAME query without the exclusion (514),
+    // then round 2 (42,000).
+    setCounts(106, 514, 42000);
+    mockChatComplete
+      .mockReset()
+      .mockResolvedValueOnce(round({ qOrganizationKeywordTags: ["drogerie"], q_not_organization_keyword_tags: ["pharmacy"] }))
+      .mockResolvedValue(stop(FINAL_FILTERS));
+
+    const res = await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(200);
+
+    // The round's own count is untouched — the probe only observes.
+    expect(res.body.candidates.map((c: any) => c.count)).toEqual([106, 42000]);
+
+    const second = mockChatComplete.mock.calls[1][0].message as string;
+    expect(second).toContain("Same query without them: 514 people (this round matched 106)");
+    expect(second).toContain("without q_not_organization_keyword_tags: 514");
+    expect(second).toContain("who is in that wider set");
+    expect(second).toContain("Drogerie Müller");
+
+    // And it is on the persisted trace, not only in the prompt.
+    const first = state.inserted.refineTrace.find((h: any) => h.action === "round");
+    expect(first.exclusions.countWithoutAll).toBe(514);
+    expect(first.exclusions.probes).toEqual([{ field: "q_not_organization_keyword_tags", countWithout: 514 }]);
+  });
+
+  it("#259 AC2 — a round that excludes nothing costs no extra Apollo call", async () => {
+    setCounts(42000);
+    mockChatComplete.mockReset().mockResolvedValue(stop(FINAL_FILTERS));
+
+    await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(200);
+
+    // One count + three sample pages. Nothing more.
+    expect(mockSearchPeople).toHaveBeenCalledTimes(4);
+    const first = state.inserted.refineTrace.find((h: any) => h.action === "round");
+    expect(first.exclusions).toBeNull();
+  });
+
+  it("#259 AC4 — an audience the model itself calls narrow comes back degraded", async () => {
+    setCounts(7);
+    mockChatComplete
+      .mockReset()
+      .mockResolvedValue(stop(FINAL_FILTERS, { whatWorked: "~7 contacts identified with these strict criteria" }));
+
+    const res = await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(200);
+
+    expect(res.body.count).toBe(7);
+    expect(res.body.degraded).toBe(true);
+  });
+
+  it("#259 AC4 — degraded reads the model's prose, not the count", async () => {
+    // A tiny audience the model does NOT describe as narrow is not flagged, and
+    // a large one it DOES describe as narrow is — there is no threshold here.
+    setCounts(9);
+    mockChatComplete.mockReset().mockResolvedValue(stop(FINAL_FILTERS));
+    const small = await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(200);
+    expect(small.body.count).toBe(9);
+    expect(small.body.degraded).toBe(false);
+
+    setCounts(180000);
+    mockChatComplete
+      .mockReset()
+      .mockResolvedValue(stop(FINAL_FILTERS, { whatToImprove: "this stayed too narrow for the request" }));
+    const big = await request(app)
+      .post("/audiences/suggest-from-segment")
+      .set(HEADERS)
+      .send({ name: "n", description: "d", brandId: null })
+      .expect(200);
+    expect(big.body.count).toBe(180000);
+    expect(big.body.degraded).toBe(true);
+  });
 });

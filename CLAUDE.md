@@ -125,10 +125,9 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
     local trade is the correct answer, not a bug. Sample any reference set before
     comparing the loop to it — the same instrument the loop itself runs on.
   - **The single-result fields are LEGACY and additive.** `apolloAudienceId` /
-    `filters` / `count` / `degraded` stay on the response beside `candidates`,
-    behaving exactly as they did: the largest non-empty round, and `degraded:false`
-    — which is what it already was in production, since `showable` came back true
-    on every round. Additive on purpose: human-service migrates to `candidates` on
+    `filters` / `count` / `degraded` stay on the response beside `candidates`:
+    the largest non-empty round, with `degraded` now carrying the model's own
+    description of THAT round (see above). Additive on purpose: human-service migrates to `candidates` on
     its own schedule, so there is no deploy-ordering constraint in either
     direction. A LATER PR removes them once human-service reads `candidates`.
   - **Never throw, except for real errors.** Missing config, and a run that ends
@@ -205,6 +204,34 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
     matching 0 rows is INVISIBLE in the total (`drogerie` 429, `drogerien` 196,
     `reformhaus` 2, `naturkost` 0), so an unchanged count after adding a value
     means THAT VALUE IS DEAD, not that the concept is unreachable.
+  - **An EXCLUSION's cost is MEASURED and handed back, because a count cannot
+    show it (#259).** A count says how many a set matched and never who it
+    removed, so an exclusion is the one move in Apollo's vocabulary whose cost is
+    invisible in the loop's own feedback — a customer's own "not pharmacies" took
+    a real audience from 514 to 106 and nothing in the run could see it. Every
+    round that uses an exclusion field (`q_not_organization_keyword_tags`,
+    `person_not_titles`, `currently_not_using_any_of_technology_uids`, the
+    `not_organization_*_codes` pair, and their camelCase aliases) is followed by
+    the SAME query WITHOUT them: one count per exclusion field, plus the count
+    AND the 24-row sample with all of them dropped (`probeExclusions`). Free —
+    the teaser costs zero credits — and reported back as data on the next turn
+    and on the persisted trace. There is NO rule about which exclusions are
+    suspect and nothing in the code acts on the numbers; the model reads the
+    difference and decides. The general fact, stated once in the prompt's algebra
+    block and in the field's own description, is that an exclusion removes an
+    entity when ANY listed value matches, so a target carrying an excluded tag
+    incidentally excludes itself. Do NOT turn this into a threshold, a warning or
+    an auto-drop.
+  - **`degraded` is the model's OWN prose, not a floor (#259).** It used to be a
+    constant `false`, so a 7-person audience the model itself described as
+    "~7 contacts identified with these strict criteria" shipped as a normal
+    result. `describesNarrowOutcome` reads the sentences the model ALREADY wrote
+    (its three notes + its reasoning) for narrowness words and flags the returned
+    round. This is deliberately NOT a fourth per-round self-grade — nothing is
+    asked of the model — and deliberately NOT a count threshold: a 180k round the
+    model calls narrow is flagged, a 9-person round it does not is not. It errs
+    toward flagging; announcing a fine audience as narrow is recoverable,
+    announcing an audience of 7 as normal is what happened.
   - **A round is never spent on a query already run (#249).** `encodingKey()`
     canonicalises a filter set (keys sorted, values sorted, empty/null fields
     dropped) — value order and empty fields do not make a set different. A repeat

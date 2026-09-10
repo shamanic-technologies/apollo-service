@@ -373,7 +373,7 @@ export const ApolloNativeSearchFiltersSchema = z
       example: "machine learning OR data science OR AI",
     }),
     person_locations: z.array(z.string().min(1)).optional().openapi({
-      description: "Filter by person's location (city, state, country). Different from organization_locations, which filters by company HQ.",
+      description: "Filter by where the PERSON is (city, state, country). This is the one that answers 'people in X'. It is NOT organization_locations, which filters on where the EMPLOYER is headquartered — a person working in X for a company headquartered elsewhere matches this field and not that one, and vice versa. Pick the one that answers the question actually asked.",
       example: ["San Francisco, California, US", "New York, US"],
     }),
     person_seniorities: z.array(z.enum(VALID_SENIORITIES)).optional().openapi({
@@ -381,7 +381,7 @@ export const ApolloNativeSearchFiltersSchema = z
       example: ["head", "vp", "c_suite"],
     }),
     organization_locations: z.array(z.string().min(1)).optional().openapi({
-      description: "Filter by organization HQ location.",
+      description: "Filter by where the EMPLOYER is headquartered. This answers 'companies based in X', not 'people in X' — for the latter use person_locations. A multi-site employer is matched on its HQ only, so this silently drops that employer's staff everywhere else.",
       example: ["United States", "California, US"],
     }),
     organization_industries: z.array(ApolloIndustryValueSchema).optional().openapi({
@@ -474,7 +474,7 @@ export const ApolloNativeSearchFiltersSchema = z
     }),
     q_not_organization_keyword_tags: z.array(z.string().min(1)).optional().openapi({
       description:
-        "EXCLUDE people whose employer matches these keyword tags. Use this q_-prefixed form — the plain not_organization_keyword_tags spelling is silently dropped. Undocumented for People Search but honored.",
+        "EXCLUDE people whose employer matches these keyword tags. An employer is removed when ANY ONE of the listed tags is on it, so each value added removes more people, and an employer carrying a listed tag incidentally alongside the tags you are targeting removes itself too. Use this q_-prefixed form — the plain not_organization_keyword_tags spelling is silently dropped. Undocumented for People Search but honored.",
       example: ["staffing", "recruiting"],
     }),
     included_organization_keyword_fields: z
@@ -482,7 +482,7 @@ export const ApolloNativeSearchFiltersSchema = z
       .optional()
       .openapi({
         description:
-          "Restrict which employer fields q_organization_keyword_tags matches against. Omit to default to ~tags. Verified honored values: tags, name, social_media_description (seo_description is silently ignored). Undocumented for People Search but honored.",
+          "Restrict which employer fields q_organization_keyword_tags matches against. OMIT IT to match against employer TAGS, which is Apollo's default and almost always what is wanted. What it COSTS: restricting to ['name'] matches only companies whose literal NAME contains the term, so an employer tagged as the thing you are looking for but not NAMED after it disappears — measured live, one country held fixed, the same set went from 100 people to 7 by adding ['name'] alone (a 14x collapse). It reads like a precision improvement and is an order-of-magnitude cut. Verified honored values: tags, name, social_media_description (seo_description is silently ignored). Undocumented for People Search but honored.",
         example: ["tags"],
       }),
     organization_trading_status: z.array(z.enum(["private", "public"])).optional().openapi({
@@ -1275,7 +1275,7 @@ const SuggestFromSegmentResponseSchema = z
     count: z.number().int().openapi({ description: "LEGACY single result — that round's live match-count." }),
     degraded: z.boolean().openapi({
       description:
-        "LEGACY. There is no per-round self-grade left to withhold a blessing, so this is false whenever an audience is returned — which is what it already was in production. Read `candidates`.",
+        "True when the model's own account of the round being returned describes it as narrow, strict or tiny. It reads the sentences the model already wrote — it is not a self-grade the model is asked for, and it is not a count threshold. Read `candidates` for the full picture.",
     }),
     stoppedReason: z
       .enum(["model_stopped", "rounds_exhausted", "deadline", "invalid_budget_exhausted", "duplicate_budget_exhausted"])
