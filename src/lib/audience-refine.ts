@@ -35,7 +35,15 @@
  * The legacy single-result fields (`filters`, `count`, `degraded`) are kept
  * ADDITIVELY alongside `candidates` so human-service can migrate on its own
  * schedule; they pick the largest non-empty round, which is exactly what the
- * always-true `showable` reduced to in production.
+ * always-true `showable` reduced to in production. `degraded` reports the
+ * model's OWN description of that round (see `describesNarrowOutcome`).
+ *
+ * EXCLUSIONS ARE MEASURED (#259). A count says how many a set matched and can
+ * never say who it removed, so an exclusion is the one move whose cost is
+ * invisible in this loop's feedback. Every round that excludes anything is
+ * followed by the same query WITHOUT the exclusions — its count and its sample,
+ * free — reported back to the model as data. There is no rule here about which
+ * exclusions are suspect and nothing in this file acts on the numbers.
  */
 
 import { z } from "zod";
@@ -124,6 +132,48 @@ export interface SampledPerson {
   title: string | null;
 }
 
+/** Filter fields that REMOVE people rather than select them.
+ *
+ * Both spellings of each are listed: the model writes Apollo-native names (the
+ * catalog it reads is native) but SearchFiltersSchema also accepts the legacy
+ * camelCase aliases, and a set carrying the alias excludes exactly as hard. */
+const EXCLUSION_FIELDS = [
+  "q_not_organization_keyword_tags",
+  "person_not_titles",
+  "currently_not_using_any_of_technology_uids",
+  "not_organization_naics_codes",
+  "not_organization_sic_codes",
+  "qNotOrganizationKeywordTags",
+  "personNotTitles",
+  "currentlyNotUsingAnyOfTechnologyUids",
+  "notOrganizationNaicsCodes",
+  "notOrganizationSicCodes",
+] as const;
+
+/** What ONE exclusion field is costing this round: the same set with that field
+ * removed, counted live. */
+export interface ExclusionProbe {
+  field: string;
+  countWithout: number;
+}
+
+/** What the round's exclusions are costing, measured — never judged.
+ *
+ * A count is what a filter set matched; it cannot say what the set REMOVED. So
+ * a round that excludes anything also gets the counterfactual: the same query
+ * without the exclusions, its count and its sample. The dry-run teaser is free
+ * at any page size, so this evidence costs nothing but a few hundred
+ * milliseconds, and it is reported back to the model as data — there is no rule
+ * here about which exclusions are suspect, and nothing in this file acts on it. */
+export interface ExclusionObservation {
+  /** One entry per exclusion field the round used, in the order they appear. */
+  probes: ExclusionProbe[];
+  /** Count with EVERY exclusion field dropped at once. */
+  countWithoutAll: number;
+  /** Who that wider set contains — the population the exclusions are cutting into. */
+  sampleWithoutAll: SampledPerson[];
+}
+
 /** The model's three one-sentence notes, fed back to it in later rounds. */
 export interface RoundNotes {
   whatWorked: string;
@@ -140,6 +190,8 @@ export interface RefineIteration {
   count: number | null;
   /** Who the set actually matched. `null` on `invalid`/`duplicate` rows (nothing was run). */
   sample?: SampledPerson[] | null;
+  /** What this round's exclusions removed. `null` when the round excluded nothing. */
+  exclusions?: ExclusionObservation | null;
   /** The model asked to keep iterating (or not). */
   toContinue?: boolean;
   notes?: RoundNotes;
@@ -186,10 +238,11 @@ export interface RefineResult {
   filters: Record<string, unknown>;
   count: number;
   status: "confirmed" | "exhausted";
-  /** LEGACY. With `showable` deleted there is no per-round self-tag left to
-   * withhold a blessing, so this is FALSE whenever an audience is returned —
-   * which is exactly what it was in production, where `showable` came back true
-   * on every round. Read `candidates` instead. */
+  /** TRUE when the model's OWN account of the returned round describes it as
+   * narrow / strict / tiny. Not a self-grade and not a threshold: it reads the
+   * sentences the model already wrote (`describesNarrowOutcome`). A 7-person
+   * audience the model itself called "strict criteria" used to come back
+   * `false`. Read `candidates` for the full picture. */
   degraded: boolean;
   /** EVERY round that was dry-run, in round order. The deliverable. */
   candidates: RefineCandidate[];
@@ -248,6 +301,68 @@ export async function dryRunSample(
     sample.push(...(res.people ?? []).slice(0, SAMPLE_ROWS_PER_PAGE).map(toSampledPerson));
   }
   return { count, sample };
+}
+
+function hasValue(v: unknown): boolean {
+  if (v === undefined || v === null) return false;
+  if (Array.isArray(v)) return v.length > 0;
+  if (typeof v === "string") return v.length > 0;
+  return true;
+}
+
+function omitFields(filters: Record<string, unknown>, fields: string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(filters)) {
+    if (!fields.includes(k)) out[k] = v;
+  }
+  return out;
+}
+
+/** Exclusion fields this filter set actually uses. */
+export function exclusionFieldsUsed(filters: Record<string, unknown>): string[] {
+  return EXCLUSION_FIELDS.filter((f) => hasValue(filters[f]));
+}
+
+/**
+ * Measure what a round's exclusions removed, for free.
+ *
+ * A filter set that excludes something reports one count, and that count cannot
+ * say who is missing from it — so the exclusion is the one move in the whole
+ * vocabulary whose cost is invisible in the feedback the loop already collects.
+ * This runs the SAME query without the exclusions (one count per exclusion
+ * field, plus the count and the sample with all of them dropped) and hands the
+ * numbers back to the model. Apollo's teaser is free at any page size, so the
+ * whole observation costs zero credits.
+ *
+ * Returns `null` when the round excluded nothing — nothing to measure.
+ */
+export async function probeExclusions(
+  apolloApiKey: string,
+  filters: Record<string, unknown>,
+  alertIdentity?: CreditAlertIdentity,
+): Promise<ExclusionObservation | null> {
+  const used = exclusionFieldsUsed(filters);
+  if (used.length === 0) return null;
+
+  const { count: countWithoutAll, sample: sampleWithoutAll } = await dryRunSample(
+    apolloApiKey,
+    omitFields(filters, used),
+    alertIdentity,
+  );
+
+  // With a single exclusion field, "without that field" and "without all of
+  // them" are the same query — no second call.
+  const probes: ExclusionProbe[] =
+    used.length === 1
+      ? [{ field: used[0], countWithout: countWithoutAll }]
+      : await Promise.all(
+          used.map(async (field) => ({
+            field,
+            countWithout: await dryRunCount(apolloApiKey, omitFields(filters, [field]), alertIdentity),
+          })),
+        );
+
+  return { probes, countWithoutAll, sampleWithoutAll };
 }
 
 /** Canonical form of a filter set: object keys sorted, array VALUES sorted,
@@ -352,6 +467,13 @@ const APOLLO_FILTER_ALGEBRA = [
   "  tags for the same concept: 429, 196, 2 and 0. So when you add a value to a field and the count",
   "  does not move, that VALUE is dead in Apollo's vocabulary — it does NOT mean the concept is",
   "  unreachable. The only way to learn what a value is worth is to run it on its own in a round.",
+  "- An EXCLUSION field (any of the not_ / q_not_ fields) removes an employer or a person when ANY",
+  "  ONE of its values matches. So each value you add to an exclusion removes more people, and an",
+  "  employer that carries one of your excluded values ALONGSIDE the values you are targeting is",
+  "  removed too. A count cannot show you that: it says how many matched, never who is missing.",
+  "  So whenever a set of yours excludes anything, the same query is ALSO run without the",
+  "  exclusions and you are given that count and that sample, free. Read it — it is the only",
+  "  evidence of what an exclusion is costing you, and it is measurement, not a verdict.",
   "=== END ===",
 ].join("\n");
 
@@ -443,6 +565,21 @@ function buildUserMessage(input: RefineInput, history: RefineIteration[], rounds
     for (const s of h.sample ?? []) {
       lines.push(`    · ${s.company ?? "?"} — ${s.title ?? "?"}`);
     }
+    if (h.exclusions) {
+      lines.push(
+        `    this set EXCLUDES with ${h.exclusions.probes.length} field(s). Same query without them: ` +
+          `${h.exclusions.countWithoutAll} people (this round matched ${h.count}).`,
+      );
+      for (const p of h.exclusions.probes) {
+        lines.push(`      without ${p.field}: ${p.countWithout}`);
+      }
+      if (h.exclusions.sampleWithoutAll.length > 0) {
+        lines.push("      who is in that wider set (sample, random pages):");
+        for (const s of h.exclusions.sampleWithoutAll) {
+          lines.push(`        · ${s.company ?? "?"} — ${s.title ?? "?"}`);
+        }
+      }
+    }
     if (h.notes) {
       lines.push(`    worked: ${h.notes.whatWorked}`);
       lines.push(`    to improve: ${h.notes.whatToImprove}`);
@@ -476,6 +613,7 @@ function logRefineTrace(input: RefineInput, trace: RefineIteration[], outcome: "
           count: h.count,
           filters: h.filters,
           sample: h.sample,
+          exclusions: h.exclusions,
           toContinue: h.toContinue,
           notes: h.notes,
           validationErrors: h.validationErrors,
@@ -483,6 +621,57 @@ function logRefineTrace(input: RefineInput, trace: RefineIteration[], outcome: "
         })),
       }),
   );
+}
+
+/** Words a writer reaches for when the thing they are describing is small or
+ * over-constrained. NOT a vocabulary about any market, any sector or any
+ * filter — it is about the PROSE, and it is applied to nothing but the model's
+ * own sentences. */
+const NARROW_WORDS = [
+  "narrow",
+  "strict",
+  "restrictive",
+  "tiny",
+  "small",
+  "handful",
+  "few people",
+  "very few",
+  "too specific",
+  "highly specific",
+  "over-constrained",
+  "overly constrained",
+  "limited",
+  "sparse",
+  "thin",
+  "not enough",
+  "low count",
+  "low volume",
+  "too low",
+  "under-reach",
+];
+
+/**
+ * Does the model's own account of a round describe it as narrow?
+ *
+ * The model already says so in prose when it knows the audience is small —
+ * "~7 contacts identified with these strict criteria" was written by the model
+ * that then returned `degraded: false`. This reads the sentences it already
+ * wrote; it does NOT ask it to grade anything, and there is no count in it.
+ * Three per-round self-grades have degenerated to constants in this loop
+ * (`reachesOffTarget`/`leavesTargetUnreached`, `matchesRequest`, `showable`) —
+ * this deliberately adds no fourth.
+ *
+ * It errs toward flagging: a round whose notes merely DISCUSS narrowness comes
+ * back degraded. Announcing a fine audience as narrow is recoverable by whoever
+ * chooses; announcing an audience of 7 as a normal result is what happened.
+ */
+export function describesNarrowOutcome(notes: RoundNotes | undefined, reasoning: string | undefined): boolean {
+  const prose = [notes?.whatWorked, notes?.whatToImprove, notes?.nextExperiment, reasoning]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  if (prose.length === 0) return false;
+  return NARROW_WORDS.some((w) => prose.includes(w));
 }
 
 type ScoredRound = RefineIteration & { filters: Record<string, unknown>; count: number };
@@ -673,11 +862,12 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
     // A valid, not-yet-run filter set we can dry-run — this consumes one round.
     rounds += 1;
     seenEncodings.set(key, rounds);
-    const { count, sample } = await dryRunSample(
-      input.apolloApiKey,
-      validFilters,
-      toCreditAlertIdentity(input.tracking),
-    );
+    const alertIdentity = toCreditAlertIdentity(input.tracking);
+    const { count, sample } = await dryRunSample(input.apolloApiKey, validFilters, alertIdentity);
+    // Free, and only when the round excluded something: what those exclusions
+    // removed. Without it the cost of an exclusion is the one thing the loop's
+    // feedback cannot show.
+    const exclusions = await probeExclusions(input.apolloApiKey, validFilters, alertIdentity);
 
     trace.push({
       iteration: step,
@@ -685,6 +875,7 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
       filters: validFilters,
       count,
       sample,
+      exclusions,
       toContinue: toContinue !== false,
       notes: {
         whatWorked: whatWorked ?? "",
@@ -735,7 +926,10 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
     filters: chosen.filters,
     count: chosen.count,
     status: "confirmed",
-    degraded: false,
+    // The model's own words about the round being returned. It already writes
+    // "strict criteria" when it knows the set is tiny; that assessment now
+    // reaches the flag instead of dying in the notes.
+    degraded: describesNarrowOutcome(chosen.notes, chosen.reasoning),
     candidates,
     stoppedReason,
     trace,
