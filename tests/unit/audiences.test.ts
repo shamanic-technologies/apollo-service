@@ -273,7 +273,7 @@ describe("Apollo audience endpoints", () => {
     const [[opts]] = mockChatComplete.mock.calls;
     // The goal, plainly stated, and the loop's own mechanics.
     expect(opts.systemPrompt).toContain("reaches as many relevant people as possible");
-    expect(opts.systemPrompt).toContain("You have up to 10 rounds");
+    expect(opts.systemPrompt).toContain("You have up to 6 rounds");
     // Half one: why volume matters, with the orientation numbers.
     expect(opts.systemPrompt).toContain("COLD EMAIL campaign");
     expect(opts.systemPrompt).toContain("2,000 contactable");
@@ -351,7 +351,7 @@ describe("Apollo audience endpoints", () => {
     expect(second).toContain("worked: tags found shops");
     expect(second).toContain("to improve: too narrow");
     expect(second).toContain("next: drop the industry filter");
-    expect(second).toContain("Round 2 of 10");
+    expect(second).toContain("Round 2 of 6");
   });
 
   it("AC2 — 24 sample rows, drawn from random pages, never past Apollo's 500-page cap", async () => {
@@ -541,9 +541,9 @@ describe("Apollo audience endpoints", () => {
     expect(res.body.apolloAudienceId).toBe("aud-2");
   });
 
-  it("AC3 — up to 10 rounds; malformed output runs on its own budget", async () => {
+  it("AC3 — up to 6 rounds; malformed output runs on its own budget", async () => {
     // 2 malformed decisions (retry budget) then rounds that never stop: the loop
-    // spends exactly 10 dry-runs.
+    // spends exactly 6 dry-runs.
     // Each round proposes a DIFFERENT set — an identical one would be caught as a
     // duplicate and would not consume a round (see the dedup tests below).
     let n = 0;
@@ -560,7 +560,7 @@ describe("Apollo audience endpoints", () => {
       .send({ name: "n", description: "d", brandId: null })
       .expect(200);
 
-    expect(mockChatComplete).toHaveBeenCalledTimes(12); // 2 invalid + 10 rounds
+    expect(mockChatComplete).toHaveBeenCalledTimes(8); // 2 invalid + 6 rounds
     expect(res.body.filters).toEqual({ personTitles: ["Owner", "T0"] }); // all counts equal → first largest
     expect(res.body.degraded).toBe(false);
     expect(state.inserted.status).toBe("confirmed");
