@@ -33,10 +33,21 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
   rules to it.** Every round the model receives: the original request VERBATIM,
   the Apollo filter catalog (`buildFiltersPrompt`), the COLD-EMAIL business
   context (below), its round budget, and the FULL ordered history of previous
-  rounds. Up to **10** rounds (`MAX_ROUNDS`), plus a SEPARATE
+  rounds. Up to **6** rounds (`MAX_ROUNDS`), plus a SEPARATE
   `MAX_INVALID_RETRIES` (3) budget for malformed output and a SEPARATE
   `MAX_DUPLICATE_RETRIES` (3) budget for a repeated encoding — neither may eat a
   round.
+  - **The budget is SIX since 2026-09-11, down from ten — a deliberate latency
+    trade, not an oversight.** The onboarding audience step waited ~100s for the
+    suggest chain (prod p50 75s, p90 121s) and this loop is its biggest slice.
+    Prod evidence over 515 runs / 30 days: 345 (67%) exhausted the round budget
+    and only 101 ended on the model's own `confirm` — the model almost never
+    stops by itself — while an A/B on three real prod descriptions found the best
+    set by round 3-4 in all three cases, rounds 5-10 mostly re-exploring. Six
+    rounds buys ~25s per audience for some exploration. This REVERSES the
+    "spend the budget before answering" intent of the commit that raised it;
+    owner's call (Kevin, 2026-09-11). The deadline, the invalid/duplicate
+    budgets and the candidate contract are untouched.
   - **The model has never been told what the audience is FOR — that was the root
     cause, and the fix is the cold-email context, not another rule.** With only a
     description, PRECISION is the only objective a model can infer, so it stacks
@@ -146,7 +157,8 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
     exhausting that budget ends the run, and it ends by RETURNING the rounds
     already explored. Do NOT retry the run as a whole.
   - **The endpoint bounds its own wall clock: `REFINE_DEADLINE_MS` = 210s.** A
-    measured full run is ~149s (10 turns × 13-16s) and extra turns for invalid
+    measured full run was ~149s at the old ten-round budget (10 turns × 13-16s;
+    six rounds land near ~90s) and extra turns for invalid
     output or duplicates push the real worst case well past that, so three
     consecutive attempts died at the caller's 120s abort — with ten candidates
     already persisted on our side each time, and nothing delivered. A caller
