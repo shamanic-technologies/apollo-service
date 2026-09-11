@@ -73,8 +73,17 @@ const REFINE_PROVIDER = "openai" as const;
 const REFINE_MODEL = "gpt-pro" as const;
 
 /** Rounds of live dry-run feedback the model gets. Each one returns a count AND
- * a sample of who matched. */
-const MAX_ROUNDS = 10;
+ * a sample of who matched.
+ *
+ * SIX, not ten, since 2026-09-11. This deliberately trades some exploration for
+ * ~25s of onboarding latency (prod p50 for the whole suggest chain was 75s, p90
+ * 121s, and this loop is its biggest slice). It reverses the intent of the
+ * commit that raised the budget — a conscious call by the owner, not an
+ * oversight. The prod evidence: over 515 runs in 30 days, 345 (67%) exhausted
+ * the budget and only 101 ended on the model's own `confirm`, while an A/B on
+ * three real prod descriptions found the best set by round 3-4 in all three
+ * cases — rounds 5-10 mostly re-explored. */
+const MAX_ROUNDS = 6;
 /** Extra budget for unusable model output (malformed decision JSON, filters
  * rejected by the faithful schema, or chat-service REJECTING the completion
  * outright). These do NOT consume a round — a provider hiccup must not eat the
