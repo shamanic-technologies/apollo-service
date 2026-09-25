@@ -334,6 +334,70 @@ then requires — minutes later, not in the response.
   returns undefined and the route fails loud BEFORE spending a credit — a reveal
   with nowhere to land is a credit thrown away.
 
+## Every revealed email carries a VERIFIER VERDICT (`emailVerification`)
+
+Getting a correct address is this service's job (owner, 2026-09-25), so the
+pre-serve verification moved here from human-service. `/enrich`, `/match` and
+`/email-finder/find` (found rows) all return, additive beside `person`:
+`emailVerification: { email, verdict, deliverable, verifier, verificationId, verifiedAt, reused } | null`.
+
+- **`deliverable` is THE switch — true only for verdict `valid`.** catch_all,
+  invalid, risky, unknown are NOT deliverable. Measured on 100 bounced + 100
+  delivered prod addresses: valid 3/36, catch_all 41/46, unknown 32/15,
+  invalid 24/3. The PERSON still comes back when not deliverable, so a
+  consumer can suppress them (the reveal credit is spent; never re-reveal).
+- **Verifier: BounceVerify Apify actor** (`bounceverify~bounceverify-email-verifier`,
+  run-sync, ~3s), key-service `apify` key, cost `apify-bounceverify-email`,
+  billed only on a DECISIVE verdict (`unknown` is free). Provision → authorize
+  → execute → actualize, hold cancelled — `src/lib/email-verification.ts`.
+- **Bronze = `email_verifications`**, one row per call, actor row verbatim,
+  failures included. A decisive verdict under `VERDICT_REUSE_DAYS` (30) is
+  REUSED (`reused: true`, nothing billed) — cache hits reuse it too.
+- **Fail loud: 502 `{type:"email_verification"}`.** Never an unverified email
+  labelled deliverable. The reveal / finding is already stored, so a retry is
+  a cache hit that re-runs only the verification.
+- Callers of `/match` today: human-service AND journalists-service — both now
+  receive the verdict and its cost. Do not make it opt-in per caller; the
+  owner's rule is that no revealed email leaves unverified.
+
+## Other email finders: treg.to and Explee (bronze / silver / exact cost)
+
+apollo-service holds our enrichment PROVIDERS, not only Apollo. `POST
+/email-finder/find` asks **treg.to** (routed hub, ~20 underlying providers) or
+**Explee** (preset `basic` 1.5 credits / `premium` 5 credits) for one person's
+work email. Vendor I/O lives in `src/lib/email-finders.ts`; the route owns
+identity, idempotency, persistence and cost.
+
+- **Bronze = `email_finder_calls`**: every HTTP exchange verbatim (request body,
+  status, ALL response headers, parsed body), append-only, including failed
+  calls. treg's charge lives in a HEADER, so headers are bronze, not metadata.
+- **Silver = `email_findings`**: one row per (vendor, preset, person), UNIQUE.
+  `status` pending/found/not_found/failed, `email`, `vendorMailboxStatus`
+  (verbatim) + `mailboxStatus` (valid/catch_all/invalid/unverified/unknown),
+  `underlyingProvider`, `chargedQuantity` in the vendor's unit.
+- **Never pays twice.** found / not_found / pending rows are served back with
+  `reused: true` and no vendor call. Only `failed` (a vendor error, which neither
+  vendor bills) is retried. treg also gets `Idempotency-Key: apollo-email-find:<findingId>`
+  so a lost answer replays free.
+- **Cost = the vendor's own figure, never ours.** treg: `X-Treg-Cost-Micro`
+  header (integer micro-USD) → `treg-micro-usd` quantity. Explee:
+  `meta.credits_charged` → `explee-credit` quantity. Provision the worst case
+  (treg 150,000 µUSD, ENFORCED by sending `X-Treg-Route-Max-Cost: 0.15`; Explee
+  the preset's credits), post the reported figure as `actual`, cancel the hold.
+  A miss reports 0 → hold cancelled, nothing billed.
+- **Keep the hold when the vendor may have billed**: a network error / lost
+  answer, a found email with no readable charge, and a treg **202** (async child
+  still running, `charged_micro: null` — treg says do NOT retry). Those rows say
+  `holdKept: true` / `status: pending`; reconcile them from bronze.
+- **Missing platform key = 503 `provider_key_missing`** naming the key-service
+  provider (`treg` / `treg-org` / `explee`), before any row, hold or vendor call.
+  treg's token is an IDENTITY (team-scoped) token: every call also sends
+  `X-Treg-Org` = key-service provider `treg-org` (`distribute-you`).
+- **treg's mailbox word rides in `raw`, not `output`.** Live 2026-09-25: a hit
+  with `output.verified: false` carried `raw.status: "catch_all"`.
+  `tregVendorMailboxStatus` prefers a word that names a mailbox state over the bool.
+- Do NOT touch the Apollo reveal path from here; this is additive.
+
 ## Running out of Apollo credits raises a STAFF EMAIL — never let it stay silent
 
 Apollo signals credit exhaustion two ways, and BOTH used to be silent here: a

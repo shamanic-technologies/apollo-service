@@ -12,6 +12,7 @@ import { authorizeCredit } from "../lib/billing-client.js";
 import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment } from "../lib/transform.js";
 import { MatchRequestSchema } from "../schemas.js";
 import { traceEvent } from "../lib/trace-event.js";
+import { verificationFor, EmailVerificationError } from "../lib/email-verification.js";
 import { toCreditAlertIdentity } from "../lib/credit-alert.js";
 import { assertKeySource } from "../lib/validators.js";
 // Waterfall disabled 2026-05-28 — see src/lib/waterfall.ts header for revive.
@@ -112,6 +113,12 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
     const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandIds, campaignId, audienceId, featureSlug, workflowSlug };
     const tracking = { brandIds, campaignId, audienceId, featureSlug, workflowSlug };
 
+    // Every reveal carries the verifier's verdict (additive). The person always
+    // comes back — `emailVerification.deliverable` says whether to send.
+    const verifyCtx = { identity, tracking, runId, source: "match" };
+    const reply = async (body: { enrichmentId: string | null; person: { email?: string | null } | null; cached: boolean }) =>
+      res.json({ ...body, emailVerification: await verificationFor(body.person?.email, verifyCtx) });
+
     const parsed = MatchRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ type: "validation", error: "Invalid request", details: parsed.error.flatten() });
@@ -138,7 +145,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
       });
       await updateRun(cachedRun.id, "completed", identity);
 
-      return res.json({
+      return reply({
         enrichmentId: null,
         person: cacheHit.negative ? null : transformCachedEnrichment(cacheHit.record.apolloPersonId ?? "", cacheHit.record),
         cached: true,
@@ -269,7 +276,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
       });
       await updateRun(cachedRun.id, "completed", identity);
       traceEvent(runId, { service: "apollo-service", event: "match-cache-hit", detail: `negative=${outcome.negative} (locked recheck)` }, req.headers).catch(() => {});
-      return res.json({
+      return reply({
         enrichmentId: null,
         person: outcome.negative ? null : transformCachedEnrichment(outcome.record.apolloPersonId ?? "", outcome.record),
         cached: true,
@@ -280,11 +287,14 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
     traceEvent(runId, { service: "apollo-service", event: "match-done", detail: `enrichmentId=${outcome.enrichmentId}, hasEmail=${!!outcome.person?.email}`, data: { enrichmentId: outcome.enrichmentId, hasEmail: !!outcome.person?.email } }, req.headers).catch(() => {});
 
-    res.json({ enrichmentId: outcome.enrichmentId, person: transformed, cached: false });
+    await reply({ enrichmentId: outcome.enrichmentId, person: transformed, cached: false });
   } catch (error) {
     console.error("[Apollo Service][POST /match] ERROR:", error);
     if (req.runId) {
       traceEvent(req.runId, { service: "apollo-service", event: "match-error", detail: error instanceof Error ? error.message : "Unknown error", level: "error" }, req.headers).catch(() => {});
+    }
+    if (error instanceof EmailVerificationError) {
+      return res.status(502).json({ type: "email_verification", source: "email-verification", error: error.message });
     }
     res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
   }
