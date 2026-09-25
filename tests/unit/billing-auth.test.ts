@@ -2,6 +2,15 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import express from "express";
 import request from "supertest";
 
+// Pre-serve verification is covered in email-verification.test.ts; here it is a
+// stub that answers "valid" for any address.
+vi.mock("../../src/lib/email-verification.js", () => ({
+  EmailVerificationError: class EmailVerificationError extends Error {},
+  verificationFor: async (email: string | null | undefined) =>
+    email ? { email, verdict: "valid", deliverable: true, verifier: "bounceverify", verificationId: "ver-1", verifiedAt: "2026-09-25T00:00:00.000Z", reused: false } : null,
+}));
+
+
 /**
  * Tests for billing credit authorization.
  *

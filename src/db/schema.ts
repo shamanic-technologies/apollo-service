@@ -302,6 +302,132 @@ export const apolloPhoneReveals = pgTable(
   ]
 );
 
+// ─── Email finders (treg.to, Explee) ────────────────────────────────────────
+//
+// BRONZE: every vendor call, verbatim, append-only. One row per HTTP exchange
+// (or per exchange that failed before an answer came back). Never updated.
+export const emailFinderCalls = pgTable(
+  "email_finder_calls",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    findingId: uuid("finding_id").notNull(),
+    vendor: text("vendor").notNull(), // "treg" | "explee"
+    preset: text("preset").notNull(), // explee: "basic" | "premium"; treg: "routed"
+    orgId: uuid("org_id").notNull(),
+    userId: text("user_id"),
+    runId: text("run_id"),
+    findRunId: text("find_run_id"),
+    requestUrl: text("request_url").notNull(),
+    requestBody: jsonb("request_body").notNull(),
+    httpStatus: integer("http_status"),
+    responseHeaders: jsonb("response_headers"),
+    // Parsed JSON when the body parses, else the raw text under { _raw }.
+    responseBody: jsonb("response_body"),
+    underlyingProvider: text("underlying_provider"),
+    // What the vendor says it charged, in the vendor's own unit
+    // (treg: integer micro-USD from X-Treg-Cost-Micro; explee: credits).
+    chargedQuantity: decimal("charged_quantity", { precision: 20, scale: 6 }),
+    chargedUnit: text("charged_unit"),
+    error: text("error"),
+    durationMs: integer("duration_ms"),
+    calledAt: timestamp("called_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_email_finder_calls_finding").on(table.findingId),
+    index("idx_email_finder_calls_vendor_called").on(table.vendor, table.calledAt),
+  ]
+);
+
+// SILVER: one normalised finding per (vendor, preset, person). The unique key
+// is what makes a re-request free: a second ask for the same person on the same
+// vendor + preset is answered from this row and never re-sent to the vendor.
+export const emailFindings = pgTable(
+  "email_findings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    vendor: text("vendor").notNull(),
+    preset: text("preset").notNull(),
+    personKey: text("person_key").notNull(),
+
+    // Who we asked about (as given by the caller).
+    apolloPersonId: text("apollo_person_id"),
+    firstName: text("first_name"),
+    lastName: text("last_name"),
+    domain: text("domain"),
+    linkedinUrl: text("linkedin_url"),
+
+    // The org/run that paid for the (one) vendor call.
+    orgId: uuid("org_id").notNull(),
+    userId: text("user_id"),
+    runId: text("run_id"),
+    findRunId: text("find_run_id"),
+    brandIds: text("brand_ids").array(),
+    campaignId: text("campaign_id"),
+
+    // "pending" | "found" | "not_found" | "failed"
+    status: text("status").notNull().default("pending"),
+    email: text("email"),
+    // The vendor's own word for the mailbox check, verbatim.
+    vendorMailboxStatus: text("vendor_mailbox_status"),
+    // Normalised: "valid" | "catch_all" | "invalid" | "unverified" | "unknown"
+    mailboxStatus: text("mailbox_status"),
+    underlyingProvider: text("underlying_provider"),
+
+    // Cost: vendor-reported charge in the vendor's unit, the catalogue name it
+    // was declared under, and the runs-service cost rows.
+    costName: text("cost_name").notNull(),
+    chargedQuantity: decimal("charged_quantity", { precision: 20, scale: 6 }),
+    chargedUnit: text("charged_unit"),
+    keySource: text("key_source"),
+    provisionedCostId: text("provisioned_cost_id"),
+    actualCostId: text("actual_cost_id"),
+
+    lastCallId: uuid("last_call_id"),
+    failureReason: text("failure_reason"),
+    requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("idx_email_findings_vendor_preset_person").on(table.vendor, table.preset, table.personKey),
+    index("idx_email_findings_apollo_person").on(table.apolloPersonId),
+  ]
+);
+
+// ─── Pre-serve email verification (BounceVerify via Apify) ──────────────────
+//
+// BRONZE + the verdict: one row per verification CALL, append-only, the actor's
+// raw row kept verbatim. The latest decisive verdict for an address within
+// VERDICT_REUSE_DAYS is what every reveal response reuses (see
+// src/lib/email-verification.ts), so the same address is not paid for twice.
+export const emailVerifications = pgTable(
+  "email_verifications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // Lower-cased, trimmed.
+    email: text("email").notNull(),
+    verifier: text("verifier").notNull(), // "bounceverify"
+    // "valid" | "invalid" | "catch_all" | "risky" | "unknown"; null when the call failed.
+    verdict: text("verdict"),
+    // The actor's own row for this address, verbatim.
+    rawResult: jsonb("raw_result"),
+    httpStatus: integer("http_status"),
+    error: text("error"),
+    orgId: uuid("org_id").notNull(),
+    userId: text("user_id"),
+    runId: text("run_id"),
+    verifyRunId: text("verify_run_id"),
+    // What asked: "enrich" | "match" | "email-finder:<vendor>".
+    source: text("source"),
+    keySource: text("key_source"),
+    billed: boolean("billed").notNull().default(false),
+    durationMs: integer("duration_ms"),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("idx_email_verifications_email_at").on(table.email, table.verifiedAt)]
+);
+
 export type ApolloPeopleSearch = typeof apolloPeopleSearches.$inferSelect;
 export type NewApolloPeopleSearch = typeof apolloPeopleSearches.$inferInsert;
 export type ApolloPeopleEnrichment = typeof apolloPeopleEnrichments.$inferSelect;
@@ -312,3 +438,6 @@ export type ApolloAudience = typeof apolloAudiences.$inferSelect;
 export type NewApolloAudience = typeof apolloAudiences.$inferInsert;
 export type ApolloPhoneReveal = typeof apolloPhoneReveals.$inferSelect;
 export type NewApolloPhoneReveal = typeof apolloPhoneReveals.$inferInsert;
+export type EmailFinderCall = typeof emailFinderCalls.$inferSelect;
+export type EmailFinding = typeof emailFindings.$inferSelect;
+export type EmailVerification = typeof emailVerifications.$inferSelect;
