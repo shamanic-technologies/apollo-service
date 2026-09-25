@@ -713,6 +713,26 @@ export const EnrichRequestSchema = z
   })
   .openapi("EnrichRequest");
 
+export const EmailVerificationSchema = z
+  .object({
+    email: z.string().openapi({ description: "The verified address, lower-cased." }),
+    verdict: z.enum(["valid", "invalid", "catch_all", "risky", "unknown"]).openapi({
+      description: "BounceVerify's verdict (real SMTP + catch-all detection).",
+    }),
+    deliverable: z.boolean().openapi({
+      description: "THE switch: true only for verdict `valid`. false = revealed but not deliverable — do not send; the person is still returned so the caller can suppress them.",
+    }),
+    verifier: z.literal("bounceverify"),
+    verificationId: z.string().uuid(),
+    verifiedAt: z.string(),
+    reused: z.boolean().openapi({ description: "true = a decisive verdict under 30 days old was reused; nothing billed." }),
+  })
+  .nullable()
+  .openapi("EmailVerification", {
+    description:
+      "Pre-serve verification of the revealed email. null when there is no email. Billed as apify-bounceverify-email (decisive verdicts only). A verification that fails answers 502 {type: \"email_verification\"} — an unverified email is never returned as deliverable.",
+  });
+
 const EnrichResponseSchema = z
   .object({
     enrichmentId: z.string().nullable(),
@@ -720,6 +740,7 @@ const EnrichResponseSchema = z
     cached: z.boolean().openapi({
       description: "True if the result was served from the 12-month cache (no Apollo API call, no cost).",
     }),
+    emailVerification: EmailVerificationSchema,
   })
   .openapi("EnrichResponse");
 
@@ -743,6 +764,10 @@ registry.registerPath({
     },
     400: {
       description: "Validation error",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "The revealed email could not be verified (type email_verification). The reveal is cached; a retry re-runs only the verification.",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     500: {
@@ -769,6 +794,7 @@ const MatchResponseSchema = z
     cached: z.boolean().openapi({
       description: "True if the result was served from cache (no Apollo API call).",
     }),
+    emailVerification: EmailVerificationSchema,
   })
   .openapi("MatchResponse");
 
@@ -792,6 +818,10 @@ registry.registerPath({
     },
     400: {
       description: "Validation error",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "The revealed email could not be verified (type email_verification). The reveal is cached; a retry re-runs only the verification.",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     500: {
@@ -1536,6 +1566,7 @@ const EmailFindingSchema = z
 
 const EmailFindResponseSchema = EmailFindingSchema.extend({
   reused: z.boolean().openapi({ description: "true = served from the stored finding; no vendor call, nothing billed." }),
+  emailVerification: EmailVerificationSchema,
 }).openapi("EmailFindResponse");
 
 registry.registerPath({

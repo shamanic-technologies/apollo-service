@@ -395,6 +395,39 @@ export const emailFindings = pgTable(
   ]
 );
 
+// ─── Pre-serve email verification (BounceVerify via Apify) ──────────────────
+//
+// BRONZE + the verdict: one row per verification CALL, append-only, the actor's
+// raw row kept verbatim. The latest decisive verdict for an address within
+// VERDICT_REUSE_DAYS is what every reveal response reuses (see
+// src/lib/email-verification.ts), so the same address is not paid for twice.
+export const emailVerifications = pgTable(
+  "email_verifications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // Lower-cased, trimmed.
+    email: text("email").notNull(),
+    verifier: text("verifier").notNull(), // "bounceverify"
+    // "valid" | "invalid" | "catch_all" | "risky" | "unknown"; null when the call failed.
+    verdict: text("verdict"),
+    // The actor's own row for this address, verbatim.
+    rawResult: jsonb("raw_result"),
+    httpStatus: integer("http_status"),
+    error: text("error"),
+    orgId: uuid("org_id").notNull(),
+    userId: text("user_id"),
+    runId: text("run_id"),
+    verifyRunId: text("verify_run_id"),
+    // What asked: "enrich" | "match" | "email-finder:<vendor>".
+    source: text("source"),
+    keySource: text("key_source"),
+    billed: boolean("billed").notNull().default(false),
+    durationMs: integer("duration_ms"),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("idx_email_verifications_email_at").on(table.email, table.verifiedAt)]
+);
+
 export type ApolloPeopleSearch = typeof apolloPeopleSearches.$inferSelect;
 export type NewApolloPeopleSearch = typeof apolloPeopleSearches.$inferInsert;
 export type ApolloPeopleEnrichment = typeof apolloPeopleEnrichments.$inferSelect;
@@ -407,3 +440,4 @@ export type ApolloPhoneReveal = typeof apolloPhoneReveals.$inferSelect;
 export type NewApolloPhoneReveal = typeof apolloPhoneReveals.$inferInsert;
 export type EmailFinderCall = typeof emailFinderCalls.$inferSelect;
 export type EmailFinding = typeof emailFindings.$inferSelect;
+export type EmailVerification = typeof emailVerifications.$inferSelect;

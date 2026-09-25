@@ -26,6 +26,12 @@ vi.mock("../../src/lib/billing-client.js", () => ({ authorizeCredit: (...a: unkn
 const mockDecryptKey = vi.fn();
 vi.mock("../../src/lib/keys-client.js", () => ({ decryptKey: (...a: unknown[]) => mockDecryptKey(...a) }));
 
+const mockVerificationFor = vi.fn();
+vi.mock("../../src/lib/email-verification.js", () => ({
+  EmailVerificationError: class EmailVerificationError extends Error {},
+  verificationFor: (...a: unknown[]) => mockVerificationFor(...a),
+}));
+
 vi.mock("../../src/lib/trace-event.js", () => ({ traceEvent: vi.fn().mockResolvedValue(undefined) }));
 
 vi.mock("../../src/middleware/auth.js", () => ({
@@ -131,6 +137,9 @@ beforeEach(() => {
   mockUpdateCostStatus.mockResolvedValue({});
   mockAuthorizeCredit.mockResolvedValue({ sufficient: true, balance_cents: 10_000, required_cents: 10 });
   mockDecryptKey.mockResolvedValue({ key: "vendor-key", keySource: "platform" });
+  mockVerificationFor.mockImplementation(async (email: string | null) =>
+    email ? { email, verdict: "valid", deliverable: true, verifier: "bounceverify", verificationId: "ver-1", verifiedAt: "2026-09-25T00:00:00.000Z", reused: false } : null
+  );
   vi.stubGlobal("fetch", fetchMock);
 });
 
@@ -377,6 +386,39 @@ describe("POST /email-finder/find — never pays twice", () => {
     expect(mockDecryptKey).not.toHaveBeenCalled();
     expect(mockAuthorizeCredit).not.toHaveBeenCalled();
     expect(mockAddCosts).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /email-finder/find — verdict", () => {
+  it("a found address carries the verifier's verdict; a miss carries none", async () => {
+    mockVerificationFor.mockImplementation(async (email: string | null) =>
+      email ? { email, verdict: "catch_all", deliverable: false, verifier: "bounceverify", verificationId: "ver-9", verifiedAt: "x", reused: false } : null
+    );
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { email: "ada@example.com", email_status: "valid", meta: { credits_charged: 1.5, remaining_balance: 9 } }));
+    const app = await buildApp();
+    const found = await request(app).post("/email-finder/find").set(HEADERS).send({ vendor: "explee", preset: "basic", person: PERSON });
+    expect(found.body.emailVerification).toMatchObject({ verdict: "catch_all", deliverable: false });
+    expect(mockVerificationFor).toHaveBeenCalledWith("ada@example.com", expect.objectContaining({ source: "email-finder:explee", runId: "run-1" }));
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { email: null, email_status: null, meta: { credits_charged: 0, remaining_balance: 9 } }));
+    const miss = await request(app).post("/email-finder/find").set(HEADERS).send({ vendor: "explee", preset: "premium", person: PERSON });
+    expect(miss.body.emailVerification).toBeNull();
+  });
+
+  it("a verifier failure is a loud 502, but the paid finding stays found (re-request retries only the verify)", async () => {
+    const { EmailVerificationError } = await import("../../src/lib/email-verification.js");
+    mockVerificationFor.mockRejectedValueOnce(new EmailVerificationError("apify down"));
+    fetchMock.mockResolvedValue(jsonResponse(200, { email: "ada@example.com", email_status: "valid", meta: { credits_charged: 1.5, remaining_balance: 9 } }));
+    const app = await buildApp();
+    const res = await request(app).post("/email-finder/find").set(HEADERS).send({ vendor: "explee", preset: "basic", person: PERSON });
+    expect(res.status).toBe(502);
+    expect(res.body).toMatchObject({ type: "email_verification", source: "email-verification" });
+    expect(findings[0].status).toBe("found");
+
+    const again = await request(app).post("/email-finder/find").set(HEADERS).send({ vendor: "explee", preset: "basic", person: PERSON });
+    expect(again.status).toBe(200);
+    expect(again.body).toMatchObject({ reused: true, emailVerification: { verdict: "valid" } });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 

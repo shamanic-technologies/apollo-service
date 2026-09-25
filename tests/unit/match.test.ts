@@ -2,6 +2,15 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import express from "express";
 import request from "supertest";
 
+// Pre-serve verification is covered in email-verification.test.ts; here it is a
+// stub that answers "valid" for any address.
+vi.mock("../../src/lib/email-verification.js", () => ({
+  EmailVerificationError: class EmailVerificationError extends Error {},
+  verificationFor: async (email: string | null | undefined) =>
+    email ? { email, verdict: "valid", deliverable: true, verifier: "bounceverify", verificationId: "ver-1", verifiedAt: "2026-09-25T00:00:00.000Z", reused: false } : null,
+}));
+
+
 /**
  * Tests for POST /match endpoint.
  *
@@ -237,6 +246,8 @@ describe("POST /match", () => {
     expect(res.body.person.email).toBe("john@acme.com");
     expect(res.body.cached).toBe(false);
     expect(res.body.enrichmentId).toBe("record-1");
+    // Additive: the reveal carries the verifier's verdict beside the person.
+    expect(res.body.emailVerification).toMatchObject({ email: "john@acme.com", verdict: "valid", deliverable: true });
   });
 
   // ─── Cost tracking ───────────────────────────────────────────────────────

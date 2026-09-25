@@ -2229,13 +2229,69 @@
           "cached": {
             "type": "boolean",
             "description": "True if the result was served from the 12-month cache (no Apollo API call, no cost)."
+          },
+          "emailVerification": {
+            "$ref": "#/components/schemas/EmailVerification"
           }
         },
         "required": [
           "enrichmentId",
           "person",
-          "cached"
+          "cached",
+          "emailVerification"
         ]
+      },
+      "EmailVerification": {
+        "type": "object",
+        "nullable": true,
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "The verified address, lower-cased."
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "valid",
+              "invalid",
+              "catch_all",
+              "risky",
+              "unknown"
+            ],
+            "description": "BounceVerify's verdict (real SMTP + catch-all detection)."
+          },
+          "deliverable": {
+            "type": "boolean",
+            "description": "THE switch: true only for verdict `valid`. false = revealed but not deliverable — do not send; the person is still returned so the caller can suppress them."
+          },
+          "verifier": {
+            "type": "string",
+            "enum": [
+              "bounceverify"
+            ]
+          },
+          "verificationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "verifiedAt": {
+            "type": "string"
+          },
+          "reused": {
+            "type": "boolean",
+            "description": "true = a decisive verdict under 30 days old was reused; nothing billed."
+          }
+        },
+        "required": [
+          "email",
+          "verdict",
+          "deliverable",
+          "verifier",
+          "verificationId",
+          "verifiedAt",
+          "reused"
+        ],
+        "description": "Pre-serve verification of the revealed email. null when there is no email. Billed as apify-bounceverify-email (decisive verdicts only). A verification that fails answers 502 {type: \"email_verification\"} — an unverified email is never returned as deliverable."
       },
       "EnrichRequest": {
         "type": "object",
@@ -2269,12 +2325,16 @@
           "cached": {
             "type": "boolean",
             "description": "True if the result was served from cache (no Apollo API call)."
+          },
+          "emailVerification": {
+            "$ref": "#/components/schemas/EmailVerification"
           }
         },
         "required": [
           "enrichmentId",
           "person",
-          "cached"
+          "cached",
+          "emailVerification"
         ]
       },
       "MatchRequest": {
@@ -4162,10 +4222,14 @@
               "reused": {
                 "type": "boolean",
                 "description": "true = served from the stored finding; no vendor call, nothing billed."
+              },
+              "emailVerification": {
+                "$ref": "#/components/schemas/EmailVerification"
               }
             },
             "required": [
-              "reused"
+              "reused",
+              "emailVerification"
             ]
           }
         ]
@@ -4747,6 +4811,16 @@
                 }
               }
             }
+          },
+          "502": {
+            "description": "The revealed email could not be verified (type email_verification). The reveal is cached; a retry re-runs only the verification.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -4872,6 +4946,16 @@
           },
           "500": {
             "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The revealed email could not be verified (type email_verification). The reveal is cached; a retry re-runs only the verification.",
             "content": {
               "application/json": {
                 "schema": {

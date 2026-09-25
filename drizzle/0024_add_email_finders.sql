@@ -59,3 +59,24 @@ CREATE TABLE IF NOT EXISTS "email_findings" (
 --> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS "idx_email_findings_vendor_preset_person" ON "email_findings" USING btree ("vendor","preset","person_key");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_email_findings_apollo_person" ON "email_findings" USING btree ("apollo_person_id");
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS "email_verifications" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"email" text NOT NULL,
+	"verifier" text NOT NULL,
+	"verdict" text,
+	"raw_result" jsonb,
+	"http_status" integer,
+	"error" text,
+	"org_id" uuid NOT NULL,
+	"user_id" text,
+	"run_id" text,
+	"verify_run_id" text,
+	"source" text,
+	"key_source" text,
+	"billed" boolean DEFAULT false NOT NULL,
+	"duration_ms" integer,
+	"verified_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_email_verifications_email_at" ON "email_verifications" USING btree ("email","verified_at");

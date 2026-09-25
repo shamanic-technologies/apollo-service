@@ -9,6 +9,7 @@ import { createRun, updateRun, addCosts, updateCostStatus, type IdentityHeaders 
 import { authorizeCredit } from "../lib/billing-client.js";
 import { assertKeySource } from "../lib/validators.js";
 import { traceEvent } from "../lib/trace-event.js";
+import { verificationFor, EmailVerificationError } from "../lib/email-verification.js";
 import {
   EXPLEE_COST_NAME,
   EXPLEE_PRESET_CREDITS,
@@ -196,6 +197,14 @@ router.post("/email-finder/find", serviceAuth, async (req: AuthenticatedRequest,
   const plan = planFor(vendor, preset);
   const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandIds, campaignId, audienceId, featureSlug, workflowSlug };
   const tracking = { brandIds, campaignId, audienceId, featureSlug, workflowSlug };
+  // A found address carries the verifier's verdict, like every Apollo reveal.
+  const verifyCtx = { identity, tracking, runId, source: `email-finder:${vendor}` };
+  const respond = async (row: EmailFinding, reused: boolean) =>
+    res.status(statusCodeFor(row)).json({
+      ...toFindingResponse(row),
+      reused,
+      emailVerification: row.status === "found" ? await verificationFor(row.email, verifyCtx) : null,
+    });
 
   let claimed: EmailFinding | undefined;
   let findRunId: string | undefined;
@@ -205,7 +214,7 @@ router.post("/email-finder/find", serviceAuth, async (req: AuthenticatedRequest,
   try {
     const existing = await findExisting(vendor, preset, personKey);
     if (existing && isSettledOrInFlight(existing)) {
-      return res.status(statusCodeFor(existing)).json({ ...toFindingResponse(existing), reused: true });
+      return await respond(existing, true);
     }
 
     const resolved = await resolveKey(req, plan.keyProvider, tracking);
@@ -269,7 +278,7 @@ router.post("/email-finder/find", serviceAuth, async (req: AuthenticatedRequest,
     if (!claimed) {
       const winner = await findExisting(vendor, preset, personKey);
       if (!winner) throw new Error("email finding claim lost to a concurrent request, but no row exists");
-      return res.status(statusCodeFor(winner)).json({ ...toFindingResponse(winner), reused: true });
+      return await respond(winner, true);
     }
 
     const findRun = await createRun({
@@ -384,10 +393,16 @@ router.post("/email-finder/find", serviceAuth, async (req: AuthenticatedRequest,
       req.headers
     ).catch(() => {});
 
-    return res.status(statusCodeFor(done)).json({ ...toFindingResponse(done), reused: false });
+    return await respond(done, false);
   } catch (error) {
     console.error("[Apollo Service][POST /email-finder/find] ERROR:", error);
     const message = error instanceof Error ? error.message : "Internal server error";
+
+    // The find itself succeeded and is stored; only its verdict is missing. A
+    // re-request serves the finding (no vendor call) and retries the verify.
+    if (error instanceof EmailVerificationError) {
+      return res.status(502).json({ type: "email_verification", source: "email-verification", error: message });
+    }
 
     // Release what we reserved, unless the vendor may have billed us anyway.
     const mayHaveCharged = error instanceof EmailFinderVendorError && error.mayHaveCharged;
