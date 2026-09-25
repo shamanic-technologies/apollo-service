@@ -279,6 +279,30 @@ describe("POST /email-finder/find — treg", () => {
     expect(calls[0]).toMatchObject({ httpStatus: null });
   });
 
+  it("a retry after a lost answer releases the hold the failure kept", async () => {
+    fetchMock.mockRejectedValueOnce(new Error("socket hang up"));
+    const app = await buildApp();
+    await request(app).post("/email-finder/find").set(HEADERS).send({ vendor: "treg", person: PERSON });
+    expect(findings[0]).toMatchObject({ status: "failed", provisionedCostId: "hold-1", findRunId: "find-run-1" });
+
+    mockCreateRun.mockResolvedValue({ id: "find-run-2" });
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { output: { email: "ada@example.com", verified: true } }, { "x-treg-cost-micro": "5000", "x-treg-idempotent-replay": "true" }));
+    const res = await request(app).post("/email-finder/find").set(HEADERS).send({ vendor: "treg", person: PERSON });
+    expect(res.body).toMatchObject({ status: "found", chargedQuantity: 5000 });
+    // The new run's hold AND the old kept hold are both released; one actual posted.
+    expect(mockUpdateCostStatus).toHaveBeenCalledWith("find-run-2", "hold-1", "cancelled", expect.anything());
+    expect(mockUpdateCostStatus).toHaveBeenCalledWith("find-run-1", "hold-1", "cancelled", expect.anything());
+    // Same Idempotency-Key on the retry → treg replays instead of re-billing.
+    expect(fetchMock.mock.calls[0][1].headers["Idempotency-Key"]).toBe(fetchMock.mock.calls[1][1].headers["Idempotency-Key"]);
+  });
+
+  it("a released hold is not remembered: a vendor error leaves no provisionedCostId", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(500, { detail: "down" }));
+    const app = await buildApp();
+    await request(app).post("/email-finder/find").set(HEADERS).send({ vendor: "treg", person: PERSON });
+    expect(findings[0]).toMatchObject({ status: "failed", provisionedCostId: null });
+  });
+
   it("a 202 (async child still running) stays pending with its hold, and is never re-sent", async () => {
     fetchMock.mockResolvedValue(jsonResponse(202, { _treg: { outcome: "pending", reserved_micro: 9000, charged_micro: null } }));
     const app = await buildApp();
