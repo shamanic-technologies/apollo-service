@@ -256,8 +256,10 @@ export function tregVendorMailboxStatus(output: Record<string, unknown> | null, 
   });
   if (named) return named;
   if (output?.verified === true) return "verified";
-  if (output?.verified === false) return "unverified";
-  return words[0] ?? null;
+  // treg's contract: only `verified: true` means the mailbox was checked. A
+  // child that sends no flag at all (live: quickenrich) made no claim, which
+  // treg itself reports as "not confirmed deliverable (verified != true)".
+  return words[0] ?? "unverified";
 }
 
 /**

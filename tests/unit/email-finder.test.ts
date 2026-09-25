@@ -232,6 +232,15 @@ describe("POST /email-finder/find — treg", () => {
     expect(mockAddCosts).toHaveBeenCalledTimes(1);
   });
 
+  it("a child that sends no verified flag reads as unverified (live: quickenrich)", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, { output: { email: "ada@example.com" }, raw: { code: 200, success: true } }, { "x-treg-cost-micro": "4834", "x-treg-served-by": "quickenrich.people.email.find" })
+    );
+    const app = await buildApp();
+    const res = await request(app).post("/email-finder/find").set(HEADERS).send({ vendor: "treg", person: PERSON });
+    expect(res.body).toMatchObject({ vendorMailboxStatus: "unverified", mailboxStatus: "unverified", chargedQuantity: 4834 });
+  });
+
   it("a miss is not billed: no actual cost, the hold is released", async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, { output: { email: null }, _treg: { tried: ["a", "b"] } }, { "x-treg-cost-micro": "0" }));
     const app = await buildApp();
@@ -365,6 +374,9 @@ describe("POST /email-finder/find — explee", () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ status: "found", mailboxStatus: "valid", chargedQuantity: 1.5, reused: false });
+    // billing authorizes integers only: the 1.5-credit worst case is rounded up; runs gets the exact 1.5.
+    expect(mockAuthorizeCredit).toHaveBeenLastCalledWith(expect.objectContaining({ items: [{ costName: "explee-credit", quantity: 2 }] }));
+    expect(mockAddCosts).toHaveBeenLastCalledWith("find-run-1", [{ costName: "explee-credit", costSource: "platform", quantity: 1.5, status: "actual" }], expect.anything());
     expect(findings).toHaveLength(1);
     expect(calls).toHaveLength(2);
   });
