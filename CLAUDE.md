@@ -364,7 +364,12 @@ identity, idempotency, persistence and cost.
   still running, `charged_micro: null` — treg says do NOT retry). Those rows say
   `holdKept: true` / `status: pending`; reconcile them from bronze.
 - **Missing platform key = 503 `provider_key_missing`** naming the key-service
-  provider (`treg` / `explee`), before any row, hold or vendor call.
+  provider (`treg` / `treg-org` / `explee`), before any row, hold or vendor call.
+  treg's token is an IDENTITY (team-scoped) token: every call also sends
+  `X-Treg-Org` = key-service provider `treg-org` (`distribute-you`).
+- **treg's mailbox word rides in `raw`, not `output`.** Live 2026-09-25: a hit
+  with `output.verified: false` carried `raw.status: "catch_all"`.
+  `tregVendorMailboxStatus` prefers a word that names a mailbox state over the bool.
 - Do NOT touch the Apollo reveal path from here; this is additive.
 
 ## Running out of Apollo credits raises a STAFF EMAIL — never let it stay silent

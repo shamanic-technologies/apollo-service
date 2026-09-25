@@ -230,14 +230,34 @@ export function buildTregBody(person: FindPerson): Record<string, unknown> {
   return body;
 }
 
-/** treg reports a mailbox check as `output.verified` (bool); a word, when a child sends one, wins. */
-function tregVendorMailboxStatus(output: Record<string, unknown> | null): string | null {
-  if (!output) return null;
-  const word = str(output.status) ?? str(output.email_status) ?? str(output.verification_status) ?? str(output.verification);
-  if (word) return word;
-  if (output.verified === true) return "verified";
-  if (output.verified === false) return "unverified";
-  return null;
+/**
+ * treg's contract reports the mailbox check only as `output.verified` (bool),
+ * but the child's own word rides in `raw` — verified live 2026-09-25: a hit
+ * with `output.verified: false` carried `raw.status: "catch_all"`. A word that
+ * names a mailbox state wins over the bool (catch_all is exactly what the bool
+ * hides); a word that does not (`raw.status: "success"`) is ignored.
+ */
+export function tregVendorMailboxStatus(output: Record<string, unknown> | null, raw: Record<string, unknown> | null): string | null {
+  const words = [
+    output?.status,
+    output?.email_status,
+    output?.verification_status,
+    raw?.email_status,
+    raw?.verification_status,
+    raw?.status,
+    raw?.verification,
+    raw?.result,
+  ]
+    .map(str)
+    .filter((w): w is string => w !== null);
+  const named = words.find((w) => {
+    const n = normalizeMailboxStatus(w);
+    return n !== null && n !== "unknown";
+  });
+  if (named) return named;
+  if (output?.verified === true) return "verified";
+  if (output?.verified === false) return "unverified";
+  return words[0] ?? null;
 }
 
 /**
@@ -256,12 +276,17 @@ function tregChargedMicro(exchange: VendorExchange): number | null {
   return null;
 }
 
-export async function findWithTreg(token: string, person: FindPerson, idempotencyKey: string): Promise<VendorFindResult> {
+/**
+ * `token` is a treg IDENTITY token (team-scoped login), so every call also
+ * names the team: `X-Treg-Org` (key-service provider `treg-org`).
+ */
+export async function findWithTreg(token: string, org: string, person: FindPerson, idempotencyKey: string): Promise<VendorFindResult> {
   const body = buildTregBody(person);
   const { exchange, response, networkError } = await post(
     TREG_FIND_URL,
     {
       "X-Treg-Token": token,
+      "X-Treg-Org": org,
       // A true ceiling: treg refuses (402, nothing charged) above it.
       "X-Treg-Route-Max-Cost": (TREG_MAX_COST_MICRO / 1_000_000).toFixed(6),
       // A retry of a call whose answer was lost is replayed, never re-billed.
@@ -282,6 +307,7 @@ export async function findWithTreg(token: string, person: FindPerson, idempotenc
 
   const parsed = (exchange.responseBody ?? {}) as {
     output?: Record<string, unknown> | null;
+    raw?: Record<string, unknown> | null;
     _treg?: { served_by?: unknown };
   };
   const underlyingProvider = str(exchange.responseHeaders?.["x-treg-served-by"]) ?? str(parsed._treg?.served_by);
@@ -315,7 +341,8 @@ export async function findWithTreg(token: string, person: FindPerson, idempotenc
     );
   }
 
-  const vendorMailboxStatus = email ? tregVendorMailboxStatus(output) : null;
+  const raw = parsed.raw && typeof parsed.raw === "object" ? parsed.raw : null;
+  const vendorMailboxStatus = email ? tregVendorMailboxStatus(output, raw) : null;
   return {
     outcome: email ? "found" : "not_found",
     email,

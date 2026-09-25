@@ -170,6 +170,8 @@ describe("POST /email-finder/find — treg", () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("https://treg.to/call/treg.people.email.find");
     expect(init.headers["X-Treg-Token"]).toBe("vendor-key");
+    expect(init.headers["X-Treg-Org"]).toBe("vendor-key");
+    expect(mockDecryptKey).toHaveBeenCalledWith("org-1", "user-1", "treg-org", expect.anything(), expect.anything());
     expect(init.headers["X-Treg-Route-Max-Cost"]).toBe("0.150000");
     expect(init.headers["Idempotency-Key"]).toMatch(/^apollo-email-find:/);
     expect(JSON.parse(init.body)).toMatchObject({ first_name: "Ada", last_name: "Lovelace", domain: "example.com" });
@@ -200,6 +202,25 @@ describe("POST /email-finder/find — treg", () => {
     // Silver: one row, keyed on the Apollo person.
     expect(findings).toHaveLength(1);
     expect(findings[0]).toMatchObject({ personKey: "apollo:ap-1", actualCostId: "actual-1", lastCallId: calls[0].id });
+  });
+
+  it("reads the child's mailbox word from raw (live shape: verified=false + raw.status=catch_all)", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        {
+          output: { email: "ada@example.com", verified: false },
+          raw: { status: "catch_all", credits_charged: 1 },
+          _treg: { served_by: "tomba.people.email.find", provider: "tomba", outcome: "hit", tried: [] },
+        },
+        { "x-treg-cost-micro": "0" }
+      )
+    );
+    const app = await buildApp();
+    const res = await request(app).post("/email-finder/find").set(HEADERS).send({ vendor: "treg", person: PERSON });
+    expect(res.body).toMatchObject({ status: "found", vendorMailboxStatus: "catch_all", mailboxStatus: "catch_all", chargedQuantity: 0, underlyingProvider: "tomba.people.email.find" });
+    // A hit treg did not charge for declares nothing actual.
+    expect(mockAddCosts).toHaveBeenCalledTimes(1);
   });
 
   it("a miss is not billed: no actual cost, the hold is released", async () => {

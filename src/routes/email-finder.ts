@@ -210,6 +210,8 @@ router.post("/email-finder/find", serviceAuth, async (req: AuthenticatedRequest,
 
     const resolved = await resolveKey(req, plan.keyProvider, tracking);
     keySource = resolved.keySource;
+    // treg's token is team-scoped: the team slug is its own key-service entry.
+    const tregOrg = vendor === "treg" ? (await resolveKey(req, "treg-org", tracking)).key : null;
 
     if (keySource === "platform") {
       const auth = await authorizeCredit({
@@ -300,7 +302,7 @@ router.post("/email-finder/find", serviceAuth, async (req: AuthenticatedRequest,
     try {
       result =
         vendor === "treg"
-          ? await findWithTreg(resolved.key, person, `apollo-email-find:${claimed.id}`)
+          ? await findWithTreg(resolved.key, tregOrg!, person, `apollo-email-find:${claimed.id}`)
           : await findWithExplee(resolved.key, person, preset as ExpleePreset);
     } catch (err) {
       if (err instanceof EmailFinderVendorError) {
