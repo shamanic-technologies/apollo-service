@@ -31,12 +31,26 @@ export const TREG_COST_NAME = "treg-micro-usd";
 export const EXPLEE_COST_NAME = "explee-credit";
 
 /**
- * Ceiling on one treg routed find, in micro-USD. Sent to treg as
- * `X-Treg-Route-Max-Cost` so treg refuses (402, nothing charged) rather than
- * spending more, which makes it a TRUE worst case to provision. The dearest
- * child in the routed plan is $0.15 per hit.
+ * Ceiling on one treg routed find, in micro-USD: $0.01, the benchmark's target
+ * price per person. Sent to treg as `X-Treg-Route-Max-Cost`, which treg
+ * applies PER CHILD and CUMULATIVELY — verified live 2026-09-25: every child
+ * priced above it is `skipped: "would exceed max cost"` and never called, so no
+ * lookup can cost more than this. That makes it a TRUE worst case to provision.
+ * The plan it leaves (2026-09-25): quickenrich $0.004834, trykitt $0.005,
+ * aiark $0.005267 (LinkedIn only), tomba $0.0089 (name or LinkedIn), moltsets
+ * $0.01. Everything dearer (findymail, prospeo, hunter, contactout $0.15, …)
+ * is skipped.
  */
-export const TREG_MAX_COST_MICRO = 150_000;
+export const TREG_MAX_COST_MICRO = 10_000;
+
+/**
+ * Providers never tried, sent as `X-Treg-Route-Exclude` (comma list). treg
+ * matches it on the PROVIDER — an endpoint id there is silently ignored
+ * (verified live 2026-09-25). leadmagic serves `leadmagic.x.personal-email-finder`
+ * (gmail/yahoo/hotmail, useless for B2B); its work finder is $0.025, above the
+ * ceiling anyway, so excluding the provider loses nothing.
+ */
+export const TREG_EXCLUDED_PROVIDERS = ["leadmagic"] as const;
 
 /** Explee's documented per-hit price, per preset, in credits. */
 export const EXPLEE_PRESET_CREDITS: Record<ExpleePreset, number> = { basic: 1.5, premium: 5 };
@@ -65,7 +79,66 @@ export interface VendorFindResult {
   underlyingProvider: string | null;
   /** Vendor-reported charge in its own unit; null only for a pending treg call. */
   chargedQuantity: number | null;
+  /** An address the vendor returned but that is not a WORK email (kept for the record, never served). */
+  rejectedEmail: string | null;
+  rejectionReason: EmailRejectionReason | null;
   exchange: VendorExchange;
+}
+
+export type EmailRejectionReason = "personal_email";
+
+/**
+ * Consumer mailbox providers: an address there is a person's private inbox,
+ * not their work one. A positive fingerprint only — an unknown domain is
+ * presumed to be a company's.
+ */
+export const PERSONAL_EMAIL_DOMAINS: ReadonlySet<string> = new Set([
+  "gmail.com", "googlemail.com",
+  "yahoo.com", "ymail.com", "rocketmail.com", "yahoo.co.uk", "yahoo.fr", "yahoo.ca", "yahoo.de", "yahoo.es", "yahoo.it", "yahoo.com.au", "yahoo.co.in",
+  "hotmail.com", "hotmail.co.uk", "hotmail.fr", "hotmail.de", "hotmail.es", "hotmail.it",
+  "outlook.com", "outlook.fr", "live.com", "live.co.uk", "live.fr", "msn.com", "passport.com",
+  "aol.com", "aim.com", "icloud.com", "me.com", "mac.com",
+  "protonmail.com", "proton.me", "pm.me", "tutanota.com", "fastmail.com", "hey.com",
+  "gmx.com", "gmx.net", "gmx.de", "gmx.fr", "web.de", "mail.com", "yandex.com", "yandex.ru", "mail.ru", "zoho.com",
+  "comcast.net", "att.net", "sbcglobal.net", "verizon.net", "bellsouth.net", "cox.net", "charter.net",
+  "earthlink.net", "optonline.net", "frontier.com", "windstream.net", "juno.com", "netzero.net",
+  "orange.fr", "wanadoo.fr", "free.fr", "laposte.net", "sfr.fr", "neuf.fr", "libero.it", "btinternet.com",
+  "qq.com", "163.com", "126.com", "rediffmail.com",
+]);
+
+/**
+ * Is this a PERSONAL address rather than a work one? True when it sits on a
+ * consumer mailbox provider, unless that provider IS the person's employer
+ * (someone who works at aol.com has a work address there).
+ */
+export function isPersonalEmail(email: string, companyDomain?: string): boolean {
+  const at = email.lastIndexOf("@");
+  if (at < 0) return false;
+  const domain = email.slice(at + 1).trim().toLowerCase();
+  if (!PERSONAL_EMAIL_DOMAINS.has(domain)) return false;
+  return normalizeDomain(companyDomain) !== domain;
+}
+
+/**
+ * A found address that is not a work email is not a finding: the outcome
+ * becomes `not_found` and the address is kept aside as `rejectedEmail`. The
+ * vendor's charge is untouched — it was billed, and the cost stays exact.
+ * A child whose own name says it finds PERSONAL emails is rejected whatever
+ * the address looks like.
+ */
+export function rejectNonWorkEmail(result: VendorFindResult, person: FindPerson): VendorFindResult {
+  if (result.outcome !== "found" || !result.email) return result;
+  const personalChild = /personal/i.test(result.underlyingProvider ?? "");
+  if (!personalChild && !isPersonalEmail(result.email, person.domain)) return result;
+  return {
+    ...result,
+    outcome: "not_found",
+    email: null,
+    vendorMailboxStatus: null,
+    mailboxStatus: null,
+    rejectedEmail: result.email,
+    rejectionReason: "personal_email",
+  };
 }
 
 /** One HTTP exchange, as it will be written to bronze. */
@@ -289,8 +362,10 @@ export async function findWithTreg(token: string, org: string, person: FindPerso
     {
       "X-Treg-Token": token,
       "X-Treg-Org": org,
-      // A true ceiling: treg refuses (402, nothing charged) above it.
+      // A true ceiling: every child priced above it is skipped, never called.
       "X-Treg-Route-Max-Cost": (TREG_MAX_COST_MICRO / 1_000_000).toFixed(6),
+      // Work-email partners only: the personal-email finder's provider is never tried.
+      "X-Treg-Route-Exclude": TREG_EXCLUDED_PROVIDERS.join(","),
       // A retry of a call whose answer was lost is replayed, never re-billed.
       "Idempotency-Key": idempotencyKey,
     },
@@ -322,6 +397,8 @@ export async function findWithTreg(token: string, org: string, person: FindPerso
       mailboxStatus: null,
       underlyingProvider,
       chargedQuantity: null,
+      rejectedEmail: null,
+      rejectionReason: null,
       exchange,
     };
   }
@@ -333,7 +410,7 @@ export async function findWithTreg(token: string, org: string, person: FindPerso
   if (charged === null) {
     if (!email) {
       // A miss is free by contract; an absent charge on a miss is zero.
-      return { outcome: "not_found", email: null, vendorMailboxStatus: null, mailboxStatus: null, underlyingProvider, chargedQuantity: 0, exchange };
+      return { outcome: "not_found", email: null, vendorMailboxStatus: null, mailboxStatus: null, underlyingProvider, chargedQuantity: 0, rejectedEmail: null, rejectionReason: null, exchange };
     }
     throw new EmailFinderVendorError(
       "treg",
@@ -345,15 +422,24 @@ export async function findWithTreg(token: string, org: string, person: FindPerso
 
   const raw = parsed.raw && typeof parsed.raw === "object" ? parsed.raw : null;
   const vendorMailboxStatus = email ? tregVendorMailboxStatus(output, raw) : null;
-  return {
-    outcome: email ? "found" : "not_found",
-    email,
-    vendorMailboxStatus,
-    mailboxStatus: normalizeMailboxStatus(vendorMailboxStatus),
-    underlyingProvider,
-    chargedQuantity: charged,
-    exchange,
-  };
+  if (charged > TREG_MAX_COST_MICRO) {
+    // treg promised not to; the charge is still declared exactly, but loudly.
+    console.error(`[Apollo Service][treg] find charged ${charged} micro-USD, above the ${TREG_MAX_COST_MICRO} ceiling (served by ${underlyingProvider})`);
+  }
+  return rejectNonWorkEmail(
+    {
+      outcome: email ? "found" : "not_found",
+      email,
+      vendorMailboxStatus,
+      mailboxStatus: normalizeMailboxStatus(vendorMailboxStatus),
+      underlyingProvider,
+      chargedQuantity: charged,
+      rejectedEmail: null,
+      rejectionReason: null,
+      exchange,
+    },
+    person
+  );
 }
 
 // ─── Explee ──────────────────────────────────────────────────────────────────
@@ -396,13 +482,18 @@ export async function findWithExplee(apiKey: string, person: FindPerson, preset:
   }
 
   const vendorMailboxStatus = email ? str(parsed.email_status) : null;
-  return {
-    outcome: email ? "found" : "not_found",
-    email,
-    vendorMailboxStatus,
-    mailboxStatus: normalizeMailboxStatus(vendorMailboxStatus),
-    underlyingProvider: "explee",
-    chargedQuantity: credits,
-    exchange,
-  };
+  return rejectNonWorkEmail(
+    {
+      outcome: email ? "found" : "not_found",
+      email,
+      vendorMailboxStatus,
+      mailboxStatus: normalizeMailboxStatus(vendorMailboxStatus),
+      underlyingProvider: "explee",
+      chargedQuantity: credits,
+      rejectedEmail: null,
+      rejectionReason: null,
+      exchange,
+    },
+    person
+  );
 }

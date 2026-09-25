@@ -4316,6 +4316,19 @@
             "type": "string",
             "nullable": true
           },
+          "rejectedEmail": {
+            "type": "string",
+            "nullable": true,
+            "description": "An address the vendor returned that is NOT a work email (a gmail/aol/yahoo… inbox, or any address from a personal-email finder). Never served as `email`; the finding is then not_found. The vendor's charge for it stands."
+          },
+          "rejectionReason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "personal_email",
+              null
+            ]
+          },
           "requestedAt": {
             "type": "string",
             "nullable": true
@@ -4341,6 +4354,8 @@
           "chargedQuantity",
           "chargedUnit",
           "failureReason",
+          "rejectedEmail",
+          "rejectionReason",
           "requestedAt",
           "completedAt"
         ]

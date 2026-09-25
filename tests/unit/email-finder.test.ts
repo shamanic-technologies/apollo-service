@@ -150,6 +150,56 @@ afterEach(() => {
 // ─── treg ───────────────────────────────────────────────────────────────────
 
 describe("POST /email-finder/find — treg", () => {
+  it("a personal address (aol.com) is NOT returned as found: not_found, kept aside, and its charge still declared exactly", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        { output: { email: "ada.l@aol.com", verified: false }, raw: {}, _treg: { served_by: "tomba.people.email.find.linkedin", charged_micro: 8900 } },
+        { "x-treg-cost-micro": "8900", "x-treg-served-by": "tomba.people.email.find.linkedin" }
+      )
+    );
+    const app = await buildApp();
+    const res = await request(app).post("/email-finder/find").set(HEADERS).send({ vendor: "treg", person: PERSON });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      status: "not_found",
+      found: false,
+      email: null,
+      rejectedEmail: "ada.l@aol.com",
+      rejectionReason: "personal_email",
+      underlyingProvider: "tomba.people.email.find.linkedin",
+      chargedQuantity: 8900,
+      emailVerification: null,
+    });
+    expect(mockVerificationFor).not.toHaveBeenCalledWith("ada.l@aol.com", expect.anything());
+    // treg billed it: the charge is declared as actual, the hold released.
+    expect(mockAddCosts).toHaveBeenNthCalledWith(
+      2,
+      "find-run-1",
+      [{ costName: "treg-micro-usd", costSource: "platform", quantity: 8900, status: "actual" }],
+      expect.anything()
+    );
+    expect(mockUpdateCostStatus).toHaveBeenCalledWith("find-run-1", "hold-1", "cancelled", expect.anything());
+    // A re-request serves the settled row: never pays twice for a personal address either.
+    const again = await request(app).post("/email-finder/find").set(HEADERS).send({ vendor: "treg", person: PERSON });
+    expect(again.body).toMatchObject({ status: "not_found", reused: true, rejectedEmail: "ada.l@aol.com" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("any address from a personal-email finder child is rejected, whatever its domain", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        { output: { email: "ada@lovelace-family.org" }, raw: {}, _treg: { served_by: "leadmagic.x.personal-email-finder" } },
+        { "x-treg-cost-micro": "0", "x-treg-served-by": "leadmagic.x.personal-email-finder" }
+      )
+    );
+    const app = await buildApp();
+    const res = await request(app).post("/email-finder/find").set(HEADERS).send({ vendor: "treg", person: PERSON });
+    expect(res.body).toMatchObject({ status: "not_found", email: null, rejectedEmail: "ada@lovelace-family.org", rejectionReason: "personal_email" });
+  });
+
   it("finds, stores bronze + silver, and declares exactly the micro-USD treg reported", async () => {
     fetchMock.mockResolvedValue(
       jsonResponse(
@@ -181,16 +231,19 @@ describe("POST /email-finder/find — treg", () => {
     expect(init.headers["X-Treg-Token"]).toBe("vendor-key");
     expect(init.headers["X-Treg-Org"]).toBe("vendor-key");
     expect(mockDecryptKey).toHaveBeenCalledWith("org-1", "user-1", "treg-org", expect.anything(), expect.anything());
-    expect(init.headers["X-Treg-Route-Max-Cost"]).toBe("0.150000");
+    // $0.01 ceiling: treg skips every child priced above it, never calls it.
+    expect(init.headers["X-Treg-Route-Max-Cost"]).toBe("0.010000");
+    // Work-email partners only: the personal-email finder's provider is excluded.
+    expect(init.headers["X-Treg-Route-Exclude"]).toBe("leadmagic");
     expect(init.headers["Idempotency-Key"]).toMatch(/^apollo-email-find:/);
     expect(JSON.parse(init.body)).toMatchObject({ first_name: "Ada", last_name: "Lovelace", domain: "example.com" });
 
     // Provision worst case → actual = reported → hold cancelled.
-    expect(mockAuthorizeCredit).toHaveBeenCalledWith(expect.objectContaining({ items: [{ costName: "treg-micro-usd", quantity: 150_000 }] }));
+    expect(mockAuthorizeCredit).toHaveBeenCalledWith(expect.objectContaining({ items: [{ costName: "treg-micro-usd", quantity: 10_000 }] }));
     expect(mockAddCosts).toHaveBeenNthCalledWith(
       1,
       "find-run-1",
-      [{ costName: "treg-micro-usd", costSource: "platform", quantity: 150_000, status: "provisioned" }],
+      [{ costName: "treg-micro-usd", costSource: "platform", quantity: 10_000, status: "provisioned" }],
       expect.anything()
     );
     expect(mockAddCosts).toHaveBeenNthCalledWith(
@@ -507,5 +560,27 @@ describe("normalizeMailboxStatus", () => {
     expect(normalizeMailboxStatus("unverified")).toBe("unverified");
     expect(normalizeMailboxStatus("weird")).toBe("unknown");
     expect(normalizeMailboxStatus(null)).toBeNull();
+  });
+});
+
+// ─── work-email guard (pure) ────────────────────────────────────────────────
+
+describe("isPersonalEmail / rejectNonWorkEmail", () => {
+  it("flags consumer inboxes, keeps company domains, and keeps a provider's own employees", async () => {
+    const { isPersonalEmail } = await import("../../src/lib/email-finders.js");
+    expect(isPersonalEmail("x@gmail.com", "acme.com")).toBe(true);
+    expect(isPersonalEmail("x@AOL.com", "acme.com")).toBe(true);
+    expect(isPersonalEmail("x@hotmail.com")).toBe(true);
+    expect(isPersonalEmail("x@yahoo.com", "acme.com")).toBe(true);
+    expect(isPersonalEmail("x@acme.com", "acme.com")).toBe(false);
+    expect(isPersonalEmail("x@spineandsport.com", "acme.com")).toBe(false);
+    // Someone who works at aol.com has a work address there.
+    expect(isPersonalEmail("x@aol.com", "https://www.aol.com/")).toBe(false);
+  });
+
+  it("the ceiling and the exclusion are what treg is sent", async () => {
+    const { TREG_MAX_COST_MICRO, TREG_EXCLUDED_PROVIDERS } = await import("../../src/lib/email-finders.js");
+    expect(TREG_MAX_COST_MICRO).toBe(10_000);
+    expect(TREG_EXCLUDED_PROVIDERS).toContain("leadmagic");
   });
 });
