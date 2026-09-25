@@ -382,9 +382,28 @@ identity, idempotency, persistence and cost.
 - **Cost = the vendor's own figure, never ours.** treg: `X-Treg-Cost-Micro`
   header (integer micro-USD) → `treg-micro-usd` quantity. Explee:
   `meta.credits_charged` → `explee-credit` quantity. Provision the worst case
-  (treg 150,000 µUSD, ENFORCED by sending `X-Treg-Route-Max-Cost: 0.15`; Explee
-  the preset's credits), post the reported figure as `actual`, cancel the hold.
-  A miss reports 0 → hold cancelled, nothing billed.
+  (treg `TREG_MAX_COST_MICRO`; Explee the preset's credits), post the reported
+  figure as `actual`, cancel the hold. A miss reports 0 → hold cancelled.
+- **treg: $0.01 ceiling per find, work-email partners only (2026-09-25).**
+  `TREG_MAX_COST_MICRO = 10_000` is sent as `X-Treg-Route-Max-Cost: 0.010000`;
+  treg applies it PER CHILD, cumulatively — every child priced above it is
+  `skipped: "would exceed max cost"`, never called (verified live). What is
+  left: quickenrich, trykitt, aiark (LinkedIn), tomba, moltsets.
+  `X-Treg-Route-Exclude: leadmagic` drops the provider of
+  `leadmagic.x.personal-email-finder` — Exclude matches PROVIDERS; an endpoint
+  id there is silently ignored (verified live).
+- **A personal address is never `found`.** tomba (a WORK finder, $0.0089)
+  returned 8 aol/gmail/hotmail inboxes in the first benchmark, so the price
+  ceiling alone is not enough. `rejectNonWorkEmail` turns a consumer-mailbox
+  hit (`PERSONAL_EMAIL_DOMAINS`, unless it IS the person's company domain) or
+  any hit from a `*personal*` child into `not_found`, keeping the address in
+  `rejectedEmail` + `rejectionReason: "personal_email"`. The charge stands and
+  is declared exactly. Applied to Explee too. Migration 0025 corrected the 16
+  personal rows found before the guard.
+- **A treg 402 is not stored against the Idempotency-Key** (verified live): a
+  row that failed on `insufficient_balance` retries LIVE on a plain re-request.
+  A 200 IS replayed under the same key even when headers changed — which is
+  what a lost-answer retry needs.
 - **Keep the hold when the vendor may have billed**: a network error / lost
   answer, a found email with no readable charge, and a treg **202** (async child
   still running, `charged_micro: null` — treg says do NOT retry). Those rows say

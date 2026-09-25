@@ -384,6 +384,11 @@ export const emailFindings = pgTable(
 
     lastCallId: uuid("last_call_id"),
     failureReason: text("failure_reason"),
+    // A non-WORK address the vendor returned (a gmail/aol inbox): kept for the
+    // record, never served. The finding is then `not_found`.
+    rejectedEmail: text("rejected_email"),
+    // "personal_email"
+    rejectionReason: text("rejection_reason"),
     requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

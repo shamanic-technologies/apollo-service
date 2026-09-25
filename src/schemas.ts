@@ -1559,6 +1559,11 @@ const EmailFindingSchema = z
     chargedQuantity: z.number().nullable().openapi({ description: "What the vendor reported charging, in the cost's unit. 0 on a miss; null while pending." }),
     chargedUnit: z.string().nullable(),
     failureReason: z.string().nullable(),
+    rejectedEmail: z.string().nullable().openapi({
+      description:
+        "An address the vendor returned that is NOT a work email (a gmail/aol/yahoo… inbox, or any address from a personal-email finder). Never served as `email`; the finding is then not_found. The vendor's charge for it stands.",
+    }),
+    rejectionReason: z.enum(["personal_email"]).nullable(),
     requestedAt: z.string().nullable(),
     completedAt: z.string().nullable(),
   })
