@@ -1477,3 +1477,99 @@ registry.registerPath({
     500: { description: "Phone stored, cost reconciliation failed — Apollo should retry", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
+
+// ─── Email finders (treg.to, Explee) ────────────────────────────────────────
+
+const emailFindHeaders = z.object({
+  "x-org-id": z.string(),
+  "x-user-id": z.string(),
+  "x-run-id": z.string().openapi({ description: "Caller's run ID — parent of the email-find run the cost hangs on" }),
+  "x-brand-id": z.string().optional().openapi({ description: "Brand ID(s) — single UUID or comma-separated list" }),
+  "x-campaign-id": z.string().optional(),
+  "x-audience-id": z.string().optional(),
+  "x-feature-slug": z.string().optional(),
+  "x-workflow-slug": z.string().optional(),
+});
+
+const EmailFindRequestOpenApiSchema = z
+  .object({
+    vendor: z.enum(["treg", "explee"]),
+    preset: z.enum(["basic", "premium"]).optional().openapi({
+      description: "Explee only, REQUIRED for explee: basic (1.5 credits/hit, ~50%) or premium (5 credits/hit, ~78%). Must be absent for treg.",
+    }),
+    person: z.object({
+      apolloPersonId: z.string().optional().openapi({ description: "When given, the finding is keyed on it (idempotency key = vendor + preset + this id)." }),
+      firstName: z.string().optional(),
+      lastName: z.string().optional(),
+      domain: z.string().optional().openapi({ description: "Company domain (a URL is accepted; scheme, www. and path are stripped)." }),
+      linkedinUrl: z.string().optional().openapi({ description: "treg only — an alternative to name + domain." }),
+    }),
+  })
+  .openapi("EmailFindRequest");
+
+const EmailFindingSchema = z
+  .object({
+    findingId: z.string().uuid(),
+    vendor: z.enum(["treg", "explee"]),
+    preset: z.string().openapi({ description: '"basic" | "premium" for explee; "routed" for treg.' }),
+    personKey: z.string(),
+    apolloPersonId: z.string().nullable(),
+    status: z.enum(["pending", "found", "not_found", "failed"]).openapi({
+      description:
+        "found / not_found = the vendor answered; pending = treg's routed provider is still running (it may still charge — do NOT retry, the hold is kept); failed = the vendor call errored (not billed, retryable).",
+    }),
+    found: z.boolean(),
+    email: z.string().nullable(),
+    vendorMailboxStatus: z.string().nullable().openapi({ description: "The vendor's own mailbox-check word, verbatim (treg: verified/unverified or the child's word; explee: valid/catch_all/catch_all_valid)." }),
+    mailboxStatus: z.enum(["valid", "catch_all", "invalid", "unverified", "unknown"]).nullable().openapi({
+      description: "Normalised mailbox check. catch_all includes treg accept_all and Explee catch_all_valid.",
+    }),
+    underlyingProvider: z.string().nullable().openapi({ description: "treg: the child provider that served (X-Treg-Served-By). explee: \"explee\"." }),
+    costName: z.string().openapi({ description: "treg-micro-usd (quantity = micro-USD treg reported) or explee-credit (quantity = credits Explee charged)." }),
+    chargedQuantity: z.number().nullable().openapi({ description: "What the vendor reported charging, in the cost's unit. 0 on a miss; null while pending." }),
+    chargedUnit: z.string().nullable(),
+    failureReason: z.string().nullable(),
+    requestedAt: z.string().nullable(),
+    completedAt: z.string().nullable(),
+  })
+  .openapi("EmailFinding");
+
+const EmailFindResponseSchema = EmailFindingSchema.extend({
+  reused: z.boolean().openapi({ description: "true = served from the stored finding; no vendor call, nothing billed." }),
+}).openapi("EmailFindResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/email-finder/find",
+  summary: "Find a person's work email with treg.to or Explee (billed, idempotent)",
+  description:
+    "Asks one vendor for one person's work email. Idempotent on (vendor, preset, person): a finding already found, not found or in flight is served from storage and the vendor is never called again, so a re-run never pays twice; only a failed finding (not billed) is retried. Every vendor call is recorded verbatim (email_finder_calls) and normalised into one finding (email_findings). Cost: provisions the worst case (treg: 150,000 micro-USD, also sent as X-Treg-Route-Max-Cost; explee: the preset's credits), authorizes it for platform keys, then posts exactly what the vendor reported as `actual` and cancels the hold. A miss costs nothing.",
+  request: {
+    headers: emailFindHeaders,
+    body: { content: { "application/json": { schema: EmailFindRequestOpenApiSchema } } },
+  },
+  responses: {
+    200: { description: "Found or not found (fresh or reused)", content: { "application/json": { schema: EmailFindResponseSchema } } },
+    202: { description: "treg's routed provider is still running; the finding stays pending", content: { "application/json": { schema: EmailFindResponseSchema } } },
+    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponseSchema } } },
+    402: { description: "Insufficient credits", content: { "application/json": { schema: ErrorResponseSchema } } },
+    500: { description: "Internal server error", content: { "application/json": { schema: ErrorResponseSchema } } },
+    502: { description: "The vendor answered with an error (type vendor_error). The hold is released unless the vendor may have billed (holdKept: true).", content: { "application/json": { schema: ErrorResponseSchema } } },
+    503: { description: "The vendor's platform key is not in key-service (type provider_key_missing). Nothing was called or billed.", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/email-finder/findings",
+  summary: "Every treg/Explee finding held for an Apollo person",
+  description: "Reads stored findings only; calls no vendor.",
+  request: {
+    headers: z.object({ "x-org-id": z.string() }),
+    query: z.object({ apolloPersonId: z.string() }),
+  },
+  responses: {
+    200: { description: "Findings", content: { "application/json": { schema: z.object({ findings: z.array(EmailFindingSchema) }) } } },
+    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});

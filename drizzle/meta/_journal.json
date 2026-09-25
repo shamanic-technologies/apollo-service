@@ -169,6 +169,13 @@
       "when": 1779408000000,
       "tag": "0023_add_phone_reveals",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1779494400000,
+      "tag": "0024_add_email_finders",
+      "breakpoints": true
     }
   ]
 }

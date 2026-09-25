@@ -4150,6 +4150,183 @@
           "received",
           "updated"
         ]
+      },
+      "EmailFindResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EmailFinding"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "reused": {
+                "type": "boolean",
+                "description": "true = served from the stored finding; no vendor call, nothing billed."
+              }
+            },
+            "required": [
+              "reused"
+            ]
+          }
+        ]
+      },
+      "EmailFinding": {
+        "type": "object",
+        "properties": {
+          "findingId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "vendor": {
+            "type": "string",
+            "enum": [
+              "treg",
+              "explee"
+            ]
+          },
+          "preset": {
+            "type": "string",
+            "description": "\"basic\" | \"premium\" for explee; \"routed\" for treg."
+          },
+          "personKey": {
+            "type": "string"
+          },
+          "apolloPersonId": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "found",
+              "not_found",
+              "failed"
+            ],
+            "description": "found / not_found = the vendor answered; pending = treg's routed provider is still running (it may still charge — do NOT retry, the hold is kept); failed = the vendor call errored (not billed, retryable)."
+          },
+          "found": {
+            "type": "boolean"
+          },
+          "email": {
+            "type": "string",
+            "nullable": true
+          },
+          "vendorMailboxStatus": {
+            "type": "string",
+            "nullable": true,
+            "description": "The vendor's own mailbox-check word, verbatim (treg: verified/unverified or the child's word; explee: valid/catch_all/catch_all_valid)."
+          },
+          "mailboxStatus": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "valid",
+              "catch_all",
+              "invalid",
+              "unverified",
+              "unknown",
+              null
+            ],
+            "description": "Normalised mailbox check. catch_all includes treg accept_all and Explee catch_all_valid."
+          },
+          "underlyingProvider": {
+            "type": "string",
+            "nullable": true,
+            "description": "treg: the child provider that served (X-Treg-Served-By). explee: \"explee\"."
+          },
+          "costName": {
+            "type": "string",
+            "description": "treg-micro-usd (quantity = micro-USD treg reported) or explee-credit (quantity = credits Explee charged)."
+          },
+          "chargedQuantity": {
+            "type": "number",
+            "nullable": true,
+            "description": "What the vendor reported charging, in the cost's unit. 0 on a miss; null while pending."
+          },
+          "chargedUnit": {
+            "type": "string",
+            "nullable": true
+          },
+          "failureReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "requestedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "completedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "findingId",
+          "vendor",
+          "preset",
+          "personKey",
+          "apolloPersonId",
+          "status",
+          "found",
+          "email",
+          "vendorMailboxStatus",
+          "mailboxStatus",
+          "underlyingProvider",
+          "costName",
+          "chargedQuantity",
+          "chargedUnit",
+          "failureReason",
+          "requestedAt",
+          "completedAt"
+        ]
+      },
+      "EmailFindRequest": {
+        "type": "object",
+        "properties": {
+          "vendor": {
+            "type": "string",
+            "enum": [
+              "treg",
+              "explee"
+            ]
+          },
+          "preset": {
+            "type": "string",
+            "enum": [
+              "basic",
+              "premium"
+            ],
+            "description": "Explee only, REQUIRED for explee: basic (1.5 credits/hit, ~50%) or premium (5 credits/hit, ~78%). Must be absent for treg."
+          },
+          "person": {
+            "type": "object",
+            "properties": {
+              "apolloPersonId": {
+                "type": "string",
+                "description": "When given, the finding is keyed on it (idempotency key = vendor + preset + this id)."
+              },
+              "firstName": {
+                "type": "string"
+              },
+              "lastName": {
+                "type": "string"
+              },
+              "domain": {
+                "type": "string",
+                "description": "Company domain (a URL is accepted; scheme, www. and path are stripped)."
+              },
+              "linkedinUrl": {
+                "type": "string",
+                "description": "treg only — an alternative to name + domain."
+              }
+            }
+          }
+        },
+        "required": [
+          "vendor",
+          "person"
+        ]
       }
     },
     "parameters": {
@@ -5533,6 +5710,220 @@
           },
           "500": {
             "description": "Phone stored, cost reconciliation failed — Apollo should retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/email-finder/find": {
+      "post": {
+        "summary": "Find a person's work email with treg.to or Explee (billed, idempotent)",
+        "description": "Asks one vendor for one person's work email. Idempotent on (vendor, preset, person): a finding already found, not found or in flight is served from storage and the vendor is never called again, so a re-run never pays twice; only a failed finding (not billed) is retried. Every vendor call is recorded verbatim (email_finder_calls) and normalised into one finding (email_findings). Cost: provisions the worst case (treg: 150,000 micro-USD, also sent as X-Treg-Route-Max-Cost; explee: the preset's credits), authorizes it for platform keys, then posts exactly what the vendor reported as `actual` and cancels the hold. A miss costs nothing.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Caller's run ID — parent of the email-find run the cost hangs on"
+            },
+            "required": true,
+            "description": "Caller's run ID — parent of the email-find run the cost hangs on",
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) — single UUID or comma-separated list"
+            },
+            "required": false,
+            "description": "Brand ID(s) — single UUID or comma-separated list",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailFindRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Found or not found (fresh or reused)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailFindResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "treg's routed provider is still running; the finding stays pending",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailFindResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Insufficient credits",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The vendor answered with an error (type vendor_error). The hold is released unless the vendor may have billed (holdKept: true).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The vendor's platform key is not in key-service (type provider_key_missing). Nothing was called or billed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/email-finder/findings": {
+      "get": {
+        "summary": "Every treg/Explee finding held for an Apollo person",
+        "description": "Reads stored findings only; calls no vendor.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "apolloPersonId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Findings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "findings": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/EmailFinding"
+                      }
+                    }
+                  },
+                  "required": [
+                    "findings"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
             "content": {
               "application/json": {
                 "schema": {
