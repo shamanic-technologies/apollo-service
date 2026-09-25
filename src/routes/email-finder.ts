@@ -224,7 +224,10 @@ router.post("/email-finder/find", serviceAuth, async (req: AuthenticatedRequest,
 
     if (keySource === "platform") {
       const auth = await authorizeCredit({
-        items: [{ costName: plan.costName, quantity: plan.maxQuantity }],
+        // billing-service authorizes INTEGER quantities only (Explee basic is
+        // 1.5 credits). Authorize is an affordability gate, so round the worst
+        // case UP; runs-service takes the exact decimal on provision/actual.
+        items: [{ costName: plan.costName, quantity: Math.ceil(plan.maxQuantity) }],
         description: `${vendor} email find`,
         orgId: req.orgId!,
         userId: req.userId!,
