@@ -265,6 +265,14 @@ router.post("/email-finder/find", serviceAuth, async (req: AuthenticatedRequest,
       requestedAt: new Date(),
       updatedAt: new Date(),
     };
+    // A failed finding that KEPT its hold (the vendor may have billed: a lost
+    // answer) is released once this retry learns the truth — treg replays the
+    // original answer free under the same Idempotency-Key and reports the
+    // original charge, which this run then declares as `actual`.
+    const keptHold =
+      existing?.status === "failed" && existing.findRunId && existing.provisionedCostId
+        ? { runId: existing.findRunId, costId: existing.provisionedCostId }
+        : null;
     if (existing) {
       [claimed] = await db
         .update(emailFindings)
@@ -369,6 +377,7 @@ router.post("/email-finder/find", serviceAuth, async (req: AuthenticatedRequest,
       }
       await updateCostStatus(findRunId, provisionedCostId, "cancelled", identity);
       await updateRun(findRunId, "completed", identity);
+      if (keptHold) await updateCostStatus(keptHold.runId, keptHold.costId, "cancelled", identity);
     }
 
     const [done] = await db
@@ -413,7 +422,16 @@ router.post("/email-finder/find", serviceAuth, async (req: AuthenticatedRequest,
       if (claimed) {
         await db
           .update(emailFindings)
-          .set({ status: "failed", failureReason: message, findRunId, provisionedCostId, completedAt: new Date(), updatedAt: new Date() })
+          // `provisionedCostId` survives ONLY when the hold was kept, so a
+          // later retry knows exactly which hold it still owes a release.
+          .set({
+            status: "failed",
+            failureReason: message,
+            findRunId,
+            provisionedCostId: mayHaveCharged ? provisionedCostId : null,
+            completedAt: new Date(),
+            updatedAt: new Date(),
+          })
           .where(eq(emailFindings.id, claimed.id));
       }
       if (findRunId && provisionedCostId && !mayHaveCharged) {
