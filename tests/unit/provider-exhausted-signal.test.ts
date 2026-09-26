@@ -30,6 +30,14 @@ const APOLLO_ORDINARY_422_BODY = '{"error":"Page * per page number is over thres
 // Route mocks — mirrors tests/unit/search-dry-run.test.ts
 // ─────────────────────────────────────────────────────────────────────────────
 
+
+// The QuickEnrich switch is off for every audience in these tests.
+vi.mock("../../src/lib/quickenrich-serve.js", () => ({
+  findQuickenrichAudience: vi.fn().mockResolvedValue(null),
+  serveQuickenrichPage: vi.fn(),
+  loadQuickenrichPerson: vi.fn(),
+}));
+
 vi.mock("../../src/lib/runs-client.js", () => ({
   createRun: vi.fn(),
   updateRun: vi.fn().mockResolvedValue({}),

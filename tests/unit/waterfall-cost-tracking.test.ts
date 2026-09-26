@@ -15,6 +15,14 @@ const mockUpdateRun = vi.fn().mockResolvedValue({});
 const mockAddCosts = vi.fn().mockResolvedValue({ costs: [{ id: "cost-1" }] });
 const mockUpdateCostStatus = vi.fn().mockResolvedValue({});
 
+
+// The QuickEnrich switch is off for every audience in these tests.
+vi.mock("../../src/lib/quickenrich-serve.js", () => ({
+  findQuickenrichAudience: vi.fn().mockResolvedValue(null),
+  serveQuickenrichPage: vi.fn(),
+  loadQuickenrichPerson: vi.fn(),
+}));
+
 vi.mock("../../src/lib/runs-client.js", () => ({
   createRun: (...args: unknown[]) => mockCreateRun(...args),
   updateRun: (...args: unknown[]) => mockUpdateRun(...args),

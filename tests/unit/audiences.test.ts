@@ -225,16 +225,19 @@ describe("Apollo audience endpoints", () => {
       filters: FINAL_FILTERS,
       count: 4200,
       status: "confirmed",
+      serveSource: "apollo",
       createdAt: new Date("2026-01-01T00:00:00.000Z"),
     };
     const res = await request(app).get("/audiences/aud-1").set({ "X-Org-Id": "org-1", "X-Api-Key": "k" }).expect(200);
-    expect(res.body).toEqual({
+    expect(res.body).toMatchObject({
       apolloAudienceId: "aud-1",
       filters: FINAL_FILTERS,
       count: 4200,
       status: "confirmed",
       createdAt: "2026-01-01T00:00:00.000Z",
+      serveSource: "apollo",
     });
+    expect(typeof res.body.quickenrich.expressible).toBe("boolean");
   });
 
   it("GET /:id 404 when not found", async () => {

@@ -6,6 +6,14 @@ import request from "supertest";
 let selectCalls: Array<{ groupBy?: boolean }> = [];
 let selectResults: any[][] = [];
 
+
+// The QuickEnrich switch is off for every audience in these tests.
+vi.mock("../../src/lib/quickenrich-serve.js", () => ({
+  findQuickenrichAudience: vi.fn().mockResolvedValue(null),
+  serveQuickenrichPage: vi.fn(),
+  loadQuickenrichPerson: vi.fn(),
+}));
+
 vi.mock("../../src/lib/runs-client.js", () => ({
   createRun: vi.fn().mockResolvedValue({ id: "run-1" }),
   updateRun: vi.fn().mockResolvedValue({}),

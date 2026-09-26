@@ -672,6 +672,9 @@ const SearchNextResponseSchema = z
     page: z.number().openapi({ description: "The page number just fetched (1-based)." }),
     totalPages: z.number().openapi({ description: "Total pages for this filter set's pool, clamped to Apollo's reachable window (500). exhaustion happens when the next page would exceed this." }),
     hasMore: z.boolean().openapi({ description: "Convenience inverse of done — true when more pages remain to fetch for this filter set." }),
+    source: z.literal("quickenrich").optional().openapi({
+      description: "Present only when this page came from the FREE QuickEnrich search (the audience is switched to quickenrich). Those people carry an id `qe:<emp_id>`, their full name, LinkedIn URL and company domain; POST /enrich with that id finds the email with treg and verifies it. Absent = the Apollo walk, unchanged.",
+    }),
   })
   .openapi("SearchNextResponse", {
     description: "One page of search results with pagination state. Distinguish true pool-exhaustion (done=true) from a low-yield page (done=false, hasMore=true).",
@@ -741,6 +744,10 @@ const EnrichResponseSchema = z
       description: "True if the result was served from the 12-month cache (no Apollo API call, no cost).",
     }),
     emailVerification: EmailVerificationSchema,
+    source: z.literal("quickenrich").optional().openapi({
+      description: "Present when apolloPersonId was a `qe:<emp_id>` QuickEnrich person: the email was found with treg (no Apollo credit; cost `treg-micro-usd`) and verified. `cached` then means the finding was reused (no vendor call).",
+    }),
+    findingId: z.string().optional().openapi({ description: "The treg finding (email_findings) that answered, when source=quickenrich." }),
   })
   .openapi("EnrichResponse");
 
@@ -1327,8 +1334,27 @@ const AudienceResponseSchema = z
     count: z.number().int(),
     status: z.string().openapi({ description: '"confirmed" or "exhausted".' }),
     createdAt: z.string(),
+    serveSource: z.enum(["apollo", "quickenrich"]).openapi({ description: "Where /search/next sources this audience's people. Default apollo." }),
+    quickenrich: z
+      .object({
+        expressible: z.boolean(),
+        reasons: z.array(z.string()).openapi({ description: "Every constraint QuickEnrich cannot enforce; empty when expressible." }),
+      })
+      .openapi({ description: "Can this audience be served faithfully from QuickEnrich?" }),
   })
   .openapi("AudienceResponse");
+
+export const ServeSourceRequestSchema = z
+  .object({ serveSource: z.enum(["apollo", "quickenrich"]) })
+  .openapi("ServeSourceRequest");
+
+const ServeSourceResponseSchema = z
+  .object({
+    apolloAudienceId: z.string(),
+    serveSource: z.enum(["apollo", "quickenrich"]),
+    quickenrich: z.object({ expressible: z.boolean(), reasons: z.array(z.string()) }),
+  })
+  .openapi("ServeSourceResponse");
 
 const AudienceDryRunResponseSchema = z
   .object({
@@ -1373,6 +1399,26 @@ registry.registerPath({
       content: { "application/json": { schema: AudienceResponseSchema } },
     },
     404: { description: "Not found", content: { "application/json": { schema: ErrorResponseSchema } } },
+    500: { description: "Internal server error", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "patch",
+  path: "/audiences/{apolloAudienceId}/serve-source",
+  summary: "Switch an audience between the Apollo and the QuickEnrich serve path",
+  description:
+    "quickenrich: /search/next serves this audience from the FREE QuickEnrich search (people carry full name + LinkedIn + company domain, so the caller's suppression drops anybody already served before any spend), and /enrich finds their email with treg + verifies it; once QuickEnrich has nobody left, the Apollo walk serves as before. apollo (default): unchanged Apollo path. Switching ON an audience QuickEnrich cannot enforce faithfully answers 422 with every reason.",
+  request: {
+    headers: audienceOrgHeaders,
+    params: z.object({ apolloAudienceId: z.string() }),
+    body: { content: { "application/json": { schema: ServeSourceRequestSchema } }, required: true },
+  },
+  responses: {
+    200: { description: "Switched", content: { "application/json": { schema: ServeSourceResponseSchema } } },
+    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponseSchema } } },
+    404: { description: "Not found", content: { "application/json": { schema: ErrorResponseSchema } } },
+    422: { description: "Not expressible in QuickEnrich (reasons listed)", content: { "application/json": { schema: ErrorResponseSchema } } },
     500: { description: "Internal server error", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
