@@ -303,6 +303,13 @@ then requires — minutes later, not in the response.
   The consumer (instantly-service, on a qualified sales reply) polls the GET for
   a bounded ~90s and proceeds either way, so the three non-`found` states must
   stay distinguishable. Never collapse them.
+- **Plus 1 credit for the PERSON RECORD, on every reveal (measured 2026-09-26).**
+  The `people/match` call that asks for the phone returns the person, and
+  Apollo bills that record like any enrichment: one reveal moved the account's
+  lead counter by 9 while the callback reported `credits_consumed: 8`. The route
+  declares the 1 as `actual` right after the call (`isBilledApolloPerson`) and
+  authorizes 9. Phone credits come out of the SAME lead pool — Apollo's
+  `direct_dial_credit` counter read 7,500/7,500 used and did not block anything.
 - **Cost: `apollo-credit`, quantity 8 — quantity is the lever, the name is
   reused.** PROVISION 8 as a hold + AUTHORIZE (platform key only) BEFORE the
   call; the callback ACTUALIZES it when a number arrives and CANCELS it when

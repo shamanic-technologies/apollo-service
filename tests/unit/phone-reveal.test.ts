@@ -32,6 +32,7 @@ vi.mock("../../src/lib/keys-client.js", () => ({
 
 const mockEnrichPerson = vi.fn();
 vi.mock("../../src/lib/apollo-client.js", () => ({
+  isBilledApolloPerson: (p: { email?: string | null } | null | undefined) => !!p && p.email !== "email_not_unlocked@domain.com",
   enrichPerson: (...args: unknown[]) => mockEnrichPerson(...args),
   buildPhoneRevealWebhookUrl: () => "https://apollo.test/webhook/phone-reveal?secret=s",
 }));
@@ -171,12 +172,18 @@ describe("POST /people/:apolloPersonId/phone-reveal", () => {
     expect(options).toEqual({ revealPhoneNumber: true });
   });
 
-  it("provisions the 8-credit worst case before calling Apollo, and authorizes it", async () => {
+  it("provisions the 8-credit worst case before calling Apollo, and authorizes it with the person record (9)", async () => {
     const app = await buildApp();
     await request(app).post("/people/person-1/phone-reveal").set(HEADERS).send();
 
     expect(mockAuthorizeCredit).toHaveBeenCalledWith(
-      expect.objectContaining({ items: [{ costName: "apollo-credit", quantity: 8 }] })
+      expect.objectContaining({ items: [{ costName: "apollo-credit", quantity: 9 }] })
+    );
+    // Apollo bills the person record the call returns (measured: a reveal moved the counter by 9, the callback said 8).
+    expect(mockAddCosts).toHaveBeenCalledWith(
+      "reveal-run-1",
+      [{ costName: "apollo-credit", costSource: "platform", quantity: 1 }],
+      expect.anything()
     );
     expect(mockAddCosts).toHaveBeenCalledWith(
       "reveal-run-1",
