@@ -3,7 +3,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloPhoneReveals, type ApolloPhoneReveal } from "../db/schema.js";
 import { serviceAuth, orgAuth, type AuthenticatedRequest } from "../middleware/auth.js";
-import { enrichPerson, buildPhoneRevealWebhookUrl } from "../lib/apollo-client.js";
+import { enrichPerson, buildPhoneRevealWebhookUrl, isBilledApolloPerson } from "../lib/apollo-client.js";
 import { providerErrorFields } from "../lib/provider-error.js";
 import { advisoryXactLock } from "../lib/advisory-lock.js";
 import { decryptKey } from "../lib/keys-client.js";
@@ -118,7 +118,8 @@ router.post("/people/:apolloPersonId/phone-reveal", serviceAuth, async (req: Aut
     // BYOK orgs pay Apollo directly, so no affordability gate applies to them.
     if (keySource === "platform") {
       const auth = await authorizeCredit({
-        items: [{ costName: PHONE_REVEAL_COST_NAME, quantity: PHONE_REVEAL_MAX_CREDITS }],
+        // The mobile (8) plus the person record Apollo bills on the same call (1).
+        items: [{ costName: PHONE_REVEAL_COST_NAME, quantity: PHONE_REVEAL_MAX_CREDITS + 1 }],
         description: PHONE_REVEAL_COST_NAME,
         orgId: req.orgId!,
         userId: req.userId!,
@@ -196,6 +197,14 @@ router.post("/people/:apolloPersonId/phone-reveal", serviceAuth, async (req: Aut
         });
 
         const apolloRequestId = result.request_id !== undefined && result.request_id !== null ? String(result.request_id) : null;
+
+        // Apollo bills the PERSON RECORD this call returns (1 credit) on top of
+        // the mobile it may deliver later (8, reconciled by the callback) —
+        // measured 2026-09-26: one reveal moved the account counter by 9 while
+        // the callback reported credits_consumed: 8.
+        if (isBilledApolloPerson(result.person)) {
+          await addCosts(revealRun.id, [{ costName: PHONE_REVEAL_COST_NAME, costSource: keySource, quantity: 1 }], identity);
+        }
 
         // Apollo normally answers WITHOUT the number. If it did include one,
         // finish here rather than waiting for a callback that adds nothing.

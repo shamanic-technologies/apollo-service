@@ -303,6 +303,13 @@ then requires — minutes later, not in the response.
   The consumer (instantly-service, on a qualified sales reply) polls the GET for
   a bounded ~90s and proceeds either way, so the three non-`found` states must
   stay distinguishable. Never collapse them.
+- **Plus 1 credit for the PERSON RECORD, on every reveal (measured 2026-09-26).**
+  The `people/match` call that asks for the phone returns the person, and
+  Apollo bills that record like any enrichment: one reveal moved the account's
+  lead counter by 9 while the callback reported `credits_consumed: 8`. The route
+  declares the 1 as `actual` right after the call (`isBilledApolloPerson`) and
+  authorizes 9. Phone credits come out of the SAME lead pool — Apollo's
+  `direct_dial_credit` counter read 7,500/7,500 used and did not block anything.
 - **Cost: `apollo-credit`, quantity 8 — quantity is the lever, the name is
   reused.** PROVISION 8 as a hold + AUTHORIZE (platform key only) BEFORE the
   call; the callback ACTUALIZES it when a number arrives and CANCELS it when
@@ -646,6 +653,17 @@ by calling Apollo people-search outside `searchPeople`.
   called it a phantom pre-filter; that was wrong — the count really drops. So a fresh
   count/dry-run on an existing audience filter returns the verified-reachable number,
   not the demographic total (which fixes the inflated "remaining to contact").
+- **Apollo BILLS every person it returns — email or not (measured 2026-09-26).**
+  1 lead credit per `people/match` that returns a person: 5 `unavailable`
+  (no email) reveals moved the account counter by 5, 2 `extrapolated` by 2, with
+  no other traffic in the window. The old belief ("billed only for verified
+  emails") under-recorded ~0.9% of real spend. `isBilledApolloPerson` is the
+  charge gate in `/enrich` and `/match`; the `email_not_unlocked` placeholder
+  (no credit left) is the one unbilled case. A PAID no-email answer is cached
+  `BILLED_NO_EMAIL_CACHE_DAYS` (30) instead of 24h — re-asking paid again (249
+  repeat reveals in 90 days). An unmatched person (no record) stays at 24h.
+  Reconcile any future doubt the same way: Apollo's `credit_usage_stats` before
+  and after N controlled calls, minus our own rows in the window.
 - **The refine loop has NO band to calibrate — `AMBITION_MIN` is GONE (2026-07-28).**
   It used to be recalibrated 20,000 → 7,000 when the dry-runs became verified-only
   (counts are ~1/3 of the demographic total). That whole axis was deleted: the model

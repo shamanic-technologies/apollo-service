@@ -276,7 +276,7 @@ describe("POST /match", () => {
     });
   });
 
-  it("should NOT charge when person has no email", async () => {
+  it("charges 1 credit when Apollo returns a person with no email (Apollo bills the record, measured 2026-09-26)", async () => {
     mockMatchPersonByName.mockResolvedValueOnce({
       person: { ...MOCK_PERSON, email: null, email_status: null },
     });
@@ -285,10 +285,10 @@ describe("POST /match", () => {
       .send({ firstName: "John", lastName: "Doe", organizationDomain: "acme.com" })
       .expect(200);
 
-    expect(mockAddCosts).not.toHaveBeenCalled();
+    expect(mockAddCosts).toHaveBeenCalledWith(expect.any(String), [{ costName: "apollo-credit", costSource: "platform", quantity: 1 }], expect.anything());
   });
 
-  it("should NOT charge and should null the email when status is non-verified (extrapolated)", async () => {
+  it("charges 1 credit and nulls the email when status is non-verified (extrapolated)", async () => {
     mockMatchPersonByName.mockResolvedValueOnce({
       person: { ...MOCK_PERSON, email: "guess@acme.com", email_status: "extrapolated" },
     });
@@ -298,7 +298,7 @@ describe("POST /match", () => {
       .expect(200);
 
     // Apollo does not bill non-verified emails — neither do we.
-    expect(mockAddCosts).not.toHaveBeenCalled();
+    expect(mockAddCosts).toHaveBeenCalledWith(expect.any(String), [{ costName: "apollo-credit", costSource: "platform", quantity: 1 }], expect.anything());
     // Person metadata is still returned, but the guessed email is hidden.
     expect(res.body.person).not.toBeNull();
     expect(res.body.person.email).toBeNull();

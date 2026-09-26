@@ -412,7 +412,7 @@ describe("Apollo service cost tracking", () => {
     });
   });
 
-  it("should NOT post enrichment cost when Apollo returns person without email (regression: no-email = no charge)", async () => {
+  it("posts 1 apollo-credit when Apollo returns a person without email (Apollo bills the record, measured 2026-09-26)", async () => {
     mockEnrichPerson.mockResolvedValueOnce({
       person: {
         id: "person-0",
@@ -460,8 +460,9 @@ describe("Apollo service cost tracking", () => {
       expect.objectContaining({ taskName: "enrichment" })
     );
 
-    // Should NOT add enrichment cost — Apollo doesn't charge when no email returned
-    expect(mockAddCosts).not.toHaveBeenCalled();
+    // Apollo bills 1 credit for the person record even with no email — declared.
+    expect(mockAddCosts).toHaveBeenCalledTimes(1);
+    expect(mockAddCosts.mock.calls[0][1]).toEqual([{ costName: "apollo-credit", costSource: "platform", quantity: 1 }]);
 
     // Should still mark run as completed
     expect(mockUpdateRun).toHaveBeenCalledTimes(1);
@@ -472,7 +473,7 @@ describe("Apollo service cost tracking", () => {
     );
   });
 
-  it("should NOT post enrichment cost when Apollo returns a non-verified email (extrapolated = not billed)", async () => {
+  it("posts 1 apollo-credit when Apollo returns a non-verified email (extrapolated is billed too)", async () => {
     mockEnrichPerson.mockResolvedValueOnce({
       person: {
         id: "person-0",
@@ -506,8 +507,9 @@ describe("Apollo service cost tracking", () => {
       .send({ apolloPersonId: "person-0" })
       .expect(200);
 
-    // Apollo does not bill non-verified emails — neither do we.
-    expect(mockAddCosts).not.toHaveBeenCalled();
+    // Apollo bills the extrapolated record (measured: 2 reveals = 2 credits) — declared.
+    expect(mockAddCosts).toHaveBeenCalledTimes(1);
+    expect(mockAddCosts.mock.calls[0][1]).toEqual([{ costName: "apollo-credit", costSource: "platform", quantity: 1 }]);
     // The guessed email is hidden from the caller.
     expect(res.body.person.email).toBeNull();
     expect(res.body.person.emailStatus).toBe("extrapolated");
