@@ -213,6 +213,13 @@ router.post("/email-finder/find", serviceAuth, async (req: AuthenticatedRequest,
   let findRunId: string | undefined;
   let provisionedCostId: string | null = null;
   let keySource: "org" | "platform" | undefined;
+  // What the vendor answered, once it has. From then on it may have billed us:
+  // a later failure (runs-service, our DB) must neither release the hold before
+  // the charge is declared, nor let a retry declare it a second time after.
+  let answered: VendorFindResult | null = null;
+  let answeredCallId: string | null = null;
+  let chargeDeclared = false;
+  let actualCostId: string | null = null;
 
   try {
     const existing = await findExisting(vendor, preset, personKey);
@@ -347,6 +354,7 @@ router.post("/email-finder/find", serviceAuth, async (req: AuthenticatedRequest,
       }
       throw err;
     }
+    answered = result;
 
     const callId = await writeBronze({
       findingId: claimed.id,
@@ -362,12 +370,12 @@ router.post("/email-finder/find", serviceAuth, async (req: AuthenticatedRequest,
       chargedUnit: plan.chargedUnit,
       error: null,
     });
+    answeredCallId = callId;
 
     // ACTUALIZE / CANCEL. The hold was the worst case; the vendor reported the
     // exact charge, so post that as `actual` and release the hold (runs PATCH
     // is status-only). A miss charged 0 → the hold is simply released. A treg
     // call still pending keeps its hold: it may yet charge.
-    let actualCostId: string | null = null;
     if (result.outcome !== "pending") {
       const charged = result.chargedQuantity ?? 0;
       if (charged > 0) {
@@ -378,6 +386,7 @@ router.post("/email-finder/find", serviceAuth, async (req: AuthenticatedRequest,
         );
         actualCostId = actual.costs?.[0]?.id ?? null;
       }
+      chargeDeclared = true;
       await updateCostStatus(findRunId, provisionedCostId, "cancelled", identity);
       await updateRun(findRunId, "completed", identity);
       if (keptHold) await updateCostStatus(keptHold.runId, keptHold.costId, "cancelled", identity);
@@ -422,9 +431,39 @@ router.post("/email-finder/find", serviceAuth, async (req: AuthenticatedRequest,
     }
 
     // Release what we reserved, unless the vendor may have billed us anyway.
-    const mayHaveCharged = error instanceof EmailFinderVendorError && error.mayHaveCharged;
+    // Also true once the vendor answered: a runs-service timeout while declaring
+    // a charge treg already made must not release the hold (the retry replays
+    // free under the same Idempotency-Key and declares the charge).
+    // Answered but the charge not yet declared (e.g. runs-service timed out on
+    // the `actual`): keep the hold, like a lost answer. treg replays the answer
+    // free under the same Idempotency-Key on retry and the charge is declared then.
+    const mayHaveCharged =
+      (answered !== null && !chargeDeclared) || (error instanceof EmailFinderVendorError && error.mayHaveCharged);
+    // Answered AND the charge declared: the finding is settled. Store it as such
+    // so no retry calls the vendor or declares the charge a second time.
+    const settled = answered !== null && chargeDeclared ? answered : null;
     try {
-      if (claimed) {
+      if (claimed && settled) {
+        await db
+          .update(emailFindings)
+          .set({
+            status: settled.outcome,
+            email: settled.email,
+            vendorMailboxStatus: settled.vendorMailboxStatus,
+            mailboxStatus: settled.mailboxStatus,
+            underlyingProvider: settled.underlyingProvider,
+            chargedQuantity: settled.chargedQuantity === null ? null : String(settled.chargedQuantity),
+            rejectedEmail: settled.rejectedEmail,
+            rejectionReason: settled.rejectionReason,
+            findRunId,
+            provisionedCostId,
+            actualCostId,
+            lastCallId: answeredCallId,
+            completedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(emailFindings.id, claimed.id));
+      } else if (claimed) {
         await db
           .update(emailFindings)
           // `provisionedCostId` survives ONLY when the hold was kept, so a
