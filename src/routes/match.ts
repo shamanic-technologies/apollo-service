@@ -3,7 +3,7 @@ import { and, gt, eq, isNotNull, desc, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloPeopleEnrichments } from "../db/schema.js";
 import { serviceAuth, type AuthenticatedRequest } from "../middleware/auth.js";
-import { matchPersonByName, buildWaterfallWebhookUrl, withVerifiedEmailOnly, type ApolloPerson } from "../lib/apollo-client.js";
+import { matchPersonByName, buildWaterfallWebhookUrl, withVerifiedEmailOnly, isBilledApolloPerson, BILLED_NO_EMAIL_CACHE_DAYS, type ApolloPerson } from "../lib/apollo-client.js";
 import { providerErrorFields } from "../lib/provider-error.js";
 import { advisoryXactLock, matchLockKey } from "../lib/advisory-lock.js";
 import { decryptKey } from "../lib/keys-client.js";
@@ -29,7 +29,8 @@ const router = Router();
  * Look up a cached enrichment by firstName + lastName + organizationDomain.
  * Case-insensitive.
  * - Positive cache (has a verified email): 12-month TTL
- * - Negative cache (no email, waterfall not pending): 24h TTL
+ * - Negative cache (no email, waterfall not pending): 24h TTL, or
+ *   BILLED_NO_EMAIL_CACHE_DAYS when Apollo returned (and billed) the person
  * - Lazy cleanup: pending > 24h → cancel provisioned cost, add worst-case actual, mark expired
  */
 async function findCachedMatch(
@@ -72,6 +73,9 @@ async function findCachedMatch(
   const twentyFourHoursAgo = new Date();
   twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
   const twentyFourHoursAgoISO = twentyFourHoursAgo.toISOString();
+  // A PAID no-email answer (Apollo returned the person, email not verified) is
+  // reused for BILLED_NO_EMAIL_CACHE_DAYS: re-asking would pay again.
+  const billedNoEmailSinceISO = new Date(Date.now() - BILLED_NO_EMAIL_CACHE_DAYS * 86_400_000).toISOString();
 
   const [negative] = await db
     .select()
@@ -82,6 +86,8 @@ async function findCachedMatch(
         sql`${apolloPeopleEnrichments.email} IS NULL`,
         sql`(
           (COALESCE(${apolloPeopleEnrichments.waterfallStatus}, '') NOT IN ('pending') AND ${apolloPeopleEnrichments.createdAt} > ${twentyFourHoursAgoISO})
+          OR
+          (${apolloPeopleEnrichments.emailStatus} IS NOT NULL AND ${apolloPeopleEnrichments.emailStatus} <> 'verified' AND ${apolloPeopleEnrichments.createdAt} > ${billedNoEmailSinceISO})
           OR
           (${apolloPeopleEnrichments.waterfallStatus} = 'pending' AND ${apolloPeopleEnrichments.createdAt} <= ${twentyFourHoursAgoISO})
         )`
@@ -200,7 +206,9 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
       if (recheck) return { kind: "cached", record: recheck.record, negative: recheck.negative };
 
       const result = await matchPersonByName(apolloApiKey, firstName, lastName, organizationDomain, webhookUrl, toCreditAlertIdentity(req));
-      // Treat any non-verified email as no email (not billed, not cached, not returned).
+      // Apollo bills a credit for any person it returns, email or not.
+      const billed = isBilledApolloPerson(result.person);
+      // Treat any non-verified email as no email (not positive-cached, not returned).
       const person = result.person ? withVerifiedEmailOnly(result.person) : null;
 
       const matchRun = await createRun({
@@ -234,8 +242,8 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
         enrichmentId = enrichment.id;
 
-        if (person.email) {
-          // Email found immediately — charge 1 credit actual
+        if (billed) {
+          // Apollo returned a person: 1 credit, with or without a verified email.
           await addCosts(matchRun.id, [{ costName: "apollo-credit", costSource: keySource, quantity: 1 }], identity);
         }
       } else {

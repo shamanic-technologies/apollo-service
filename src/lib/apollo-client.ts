@@ -311,11 +311,11 @@ export const VERIFIED_EMAIL_STATUS = ["verified"] as const;
 
 /**
  * True only when Apollo SMTP-confirmed the email (`email_status === "verified"`).
- * Apollo bills 1 credit ONLY for verified emails; every other status it returns —
- * extrapolated (UI "Guessed"), unverified, catch_all, update_required, user_managed,
- * unknown — is NOT billed and NOT deliverable-guaranteed, and the placeholder above
- * is not an address at all. We treat all of those as "no email": not billed, not
- * positive-cached, not returned to callers.
+ * Every other status it returns — extrapolated (UI "Guessed"), unverified,
+ * catch_all, update_required, user_managed, unavailable — is NOT
+ * deliverable-guaranteed, and the placeholder above is not an address at all. We
+ * treat all of those as "no email": not positive-cached, not returned to callers.
+ * They ARE billed — see `isBilledApolloPerson`.
  */
 export function hasVerifiedEmail(
   person: Pick<ApolloPerson, "email" | "email_status">
@@ -325,6 +325,29 @@ export function hasVerifiedEmail(
     person.email !== APOLLO_PLACEHOLDER_EMAIL &&
     person.email_status === "verified"
   );
+}
+
+/**
+ * Did Apollo bill a lead credit for this people/match answer? Yes whenever it
+ * returned a person — Apollo charges "1 credit for demographics or email",
+ * verified email or not. MEASURED live 2026-09-26 against the account's credit
+ * counter: 5 reveals returning `email_status: "unavailable"` (no email) cost 5
+ * credits, 2 returning `extrapolated` cost 2. Charging only verified emails
+ * under-recorded ~0.9% of real spend. The one exception is the
+ * `email_not_unlocked` placeholder: Apollo sends it when the plan has no credit
+ * left to spend, so nothing was charged.
+ */
+/**
+ * How long a PAID no-email answer (Apollo returned the person, with no verified
+ * email) answers the question again. It cost a credit, so re-asking after the
+ * old 24h window paid again for the same answer: 249 repeat reveals in 90 days.
+ * 30 days matches the email-verdict reuse window. An UNBILLED miss (no person
+ * matched) keeps the 24h window.
+ */
+export const BILLED_NO_EMAIL_CACHE_DAYS = 30;
+
+export function isBilledApolloPerson(person: Pick<ApolloPerson, "email"> | null | undefined): boolean {
+  return !!person && person.email !== APOLLO_PLACEHOLDER_EMAIL;
 }
 
 /**
