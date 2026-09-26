@@ -596,6 +596,17 @@ by calling Apollo people-search outside `searchPeople`.
   called it a phantom pre-filter; that was wrong — the count really drops. So a fresh
   count/dry-run on an existing audience filter returns the verified-reachable number,
   not the demographic total (which fixes the inflated "remaining to contact").
+- **Apollo BILLS every person it returns — email or not (measured 2026-09-26).**
+  1 lead credit per `people/match` that returns a person: 5 `unavailable`
+  (no email) reveals moved the account counter by 5, 2 `extrapolated` by 2, with
+  no other traffic in the window. The old belief ("billed only for verified
+  emails") under-recorded ~0.9% of real spend. `isBilledApolloPerson` is the
+  charge gate in `/enrich` and `/match`; the `email_not_unlocked` placeholder
+  (no credit left) is the one unbilled case. A PAID no-email answer is cached
+  `BILLED_NO_EMAIL_CACHE_DAYS` (30) instead of 24h — re-asking paid again (249
+  repeat reveals in 90 days). An unmatched person (no record) stays at 24h.
+  Reconcile any future doubt the same way: Apollo's `credit_usage_stats` before
+  and after N controlled calls, minus our own rows in the window.
 - **The refine loop has NO band to calibrate — `AMBITION_MIN` is GONE (2026-07-28).**
   It used to be recalibrated 20,000 → 7,000 when the dry-runs became verified-only
   (counts are ~1/3 of the demographic total). That whole axis was deleted: the model
