@@ -1541,7 +1541,7 @@ const EmailFindingSchema = z
   .object({
     findingId: z.string().uuid(),
     vendor: z.enum(["treg", "explee"]),
-    preset: z.string().openapi({ description: '"basic" | "premium" for explee; "routed" for treg.' }),
+    preset: z.string().openapi({ description: '"basic" | "premium" for explee. treg: the routing policy the finding was asked under, e.g. "routed-max-6000" ($0.006 ceiling); "routed" = the $0.01 era before 2026-09-26. A new policy is a new question, so it is looked up once more.' }),
     personKey: z.string(),
     apolloPersonId: z.string().nullable(),
     status: z.enum(["pending", "found", "not_found", "failed"]).openapi({
@@ -1579,7 +1579,7 @@ registry.registerPath({
   path: "/email-finder/find",
   summary: "Find a person's work email with treg.to or Explee (billed, idempotent)",
   description:
-    "Asks one vendor for one person's work email. Idempotent on (vendor, preset, person): a finding already found, not found or in flight is served from storage and the vendor is never called again, so a re-run never pays twice; only a failed finding (not billed) is retried. Every vendor call is recorded verbatim (email_finder_calls) and normalised into one finding (email_findings). Cost: provisions the worst case (treg: 150,000 micro-USD, also sent as X-Treg-Route-Max-Cost; explee: the preset's credits), authorizes it for platform keys, then posts exactly what the vendor reported as `actual` and cancels the hold. A miss costs nothing.",
+    "Asks one vendor for one person's work email. Idempotent on (vendor, preset, person): a finding already found, not found or in flight is served from storage and the vendor is never called again, so a re-run never pays twice; only a failed finding (not billed) is retried. Every vendor call is recorded verbatim (email_finder_calls) and normalised into one finding (email_findings). Cost: provisions the worst case (treg: 6,000 micro-USD, also sent as X-Treg-Route-Max-Cost, with treg walking its plan cheapest first; explee: the preset's credits), authorizes it for platform keys, then posts exactly what the vendor reported as `actual` and cancels the hold. A miss costs nothing.",
   request: {
     headers: emailFindHeaders,
     body: { content: { "application/json": { schema: EmailFindRequestOpenApiSchema } } },

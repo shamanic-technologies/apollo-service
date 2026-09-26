@@ -312,12 +312,15 @@ export const emailFinderCalls = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     findingId: uuid("finding_id").notNull(),
     vendor: text("vendor").notNull(), // "treg" | "explee"
-    preset: text("preset").notNull(), // explee: "basic" | "premium"; treg: "routed"
+    preset: text("preset").notNull(), // explee: "basic" | "premium"; treg: routing policy ("routed-max-6000"; "routed" = $0.01 era)
     orgId: uuid("org_id").notNull(),
     userId: text("user_id"),
     runId: text("run_id"),
     findRunId: text("find_run_id"),
     requestUrl: text("request_url").notNull(),
+    // Headers we sent (credentials redacted) — proves the ceiling/routing asked for.
+    // Null on rows written before 2026-09-26.
+    requestHeaders: jsonb("request_headers"),
     requestBody: jsonb("request_body").notNull(),
     httpStatus: integer("http_status"),
     responseHeaders: jsonb("response_headers"),
