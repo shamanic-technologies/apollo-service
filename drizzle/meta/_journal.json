@@ -183,6 +183,13 @@
       "when": 1779580800000,
       "tag": "0025_email_findings_work_only",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1779667200000,
+      "tag": "0026_email_finder_request_headers",
+      "breakpoints": true
     }
   ]
 }

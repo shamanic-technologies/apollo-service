@@ -384,14 +384,27 @@ identity, idempotency, persistence and cost.
   `meta.credits_charged` → `explee-credit` quantity. Provision the worst case
   (treg `TREG_MAX_COST_MICRO`; Explee the preset's credits), post the reported
   figure as `actual`, cancel the hold. A miss reports 0 → hold cancelled.
-- **treg: $0.01 ceiling per find, work-email partners only (2026-09-25).**
-  `TREG_MAX_COST_MICRO = 10_000` is sent as `X-Treg-Route-Max-Cost: 0.010000`;
-  treg applies it PER CHILD, cumulatively — every child priced above it is
-  `skipped: "would exceed max cost"`, never called (verified live). What is
-  left: quickenrich, trykitt, aiark (LinkedIn), tomba, moltsets.
-  `X-Treg-Route-Exclude: leadmagic` drops the provider of
-  `leadmagic.x.personal-email-finder` — Exclude matches PROVIDERS; an endpoint
-  id there is silently ignored (verified live).
+- **treg: $0.006 ceiling per find, cheapest first, work-email partners only
+  (2026-09-26, was $0.01).** `TREG_MAX_COST_MICRO = 6_000` is sent as
+  `X-Treg-Route-Max-Cost: 0.006000`; every child priced above it is `skipped:
+  "would exceed max cost"`, never called. treg ALREADY walks its plan cheapest
+  per hit — there is no order header, so the ceiling is the only price lever.
+  Left: quickenrich $0.004834, trykitt $0.005, aiark $0.005267. Dropped tomba
+  ($0.0089: 57c for 10 valid on the 2026-09-25 benchmark). `X-Treg-Route-Exclude:
+  leadmagic` drops the personal-email finder's PROVIDER (an endpoint id there is
+  silently ignored).
+- **The treg silver preset NAMES THE ROUTING POLICY** (`TREG_PRESET` =
+  `routed-max-6000`; `routed` = the $0.01 era). A miss under a $0.006 plan is
+  not a miss under a $0.01 one, so changing the ceiling is a NEW question: one
+  more lookup per person, old rows kept as history. Every treg call sends
+  `Cache-Control: no-cache` — our silver row is the cache, and the only re-ask
+  is a policy change, where treg's archived answer would be the old policy's.
+- **Bronze records the REQUEST headers** (`email_finder_calls.request_headers`,
+  token/api-key redacted). The "leadsforge charged 2.45c despite the $0.01
+  cap" of 2026-09-25 was two calls served by the PRE-ceiling container (12:20:19
+  and :27, new container created 12:20:21); ~290 post-swap calls never exceeded
+  the dearest child under the cap. Without the sent headers that took a
+  deploy-log join to prove — now it is one column.
 - **A personal address is never `found`.** tomba (a WORK finder, $0.0089)
   returned 8 aol/gmail/hotmail inboxes in the first benchmark, so the price
   ceiling alone is not enough. `rejectNonWorkEmail` turns a consumer-mailbox
@@ -416,6 +429,24 @@ identity, idempotency, persistence and cost.
   with `output.verified: false` carried `raw.status: "catch_all"`.
   `tregVendorMailboxStatus` prefers a word that names a mailbox state over the bool.
 - Do NOT touch the Apollo reveal path from here; this is additive.
+
+## treg-FIRST on the reveal path does NOT work — the teaser has nothing to look up
+
+Measured 2026-09-26, so nobody re-plans it: the free People Search teaser a
+lead is served from carries `id, first_name, last_name_obfuscated ("Wi***s"),
+title, organization.name` and `has_*` booleans — NO LinkedIn URL, NO last
+name, NO domain. treg (`treg.people.email.find`) needs `linkedin_url` or full
+name + domain, and has no route by first name + company + title. The identity
+is only obtainable from Apollo itself, and Apollo bills **1 credit for
+demographics even when no email is revealed** (docs: "1 credit for
+demographics or email"), so buying the LinkedIn URL costs exactly the reveal.
+The 2026-09-25 benchmark's LinkedIn URLs came from people ALREADY revealed.
+And treg as a FALLBACK after the reveal adds nothing measurable: on the 125
+benchmark people whose Apollo address had a BounceVerify verdict, treg returned
+the SAME address 124 times (0 of 73 catch_all/unknown/invalid rescued). The one
+open path — resolving a LinkedIn URL from name + last-name mask + company +
+title via a paid people search — risks emailing the wrong human and needs an
+owner decision; do not build it by default.
 
 ## Running out of Apollo credits raises a STAFF EMAIL — never let it stay silent
 

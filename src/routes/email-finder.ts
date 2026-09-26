@@ -144,6 +144,7 @@ async function writeBronze(args: {
       runId: args.runId,
       findRunId: args.findRunId,
       requestUrl: args.exchange.requestUrl,
+      requestHeaders: args.exchange.requestHeaders,
       requestBody: args.exchange.requestBody,
       httpStatus: args.exchange.httpStatus,
       responseHeaders: args.exchange.responseHeaders,
