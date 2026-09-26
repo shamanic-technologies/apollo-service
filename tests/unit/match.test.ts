@@ -4,6 +4,14 @@ import request from "supertest";
 
 // Pre-serve verification is covered in email-verification.test.ts; here it is a
 // stub that answers "valid" for any address.
+
+// The QuickEnrich switch is off for every audience in these tests.
+vi.mock("../../src/lib/quickenrich-serve.js", () => ({
+  findQuickenrichAudience: vi.fn().mockResolvedValue(null),
+  serveQuickenrichPage: vi.fn(),
+  loadQuickenrichPerson: vi.fn(),
+}));
+
 vi.mock("../../src/lib/email-verification.js", () => ({
   EmailVerificationError: class EmailVerificationError extends Error {},
   verificationFor: async (email: string | null | undefined) =>

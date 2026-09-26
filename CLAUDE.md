@@ -436,6 +436,56 @@ identity, idempotency, persistence and cost.
   `tregVendorMailboxStatus` prefers a word that names a mailbox state over the bool.
 - Do NOT touch the Apollo reveal path from here; this is additive.
 
+## QuickEnrich serve path — free candidates, treg find, per audience, OFF by default
+
+`apollo_audiences.serve_source` = `apollo` (default) | `quickenrich`, set by
+`PATCH /audiences/{id}/serve-source` (422 + every reason when the filters are
+not expressible). human-service is untouched: it forwards an audience's stored
+filters verbatim as `/search/next` searchParams, so the switch is found by
+`filters = searchParams::jsonb` within the org (`findQuickenrichAudience`).
+
+- **Flow.** `/search/next` on a switched audience walks QuickEnrich
+  (`quickenrich.people.search` via treg, free) on its own cursor columns of
+  the same `apollo_search_cursors` row, post-filters, returns people with id
+  `qe:<emp_id>` + `source:"quickenrich"`, `done:false`. When QuickEnrich runs
+  dry the unchanged Apollo walk takes over. `/enrich` with a `qe:` id reads the
+  identity from silver `quickenrich_people`, runs `executeEmailFind` (the SAME
+  treg protocol as `/email-finder/find`, `src/lib/email-find-run.ts`), then the
+  verdict. not_found / treg 202 → person with null email (consumer records the
+  serve, never pays twice).
+- **Dedup before spend is human-service's existing pre-pay check**: its
+  suppression + opt-outs match `linkedin_url_norm` / provider person id on the
+  teaser. QuickEnrich rows carry the LinkedIn URL, re-written in APOLLO's form
+  (`http://www.linkedin.com/in/<slug>`, non-ASCII percent-encoded — 406 of
+  43,139 served rows are) so a person served via Apollo and found here is one
+  key. A row with no LinkedIn / full name / domain is never served. Silver
+  `email_findings` (personKey = linkedin) makes a repeat find free.
+- **Faithfulness (`planQuickenrich`, `rowMatchesPlan`)**: served only when
+  EVERY constraint is enforceable; stricter than Apollo is fine, looser never.
+  Enforceable: `person_titles` (server substring + whole-word post-filter,
+  exact when `include_similar_titles:false`), `person_not_titles`,
+  `person_locations` (server `locality` substring + structural post-filter; a
+  US state matches the region only), headcount/revenue only when the Apollo
+  span lines up with QuickEnrich's bands (±1 employee). NOT enforceable →
+  audience stays on Apollo: keyword tags, seniorities, industries,
+  organization locations, technologies, q_keywords, everything else.
+- **QuickEnrich's `city`/`region_code`/`country_code` are the COMPANY's
+  address** (Salesforce rows read San Francisco, some `country_code:"UK"`);
+  the PERSON's location is `locality` ("Austin, Texas, United States", often
+  "N/A"). Never use the company address for person_locations.
+- **Free, asserted.** Bronze `quickenrich_searches` keeps every call; a
+  non-zero or missing `X-Treg-Cost-Micro` throws (no cost name exists for it).
+  Costs declared are the treg find (`treg-micro-usd`) + verification only.
+- **Pool is the `has_email:true` subset** (measured 2026-09-26: South
+  chiropractors 236, US dentists 3,435), so QuickEnrich supplements and Apollo
+  still carries volume. Dropping `has_email` quadruples the pool but lowers the
+  treg hit rate — an owner decision, not a default.
+- **Fields lost vs an Apollo reveal:** seniority, headline, photo, timezone,
+  employment history, departments/functions, org id / description / keywords /
+  technologies / funding / founded year / website, numeric headcount and
+  revenue (bands only: `organizationAnnualRevenuePrinted`). All null, never
+  invented.
+
 ## treg-FIRST on the reveal path does NOT work — the teaser has nothing to look up
 
 Measured 2026-09-26, so nobody re-plans it: the free People Search teaser a

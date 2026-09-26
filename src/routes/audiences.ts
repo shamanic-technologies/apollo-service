@@ -9,6 +9,8 @@ import { refineAudience, dryRunCount } from "../lib/audience-refine.js";
 import { toCreditAlertIdentity } from "../lib/credit-alert.js";
 import { SuggestFromSegmentRequestSchema, ApolloNativeSearchFiltersSchema } from "../schemas.js";
 import { providerErrorFields } from "../lib/provider-error.js";
+import { planQuickenrich } from "../lib/quickenrich.js";
+import { ServeSourceRequestSchema } from "../schemas.js";
 
 const router = Router();
 
@@ -145,10 +147,58 @@ router.get("/audiences/:apolloAudienceId", orgAuth, async (req: AuthenticatedReq
       count: row.count,
       status: row.status,
       createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt),
+      ...serveSourceFields(row.serveSource, row.filters as Record<string, unknown>),
     });
   } catch (error) {
     console.error("[Apollo Service][GET /audiences/:id] ERROR:", error);
     res.status(500).json({ type: "internal", error: "Internal server error" });
+  }
+});
+
+function serveSourceFields(serveSource: string, filters: Record<string, unknown>) {
+  const planned = planQuickenrich(filters);
+  return {
+    serveSource,
+    quickenrich: { expressible: planned.ok, reasons: planned.ok ? [] : planned.reasons },
+  };
+}
+
+/**
+ * PATCH /audiences/:apolloAudienceId/serve-source — switch where /search/next
+ * sources this audience's people. `quickenrich` = free QuickEnrich search +
+ * treg email find, falling back to Apollo once QuickEnrich has nobody left;
+ * `apollo` = the default Apollo teaser + reveal. Switching ON an audience
+ * whose filters QuickEnrich cannot enforce faithfully is refused (422, with
+ * every reason), so an inexpressible audience is never served from it.
+ */
+router.patch("/audiences/:apolloAudienceId/serve-source", orgAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const parsed = ServeSourceRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ type: "validation", error: "Invalid request", details: parsed.error.flatten() });
+    }
+    const { apolloAudienceId } = req.params;
+    const [row] = await db
+      .select()
+      .from(apolloAudiences)
+      .where(and(eq(apolloAudiences.id, apolloAudienceId), eq(apolloAudiences.orgId, req.orgId!)))
+      .limit(1);
+    if (!row) {
+      return res.status(404).json({ type: "not_found", error: "Audience not found" });
+    }
+    const filters = row.filters as Record<string, unknown>;
+    const { serveSource } = parsed.data;
+    if (serveSource === "quickenrich") {
+      const planned = planQuickenrich(filters);
+      if (!planned.ok) {
+        return res.status(422).json({ type: "not_expressible", error: "QuickEnrich cannot enforce this audience's filters faithfully", reasons: planned.reasons });
+      }
+    }
+    await db.update(apolloAudiences).set({ serveSource, updatedAt: new Date() }).where(eq(apolloAudiences.id, row.id));
+    res.json({ apolloAudienceId: row.id, ...serveSourceFields(serveSource, filters) });
+  } catch (error) {
+    console.error("[Apollo Service][PATCH /audiences/:id/serve-source] ERROR:", error);
+    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error" });
   }
 });
 

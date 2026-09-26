@@ -13,6 +13,14 @@ import request from "supertest";
 const mockAddCosts = vi.fn().mockResolvedValue({ costs: [] });
 const mockUpdateCostStatus = vi.fn().mockResolvedValue({});
 
+
+// The QuickEnrich switch is off for every audience in these tests.
+vi.mock("../../src/lib/quickenrich-serve.js", () => ({
+  findQuickenrichAudience: vi.fn().mockResolvedValue(null),
+  serveQuickenrichPage: vi.fn(),
+  loadQuickenrichPerson: vi.fn(),
+}));
+
 vi.mock("../../src/lib/runs-client.js", () => ({
   addCosts: (...args: unknown[]) => mockAddCosts(...args),
   updateCostStatus: (...args: unknown[]) => mockUpdateCostStatus(...args),

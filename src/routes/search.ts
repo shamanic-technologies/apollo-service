@@ -16,6 +16,9 @@ import { buildFiltersPrompt, computeFiltersPromptVersion, APOLLO_UNDOCUMENTED_FI
 import { traceEvent } from "../lib/trace-event.js";
 import { verificationFor, EmailVerificationError } from "../lib/email-verification.js";
 import { toCreditAlertIdentity } from "../lib/credit-alert.js";
+import { planQuickenrich, parseQuickenrichPersonId, quickenrichToPerson } from "../lib/quickenrich.js";
+import { findQuickenrichAudience, serveQuickenrichPage, loadQuickenrichPerson } from "../lib/quickenrich-serve.js";
+import { executeEmailFind } from "../lib/email-find-run.js";
 // Waterfall disabled 2026-05-28 — see src/lib/waterfall.ts header for revive.
 // import {
 //   WATERFALL_MAX_CREDITS,
@@ -197,6 +200,46 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
     const { apolloPersonId } = parsed.data;
 
     traceEvent(runId, { service: "apollo-service", event: "enrich-start", detail: `apolloPersonId=${apolloPersonId}` }, req.headers).catch(() => {});
+
+    // A `qe:<emp_id>` person came from the QuickEnrich serve path: its identity
+    // (full name, LinkedIn, company domain) is already known, so the email is
+    // found with treg (no Apollo credit) and verified like every reveal.
+    const quickenrichEmpId = parseQuickenrichPersonId(apolloPersonId);
+    if (quickenrichEmpId) {
+      const row = await loadQuickenrichPerson(quickenrichEmpId);
+      if (!row) {
+        return res.status(404).json({ type: "not_found", error: `QuickEnrich person ${apolloPersonId} was never served by /search/next` });
+      }
+      const found = await executeEmailFind(
+        { orgId: req.orgId!, userId: req.userId, runId, brandIds, campaignId, audienceId, featureSlug, workflowSlug, headers: req.headers, callerPath: "/enrich" },
+        "treg",
+        undefined,
+        {
+          linkedinUrl: row.employee_linkedin ?? undefined,
+          firstName: row.first_name ?? undefined,
+          lastName: row.last_name ?? undefined,
+          domain: row.company_url ?? undefined,
+        }
+      );
+      if (found.status !== 200 && found.status !== 202) {
+        return res.status(found.status).json(found.body);
+      }
+      const finding = found.body as { findingId: string; status: string; email: string | null; mailboxStatus: string | null; reused: boolean; emailVerification: unknown };
+      // Only a found address is served; not_found and a still-running treg
+      // child (202) come back as the person with no email, exactly like an
+      // Apollo reveal that yields none — the consumer records the serve (so it
+      // never pays for this person again) and moves to the next one.
+      const email = finding.status === "found" ? finding.email : null;
+      traceEvent(runId, { service: "apollo-service", event: "enrich-done", detail: `source=quickenrich, findingId=${finding.findingId}, status=${finding.status}, reused=${finding.reused}` }, req.headers).catch(() => {});
+      return res.json({
+        enrichmentId: null,
+        person: quickenrichToPerson(row, { email, emailStatus: email ? finding.mailboxStatus : null }),
+        cached: finding.reused,
+        emailVerification: email ? finding.emailVerification : null,
+        source: "quickenrich",
+        findingId: finding.findingId,
+      });
+    }
 
     const cacheHit = await findCachedEnrichmentByPersonId(apolloPersonId);
 
@@ -506,6 +549,47 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
       currentPage = resume.currentPage;
       isExhausted = resume.exhausted;
       cursorTotalEntries = resume.totalEntries;
+    }
+
+    // QuickEnrich first, for an audience switched to it: a FREE search whose
+    // rows carry the identity (full name, LinkedIn, domain) the Apollo teaser
+    // hides, so the consumer's suppression drops anybody already served before
+    // any spend. Served only when EVERY constraint of the filter set can be
+    // enforced (planQuickenrich); otherwise, and once QuickEnrich has nobody
+    // left, the Apollo walk below serves exactly as it always did.
+    const quickenrichAudience = cursorId ? await findQuickenrichAudience(req.orgId!, cursorSearchParams) : null;
+    if (quickenrichAudience && cursorId) {
+      const planned = planQuickenrich(cursorSearchParams);
+      if (!planned.ok) {
+        console.warn(`[Apollo Service][POST /search/next] audience ${quickenrichAudience.id} is switched to quickenrich but not expressible — serving from Apollo: ${planned.reasons.join("; ")}`);
+        traceEvent(runId, { service: "apollo-service", event: "quickenrich-inexpressible", detail: planned.reasons.join("; "), level: "warn" }, req.headers).catch(() => {});
+      } else {
+        const served = await serveQuickenrichPage({
+          orgId: req.orgId!,
+          userId: req.userId!,
+          runId,
+          campaignId,
+          cursorId,
+          apolloAudienceId: quickenrichAudience.id,
+          plan: planned.plan,
+          tracking,
+        });
+        traceEvent(runId, { service: "apollo-service", event: "quickenrich-page", detail: `audience=${quickenrichAudience.id}, pages=${served.pagesRead}, rows=${served.rowsSeen}, kept=${served.people.length}, exhausted=${served.exhausted}`, data: { rejected: served.rejected } }, req.headers).catch(() => {});
+        if (served.people.length > 0 || !served.exhausted) {
+          await updateRun(searchRun.id, "completed", identity);
+          return res.json({
+            people: served.people,
+            // QuickEnrich still has rows, or the Apollo walk comes next: never done here.
+            done: false,
+            totalEntries: cursorTotalEntries,
+            page: currentPage,
+            totalPages: Math.min(Math.ceil(cursorTotalEntries / DEFAULT_PER_PAGE), APOLLO_MAX_REACHABLE_PAGE),
+            hasMore: true,
+            source: "quickenrich",
+          });
+        }
+        // QuickEnrich has nobody left: fall through to Apollo.
+      }
     }
 
     // If already exhausted — or the cursor has advanced past Apollo's reachable
