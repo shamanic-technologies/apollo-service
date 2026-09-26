@@ -23,25 +23,35 @@
 export type EmailFinderVendor = "treg" | "explee";
 export type ExpleePreset = "basic" | "premium";
 
-/** treg has no preset; the silver key still needs one, so it is named. */
-export const TREG_PRESET = "routed";
 
 /** Catalogue names (costs-service seed, KevinLourd/treg-explee-cost-rows). */
 export const TREG_COST_NAME = "treg-micro-usd";
 export const EXPLEE_COST_NAME = "explee-credit";
 
 /**
- * Ceiling on one treg routed find, in micro-USD: $0.01, the benchmark's target
- * price per person. Sent to treg as `X-Treg-Route-Max-Cost`, which treg
- * applies PER CHILD and CUMULATIVELY — verified live 2026-09-25: every child
- * priced above it is `skipped: "would exceed max cost"` and never called, so no
- * lookup can cost more than this. That makes it a TRUE worst case to provision.
- * The plan it leaves (2026-09-25): quickenrich $0.004834, trykitt $0.005,
- * aiark $0.005267 (LinkedIn only), tomba $0.0089 (name or LinkedIn), moltsets
- * $0.01. Everything dearer (findymail, prospeo, hunter, contactout $0.15, …)
- * is skipped.
+ * Ceiling on one treg routed find, in micro-USD: $0.006 (was $0.01 until
+ * 2026-09-26). Sent to treg as `X-Treg-Route-Max-Cost`: every child priced
+ * above it is `skipped: "would exceed max cost"` and never called (verified
+ * live 2026-09-25, and on ~290 post-deploy calls whose largest charge was the
+ * dearest child under the ceiling). treg already walks the plan CHEAPEST FIRST
+ * ("cheapest per hit" — there is no order header to send), so the ceiling is
+ * the only lever on price. The plan it leaves: quickenrich $0.004834, trykitt
+ * $0.005 (name + domain), aiark $0.005267 (LinkedIn). It drops tomba ($0.0089):
+ * on the 2026-09-25 benchmark tomba cost 57c for 10 BounceVerify-valid
+ * addresses (27 of its 63 answers were personal inboxes), against 60c for 54
+ * valid from quickenrich + aiark.
  */
-export const TREG_MAX_COST_MICRO = 10_000;
+export const TREG_MAX_COST_MICRO = 6_000;
+
+/**
+ * treg has no preset; the silver key names the ROUTING POLICY instead, because
+ * a finding answers the question it was asked: "not found among the children
+ * under $0.006" is not the answer to "not found among the children under
+ * $0.01". Changing the ceiling therefore starts a new question per person
+ * (one new lookup each); old rows stay as history under their own preset.
+ * Rows before 2026-09-26 carry the policy-less name "routed" ($0.01 ceiling).
+ */
+export const TREG_PRESET = `routed-max-${TREG_MAX_COST_MICRO}`;
 
 /**
  * Providers never tried, sent as `X-Treg-Route-Exclude` (comma list). treg
@@ -144,6 +154,8 @@ export function rejectNonWorkEmail(result: VendorFindResult, person: FindPerson)
 /** One HTTP exchange, as it will be written to bronze. */
 export interface VendorExchange {
   requestUrl: string;
+  /** The headers we sent, credentials redacted: proof of the ceiling and routing asked for. */
+  requestHeaders: Record<string, string>;
   requestBody: Record<string, unknown>;
   httpStatus: number | null;
   responseHeaders: Record<string, string> | null;
@@ -245,8 +257,17 @@ interface Posted {
   networkError: Error | null;
 }
 
+const SECRET_HEADERS: ReadonlySet<string> = new Set(["x-treg-token", "x-api-key"]);
+
+export function redactHeaders(headers: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers)) out[k] = SECRET_HEADERS.has(k.toLowerCase()) ? "[redacted]" : v;
+  return out;
+}
+
 async function post(url: string, headers: Record<string, string>, body: Record<string, unknown>): Promise<Posted> {
   const started = Date.now();
+  const requestHeaders = redactHeaders(headers);
   try {
     const response = await fetch(url, {
       method: "POST",
@@ -260,6 +281,7 @@ async function post(url: string, headers: Record<string, string>, body: Record<s
       networkError: null,
       exchange: {
         requestUrl: url,
+        requestHeaders,
         requestBody: body,
         httpStatus: response.status,
         responseHeaders: headersToObject(response.headers),
@@ -273,6 +295,7 @@ async function post(url: string, headers: Record<string, string>, body: Record<s
       networkError: err instanceof Error ? err : new Error(String(err)),
       exchange: {
         requestUrl: url,
+        requestHeaders,
         requestBody: body,
         httpStatus: null,
         responseHeaders: null,
@@ -368,6 +391,10 @@ export async function findWithTreg(token: string, org: string, person: FindPerso
       "X-Treg-Route-Exclude": TREG_EXCLUDED_PROVIDERS.join(","),
       // A retry of a call whose answer was lost is replayed, never re-billed.
       "Idempotency-Key": idempotencyKey,
+      // Always a live answer under THIS routing. Our silver row is the cache: we
+      // only ever re-ask a person when the routing policy changed, and then
+      // treg's archived answer (served under the old policy) is the wrong one.
+      "Cache-Control": "no-cache",
     },
     body
   );
