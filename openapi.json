@@ -1037,6 +1037,13 @@
           "hasMore": {
             "type": "boolean",
             "description": "Convenience inverse of done — true when more pages remain to fetch for this filter set."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "quickenrich"
+            ],
+            "description": "Present only when this page came from the FREE QuickEnrich search (the audience is switched to quickenrich). Those people carry an id `qe:<emp_id>`, their full name, LinkedIn URL and company domain; POST /enrich with that id finds the email with treg and verifies it. Absent = the Apollo walk, unchanged."
           }
         },
         "required": [
@@ -2232,6 +2239,17 @@
           },
           "emailVerification": {
             "$ref": "#/components/schemas/EmailVerification"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "quickenrich"
+            ],
+            "description": "Present when apolloPersonId was a `qe:<emp_id>` QuickEnrich person: the email was found with treg (no Apollo credit; cost `treg-micro-usd`) and verified. `cached` then means the finding was reused (no vendor call)."
+          },
+          "findingId": {
+            "type": "string",
+            "description": "The treg finding (email_findings) that answered, when source=quickenrich."
           }
         },
         "required": [
@@ -4045,6 +4063,34 @@
           },
           "createdAt": {
             "type": "string"
+          },
+          "serveSource": {
+            "type": "string",
+            "enum": [
+              "apollo",
+              "quickenrich"
+            ],
+            "description": "Where /search/next sources this audience's people. Default apollo."
+          },
+          "quickenrich": {
+            "type": "object",
+            "properties": {
+              "expressible": {
+                "type": "boolean"
+              },
+              "reasons": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Every constraint QuickEnrich cannot enforce; empty when expressible."
+              }
+            },
+            "required": [
+              "expressible",
+              "reasons"
+            ],
+            "description": "Can this audience be served faithfully from QuickEnrich?"
           }
         },
         "required": [
@@ -4052,7 +4098,62 @@
           "filters",
           "count",
           "status",
-          "createdAt"
+          "createdAt",
+          "serveSource",
+          "quickenrich"
+        ]
+      },
+      "ServeSourceResponse": {
+        "type": "object",
+        "properties": {
+          "apolloAudienceId": {
+            "type": "string"
+          },
+          "serveSource": {
+            "type": "string",
+            "enum": [
+              "apollo",
+              "quickenrich"
+            ]
+          },
+          "quickenrich": {
+            "type": "object",
+            "properties": {
+              "expressible": {
+                "type": "boolean"
+              },
+              "reasons": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "expressible",
+              "reasons"
+            ]
+          }
+        },
+        "required": [
+          "apolloAudienceId",
+          "serveSource",
+          "quickenrich"
+        ]
+      },
+      "ServeSourceRequest": {
+        "type": "object",
+        "properties": {
+          "serveSource": {
+            "type": "string",
+            "enum": [
+              "apollo",
+              "quickenrich"
+            ]
+          }
+        },
+        "required": [
+          "serveSource"
         ]
       },
       "AudienceDryRunResponse": {
@@ -5480,6 +5581,100 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/audiences/{apolloAudienceId}/serve-source": {
+      "patch": {
+        "summary": "Switch an audience between the Apollo and the QuickEnrich serve path",
+        "description": "quickenrich: /search/next serves this audience from the FREE QuickEnrich search (people carry full name + LinkedIn + company domain, so the caller's suppression drops anybody already served before any spend), and /enrich finds their email with treg + verifies it; once QuickEnrich has nobody left, the Apollo walk serves as before. apollo (default): unchanged Apollo path. Switching ON an audience QuickEnrich cannot enforce faithfully answers 422 with every reason.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "apolloAudienceId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServeSourceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Switched",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServeSourceResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Not expressible in QuickEnrich (reasons listed)",
             "content": {
               "application/json": {
                 "schema": {

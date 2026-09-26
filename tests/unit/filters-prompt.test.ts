@@ -9,6 +9,14 @@ import {
 } from "../../src/lib/filters-prompt.js";
 import { ApolloNativeSearchFiltersSchema } from "../../src/schemas.js";
 
+
+// The QuickEnrich switch is off for every audience in these tests.
+vi.mock("../../src/lib/quickenrich-serve.js", () => ({
+  findQuickenrichAudience: vi.fn().mockResolvedValue(null),
+  serveQuickenrichPage: vi.fn(),
+  loadQuickenrichPerson: vi.fn(),
+}));
+
 vi.mock("../../src/middleware/auth.js", () => ({
   serviceAuth: (req: any, _res: any, next: any) => {
     if (req.headers["x-org-id"]) req.orgId = req.headers["x-org-id"];

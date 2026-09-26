@@ -175,6 +175,12 @@ export const apolloSearchCursors = pgTable(
     currentPage: integer("current_page").notNull().default(1),
     totalEntries: integer("total_entries").notNull().default(0),
     exhausted: boolean("exhausted").notNull().default(false),
+    // QuickEnrich walk for the SAME filter set, used only when its audience is
+    // switched to quickenrich. Its own opaque cursor; exhausted → the Apollo
+    // walk above takes over.
+    quickenrichCursor: text("quickenrich_cursor"),
+    quickenrichPages: integer("quickenrich_pages").notNull().default(0),
+    quickenrichExhausted: boolean("quickenrich_exhausted").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -218,6 +224,11 @@ export const apolloAudiences = pgTable(
     refineTrace: jsonb("refine_trace"),
 
     status: text("status").notNull().default("confirmed"), // "confirmed" | "exhausted"
+
+    // Where /search/next sources this audience's people: "apollo" (default,
+    // Apollo teaser + Apollo reveal) or "quickenrich" (free QuickEnrich search
+    // + treg email find, Apollo fallback). Per audience, OFF by default.
+    serveSource: text("serve_source").notNull().default("apollo"),
 
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -434,6 +445,51 @@ export const emailVerifications = pgTable(
     verifiedAt: timestamp("verified_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index("idx_email_verifications_email_at").on(table.email, table.verifiedAt)]
+);
+
+// ─── QuickEnrich (free candidate source) ────────────────────────────────────
+// Bronze: every QuickEnrich search call through treg, verbatim.
+export const quickenrichSearches = pgTable(
+  "quickenrich_searches",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id").notNull(),
+    runId: text("run_id"),
+    campaignId: text("campaign_id"),
+    cursorId: uuid("cursor_id"),
+    apolloAudienceId: uuid("apollo_audience_id"),
+    requestBody: jsonb("request_body").notNull(),
+    httpStatus: integer("http_status"),
+    responseHeaders: jsonb("response_headers"),
+    responseBody: jsonb("response_body"),
+    // X-Treg-Cost-Micro. The search is free; anything else fails the call.
+    chargedMicro: integer("charged_micro"),
+    rowsReturned: integer("rows_returned"),
+    rowsKept: integer("rows_kept"),
+    error: text("error"),
+    durationMs: integer("duration_ms"),
+    calledAt: timestamp("called_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("idx_quickenrich_searches_cursor").on(table.cursorId, table.calledAt)]
+);
+
+// Silver: one row per QuickEnrich person (emp_id), as last seen. /enrich reads
+// the identity from here when asked for a `qe:<emp_id>` person.
+export const quickenrichPeople = pgTable(
+  "quickenrich_people",
+  {
+    empId: text("emp_id").primaryKey(),
+    firstName: text("first_name"),
+    lastName: text("last_name"),
+    title: text("title"),
+    linkedinUrl: text("linkedin_url"),
+    companyDomain: text("company_domain"),
+    companyName: text("company_name"),
+    locality: text("locality"),
+    raw: jsonb("raw").notNull(),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+  }
 );
 
 export type ApolloPeopleSearch = typeof apolloPeopleSearches.$inferSelect;
