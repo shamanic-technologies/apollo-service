@@ -421,6 +421,12 @@ identity, idempotency, persistence and cost.
   answer, a found email with no readable charge, and a treg **202** (async child
   still running, `charged_micro: null` — treg says do NOT retry). Those rows say
   `holdKept: true` / `status: pending`; reconcile them from bronze.
+- **Once the vendor ANSWERED, a later failure never loses or doubles its
+  charge.** Before the `actual` lands (runs-service timed out on it — seen 3
+  times in 300 on 2026-09-26), the hold is KEPT and the row is `failed`; the
+  retry replays treg free and declares the charge once. After the `actual`
+  lands (a later `updateRun` fails), the row is stored SETTLED, so no retry
+  calls the vendor or declares again.
 - **Missing platform key = 503 `provider_key_missing`** naming the key-service
   provider (`treg` / `treg-org` / `explee`), before any row, hold or vendor call.
   treg's token is an IDENTITY (team-scoped) token: every call also sends

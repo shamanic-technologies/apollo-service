@@ -353,6 +353,44 @@ describe("POST /email-finder/find — treg", () => {
     expect(fetchMock.mock.calls[0][1].headers["Idempotency-Key"]).toBe(fetchMock.mock.calls[1][1].headers["Idempotency-Key"]);
   });
 
+  it("treg answered but runs-service timed out declaring the charge: the hold is KEPT, and the retry declares it once", async () => {
+    // Prod 2026-09-26: `runs-service POST /v1/runs/…/costs timed out after 10000ms` after treg had billed.
+    fetchMock.mockImplementation(async () => jsonResponse(200, { output: { email: "ada@example.com", verified: true } }, { "x-treg-cost-micro": "4834" }));
+    mockAddCosts.mockImplementation(async (_run: string, items: any[]) => {
+      if (items[0].status === "actual") throw new Error("runs-service POST /v1/runs/find-run-1/costs timed out after 10000ms");
+      return { costs: [{ id: "hold-1" }] };
+    });
+    const app = await buildApp();
+    const res = await request(app).post("/email-finder/find").set(HEADERS).send({ vendor: "treg", person: PERSON });
+    expect(res.status).toBe(500);
+    // Released, the hold would leave treg's real charge on nobody's ledger.
+    expect(mockUpdateCostStatus).not.toHaveBeenCalled();
+    expect(findings[0]).toMatchObject({ status: "failed", provisionedCostId: "hold-1", findRunId: "find-run-1" });
+
+    mockAddCosts.mockImplementation(async (_run: string, items: any[]) => ({ costs: [{ id: items[0].status === "provisioned" ? "hold-2" : "actual-2" }] }));
+    mockCreateRun.mockResolvedValue({ id: "find-run-2" });
+    const retry = await request(app).post("/email-finder/find").set(HEADERS).send({ vendor: "treg", person: PERSON });
+    expect(retry.body).toMatchObject({ status: "found", chargedQuantity: 4834 });
+    const actuals = mockAddCosts.mock.calls.filter((c: any[]) => c[1][0].status === "actual");
+    expect(actuals).toHaveLength(2); // the failed attempt (threw) + the retry — exactly one landed
+    expect(mockUpdateCostStatus).toHaveBeenCalledWith("find-run-1", "hold-1", "cancelled", expect.anything());
+    expect(mockUpdateCostStatus).toHaveBeenCalledWith("find-run-2", "hold-2", "cancelled", expect.anything());
+  });
+
+  it("the charge was declared and a LATER step failed: the finding is settled, so no retry re-calls treg or re-declares", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { output: { email: "ada@example.com", verified: true } }, { "x-treg-cost-micro": "4834" }));
+    mockUpdateRun.mockRejectedValueOnce(new Error("runs-service PATCH /v1/runs/find-run-1 timed out after 10000ms"));
+    const app = await buildApp();
+    const res = await request(app).post("/email-finder/find").set(HEADERS).send({ vendor: "treg", person: PERSON });
+    expect(res.status).toBe(500);
+    expect(findings[0]).toMatchObject({ status: "found", email: "ada@example.com", actualCostId: "actual-1" });
+
+    const again = await request(app).post("/email-finder/find").set(HEADERS).send({ vendor: "treg", person: PERSON });
+    expect(again.body).toMatchObject({ status: "found", reused: true });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(mockAddCosts.mock.calls.filter((c: any[]) => c[1][0].status === "actual")).toHaveLength(1);
+  });
+
   it("a released hold is not remembered: a vendor error leaves no provisionedCostId", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(500, { detail: "down" }));
     const app = await buildApp();
