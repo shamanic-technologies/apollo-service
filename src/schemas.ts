@@ -1163,10 +1163,11 @@ const TransferBrandResponseSchema = z
 registry.registerPath({
   method: "post",
   path: "/internal/transfer-brand",
-  summary: "Transfer solo-brand rows from one org to another",
+  summary: "Transfer a brand's rows from one org to another",
   description:
-    "Re-assigns all rows referencing exactly this brandId (solo-brand only) from sourceOrgId to targetOrgId. Rows with multiple brand IDs are skipped. Idempotent — running twice is a no-op.",
+    "Moves every row this service holds for the brand from sourceOrgId to targetOrgId, in one transaction: rows carrying the brand alone (people searches, enrichments, search cursors, audiences, phone reveals, email findings) and rows tied to it through one of its campaigns, runs, cursors, audiences or findings (email finder calls, email verifications, QuickEnrich searches). A solo brand reference is rewritten to targetBrandId when given. Co-branded rows (several brand IDs) are left in place. History only: no cost is declared or reversed. Requires x-api-key = APOLLO_SERVICE_API_KEY. Idempotent: a second call reports 0 for every table.",
   request: {
+    headers: z.object({ "x-api-key": z.string() }),
     body: {
       content: { "application/json": { schema: TransferBrandRequestSchema } },
       required: true,
@@ -1179,6 +1180,10 @@ registry.registerPath({
     },
     400: {
       description: "Validation error",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    401: {
+      description: "Missing or invalid x-api-key",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     500: {
