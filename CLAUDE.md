@@ -605,6 +605,25 @@ contract that fixes it lives in `src/lib/provider-error.ts`:
   still returns 200 with a null email (making it throw would be breaking). Only
   a REJECTED Apollo response carries `providerError`.
 
+## Brand transfer (`POST /internal/transfer-brand`) moves EVERY table, in one transaction
+
+Fleet contract (brand-service fans it out): `{sourceBrandId, sourceOrgId,
+targetOrgId, targetBrandId?}`, `x-api-key` = `APOLLO_SERVICE_API_KEY` (fails
+closed). `TABLE_MOVES` in `src/routes/transfer-brand.ts` lists all nine tables
+holding org data; **a NEW table carrying `org_id` must be added there** and to
+`tests/integration/transfer-brand.db.test.ts` (real Postgres, one case per
+table; run it with `TRANSFER_BRAND_TEST_DATABASE_URL` on a throwaway DB).
+
+- Direct: searches / enrichments / cursors / phone reveals / findings
+  (`brand_ids = [brand]`), audiences (`brand_id`). Co-branded rows stay.
+- Tied: brandless reveals/findings by the brand's CAMPAIGNS; finder calls by
+  finding; verifications by (org, run, email) of a brand enrichment/finding;
+  QuickEnrich searches by cursor / audience / campaign. Tied tables move FIRST
+  (the tie is read from parents still under the source org).
+- Not moved, by design: `quickenrich_people` (global, no org), audiences and
+  findings written with no brand and no campaign (nothing ties them).
+- History only: no cost is declared or reversed.
+
 ## Commands
 
 - `pnpm test` — run all tests (Vitest)

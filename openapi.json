@@ -5337,8 +5337,18 @@
     },
     "/internal/transfer-brand": {
       "post": {
-        "summary": "Transfer solo-brand rows from one org to another",
-        "description": "Re-assigns all rows referencing exactly this brandId (solo-brand only) from sourceOrgId to targetOrgId. Rows with multiple brand IDs are skipped. Idempotent — running twice is a no-op.",
+        "summary": "Transfer a brand's rows from one org to another",
+        "description": "Moves every row this service holds for the brand from sourceOrgId to targetOrgId, in one transaction: rows carrying the brand alone (people searches, enrichments, search cursors, audiences, phone reveals, email findings) and rows tied to it through one of its campaigns, runs, cursors, audiences or findings (email finder calls, email verifications, QuickEnrich searches). A solo brand reference is rewritten to targetBrandId when given. Co-branded rows (several brand IDs) are left in place. History only: no cost is declared or reversed. Requires x-api-key = APOLLO_SERVICE_API_KEY. Idempotent: a second call reports 0 for every table.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -5362,6 +5372,16 @@
           },
           "400": {
             "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid x-api-key",
             "content": {
               "application/json": {
                 "schema": {
