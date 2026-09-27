@@ -5,12 +5,18 @@ import request from "supertest";
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
 const mockExecute = vi.fn();
+const mockTransaction = vi.fn(async (fn: (tx: unknown) => unknown) =>
+  fn({ execute: (...args: unknown[]) => mockExecute(...args) })
+);
 
 vi.mock("../../src/db/index.js", () => ({
   db: {
-    execute: (...args: unknown[]) => mockExecute(...args),
+    transaction: (fn: (tx: unknown) => unknown) => mockTransaction(fn),
   },
 }));
+
+const KEY = "unit-test-apollo-key";
+process.env.APOLLO_SERVICE_API_KEY = KEY;
 
 // ─── App setup ──────────────────────────────────────────────────────────────
 
@@ -47,6 +53,7 @@ describe("POST /internal/transfer-brand", () => {
   it("returns 400 when sourceBrandId is missing", async () => {
     const res = await request(createApp())
       .post("/internal/transfer-brand")
+      .set("x-api-key", KEY)
       .send({ sourceOrgId: validBody.sourceOrgId, targetOrgId: validBody.targetOrgId });
 
     expect(res.status).toBe(400);
@@ -56,6 +63,7 @@ describe("POST /internal/transfer-brand", () => {
   it("returns 400 when sourceBrandId is not a valid UUID", async () => {
     const res = await request(createApp())
       .post("/internal/transfer-brand")
+      .set("x-api-key", KEY)
       .send({ ...validBody, sourceBrandId: "not-a-uuid" });
 
     expect(res.status).toBe(400);
@@ -65,6 +73,7 @@ describe("POST /internal/transfer-brand", () => {
   it("returns 400 when sourceOrgId is missing", async () => {
     const res = await request(createApp())
       .post("/internal/transfer-brand")
+      .set("x-api-key", KEY)
       .send({ sourceBrandId: validBody.sourceBrandId, targetOrgId: validBody.targetOrgId });
 
     expect(res.status).toBe(400);
@@ -73,6 +82,7 @@ describe("POST /internal/transfer-brand", () => {
   it("returns 400 when targetOrgId is missing", async () => {
     const res = await request(createApp())
       .post("/internal/transfer-brand")
+      .set("x-api-key", KEY)
       .send({ sourceBrandId: validBody.sourceBrandId, sourceOrgId: validBody.sourceOrgId });
 
     expect(res.status).toBe(400);
@@ -81,58 +91,82 @@ describe("POST /internal/transfer-brand", () => {
   it("returns 400 when targetBrandId is not a valid UUID", async () => {
     const res = await request(createApp())
       .post("/internal/transfer-brand")
+      .set("x-api-key", KEY)
       .send({ ...validBody, targetBrandId: "not-a-uuid" });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBeDefined();
   });
 
-  it("executes UPDATE for all 4 tables and returns counts (no targetBrandId)", async () => {
-    mockExecute
-      .mockResolvedValueOnce(rowList(3))
-      .mockResolvedValueOnce(rowList(10))
-      .mockResolvedValueOnce(rowList(1))
-      .mockResolvedValueOnce(rowList(0));
+  const TABLES = [
+    "email_verifications",
+    "email_finder_calls",
+    "quickenrich_searches",
+    "apollo_phone_reveals",
+    "email_findings",
+    "apollo_people_searches",
+    "apollo_people_enrichments",
+    "apollo_search_cursors",
+    "apollo_audiences",
+  ];
 
-    const res = await request(createApp())
-      .post("/internal/transfer-brand")
-      .send(validBody);
+  /** Flattens a drizzle SQL object into its text, params inlined as $?. */
+  function sqlText(q: { queryChunks: unknown[] }): string {
+    return q.queryChunks
+      .map((c: any) => {
+        if (c && Array.isArray(c.value)) return c.value.join("");
+        if (c && c.queryChunks) return sqlText(c);
+        if (c && typeof c.value === "string" && c.constructor?.name === "Name") return `"${c.value}"`;
+        return "$?";
+      })
+      .join("");
+  }
+
+  it("moves every table of the current schema, in one transaction, in dependency order", async () => {
+    mockExecute.mockResolvedValue(rowList(2));
+
+    const res = await request(createApp()).post("/internal/transfer-brand").set("x-api-key", KEY).send(validBody);
 
     expect(res.status).toBe(200);
-    expect(mockExecute).toHaveBeenCalledTimes(4);
-    expect(res.body.updatedTables).toEqual([
-      { tableName: "apollo_people_searches", count: 3 },
-      { tableName: "apollo_people_enrichments", count: 10 },
-      { tableName: "apollo_search_cursors", count: 1 },
-      { tableName: "apollo_search_params_cache", count: 0 },
-    ]);
+    expect(mockTransaction).toHaveBeenCalledTimes(1);
+    expect(mockExecute).toHaveBeenCalledTimes(TABLES.length);
+    expect(res.body.updatedTables).toEqual(TABLES.map((tableName) => ({ tableName, count: 2 })));
+    const texts = mockExecute.mock.calls.map(([q]) => sqlText(q));
+    TABLES.forEach((t, i) => {
+      expect(texts[i]).toMatch(new RegExp(`^UPDATE "${t}" SET org_id = `));
+    });
+    // The dropped cache table must never be touched again (it 500'd the route).
+    expect(texts.join("\n")).not.toContain("apollo_search_params_cache");
   });
 
-  it("rewrites brand_ids when targetBrandId is present (two-step per table)", async () => {
-    // 2 queries per table × 4 tables = 8 calls
-    mockExecute
-      .mockResolvedValueOnce(rowList(3))  // searches step1: move org
-      .mockResolvedValueOnce(rowList(2))  // searches step2: rewrite brand
-      .mockResolvedValueOnce(rowList(1))  // enrichments step1
-      .mockResolvedValueOnce(rowList(1))  // enrichments step2
-      .mockResolvedValueOnce(rowList(0))  // cursors step1
-      .mockResolvedValueOnce(rowList(0))  // cursors step2
-      .mockResolvedValueOnce(rowList(0))  // cache step1
-      .mockResolvedValueOnce(rowList(1)); // cache step2
-
+  it("rewrites the brand when targetBrandId is present (move + catch-up rewrite per branded table)", async () => {
+    mockExecute.mockResolvedValue(rowList(1));
     const targetBrandId = "d4e5f6a7-b8c9-4d0e-af1f-2a3b4c5d6e7f";
+
     const res = await request(createApp())
       .post("/internal/transfer-brand")
+      .set("x-api-key", KEY)
       .send({ ...validBody, targetBrandId });
 
     expect(res.status).toBe(200);
-    expect(mockExecute).toHaveBeenCalledTimes(8);
-    expect(res.body.updatedTables).toEqual([
-      { tableName: "apollo_people_searches", count: 5 },
-      { tableName: "apollo_people_enrichments", count: 2 },
-      { tableName: "apollo_search_cursors", count: 0 },
-      { tableName: "apollo_search_params_cache", count: 1 },
-    ]);
+    // 3 brandless tables: 1 query; 6 branded tables: 2 queries
+    expect(mockExecute).toHaveBeenCalledTimes(3 + 6 * 2);
+    const counts = Object.fromEntries(res.body.updatedTables.map((t: any) => [t.tableName, t.count]));
+    expect(counts.email_verifications).toBe(1);
+    expect(counts.apollo_people_enrichments).toBe(2);
+    expect(counts.apollo_audiences).toBe(2);
+  });
+
+  it("returns 401 without the service api key and touches nothing", async () => {
+    const res = await request(createApp()).post("/internal/transfer-brand").send(validBody);
+    expect(res.status).toBe(401);
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it("returns 401 with a wrong service api key", async () => {
+    const res = await request(createApp()).post("/internal/transfer-brand").set("x-api-key", "nope").send(validBody);
+    expect(res.status).toBe(401);
+    expect(mockExecute).not.toHaveBeenCalled();
   });
 
   it("is idempotent — returns 0 counts when already transferred", async () => {
@@ -140,6 +174,7 @@ describe("POST /internal/transfer-brand", () => {
 
     const res = await request(createApp())
       .post("/internal/transfer-brand")
+      .set("x-api-key", KEY)
       .send(validBody);
 
     expect(res.status).toBe(200);
@@ -151,6 +186,7 @@ describe("POST /internal/transfer-brand", () => {
 
     const res = await request(createApp())
       .post("/internal/transfer-brand")
+      .set("x-api-key", KEY)
       .send(validBody);
 
     expect(res.status).toBe(500);
