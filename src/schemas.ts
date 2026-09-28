@@ -1592,7 +1592,7 @@ const EmailFindingSchema = z
   .object({
     findingId: z.string().uuid(),
     vendor: z.enum(["treg", "explee"]),
-    preset: z.string().openapi({ description: '"basic" | "premium" for explee. treg: the routing policy the finding was asked under, e.g. "routed-max-6000" ($0.006 ceiling); "routed" = the $0.01 era before 2026-09-26. A new policy is a new question, so it is looked up once more.' }),
+    preset: z.string().openapi({ description: '"basic" | "premium" for explee. treg: the routing policy the finding was asked under, e.g. "routed-max-10000" ($0.01 ceiling, since 2026-09-28); "routed-max-6000" = the $0.006 era (2026-09-26..28); "routed" = before 2026-09-26. A new policy is a new question, so it is looked up once more.' }),
     personKey: z.string(),
     apolloPersonId: z.string().nullable(),
     status: z.enum(["pending", "found", "not_found", "failed"]).openapi({
