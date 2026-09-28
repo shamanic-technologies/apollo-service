@@ -286,7 +286,10 @@ real output (consumer: human-service). `src/lib/audience-preview.ts`. ONE Apollo
 people-search teaser call (page 1, per_page 100; zero credits, measured
 2026-09-28 via `credit_usage_stats` before/after 3 calls) → up to 10 distinct
 employers (name only) + up to 20 people (first name, obfuscated last name,
-title, employer), round-robin across the listed employers. No cursor, no row
+title, employer, and `apolloPersonId`), round-robin across the listed employers.
+`apolloPersonId` is the teaser's own Apollo id, the handle `POST /enrich`
+accepts, so a consumer can reveal + verify a sampled person's email through the
+normal billed path; the preview call itself still spends nothing. No cursor, no row
 written, no count refresh, no cost declared. Company descriptors are omitted on
 purpose: `mixed_companies/search` moved `lead_credit` by 1 per page, and would
 ignore the audience's person filters anyway. Do not add them without a billed

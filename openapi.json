@@ -4205,6 +4205,12 @@
             "items": {
               "type": "object",
               "properties": {
+                "apolloPersonId": {
+                  "type": "string",
+                  "nullable": true,
+                  "description": "Apollo person id from the free teaser. Pass it as `apolloPersonId` to `POST /enrich` to reveal and verify THIS person's email (billed there, not here). Null only if Apollo omits it.",
+                  "example": "66f1c0ffee0000000000abcd"
+                },
                 "firstName": {
                   "type": "string",
                   "nullable": true
@@ -4224,13 +4230,14 @@
                 }
               },
               "required": [
+                "apolloPersonId",
                 "firstName",
                 "lastNameObfuscated",
                 "title",
                 "company"
               ]
             },
-            "description": "Up to 20 real people, round-robin across employers. Never an email, phone or full name."
+            "description": "Up to 20 real people, round-robin across employers. Never an email, phone or full name; each carries the `apolloPersonId` handle `POST /enrich` accepts."
           }
         },
         "required": [

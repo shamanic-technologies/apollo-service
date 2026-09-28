@@ -1466,13 +1466,18 @@ const AudiencePreviewResponseSchema = z
     people: z
       .array(
         z.object({
+          apolloPersonId: z.string().nullable().openapi({
+            description:
+              "Apollo person id from the free teaser. Pass it as `apolloPersonId` to `POST /enrich` to reveal and verify THIS person's email (billed there, not here). Null only if Apollo omits it.",
+            example: "66f1c0ffee0000000000abcd",
+          }),
           firstName: z.string().nullable(),
           lastNameObfuscated: z.string().nullable().openapi({ description: "As Apollo's free teaser serves it, e.g. \"Ni***s\"." }),
           title: z.string().nullable(),
           company: z.string().nullable(),
         }),
       )
-      .openapi({ description: "Up to 20 real people, round-robin across employers. Never an email, phone or full name." }),
+      .openapi({ description: "Up to 20 real people, round-robin across employers. Never an email, phone or full name; each carries the `apolloPersonId` handle `POST /enrich` accepts." }),
   })
   .openapi("AudiencePreviewResponse");
 
