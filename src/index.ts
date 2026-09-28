@@ -16,6 +16,7 @@ import matchRoutes from "./routes/match.js";
 import transferBrandRoutes from "./routes/transfer-brand.js";
 import phoneRevealRoutes from "./routes/phone-reveal.js";
 import emailFinderRoutes from "./routes/email-finder.js";
+import emailVerificationRoutes from "./routes/email-verifications.js";
 import webhookRoutes from "./routes/webhook.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -55,6 +56,7 @@ app.use(validateRoutes);
 app.use(matchRoutes);
 app.use(phoneRevealRoutes);
 app.use(emailFinderRoutes);
+app.use(emailVerificationRoutes);
 app.use(transferBrandRoutes);
 app.use(webhookRoutes);
 

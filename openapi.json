@@ -4507,6 +4507,91 @@
           "vendor",
           "person"
         ]
+      },
+      "VerifyEmailsResponse": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EmailVerificationVerdict"
+            }
+          }
+        },
+        "required": [
+          "results"
+        ]
+      },
+      "EmailVerificationVerdict": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "The verified address, lower-cased."
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "valid",
+              "invalid",
+              "catch_all",
+              "risky",
+              "unknown"
+            ],
+            "description": "BounceVerify's verdict (real SMTP + catch-all detection)."
+          },
+          "deliverable": {
+            "type": "boolean",
+            "description": "THE switch: true only for verdict `valid`. false = revealed but not deliverable — do not send; the person is still returned so the caller can suppress them."
+          },
+          "verifier": {
+            "type": "string",
+            "enum": [
+              "bounceverify"
+            ]
+          },
+          "verificationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "verifiedAt": {
+            "type": "string"
+          },
+          "reused": {
+            "type": "boolean",
+            "description": "true = a decisive verdict under 30 days old was reused; nothing billed."
+          }
+        },
+        "required": [
+          "email",
+          "verdict",
+          "deliverable",
+          "verifier",
+          "verificationId",
+          "verifiedAt",
+          "reused"
+        ]
+      },
+      "VerifyEmailsRequest": {
+        "type": "object",
+        "properties": {
+          "emails": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "maxItems": 50,
+            "description": "1 to 50 addresses."
+          },
+          "source": {
+            "type": "string",
+            "description": "Caller label stored on each bronze row as `verify:<source>`."
+          }
+        },
+        "required": [
+          "emails"
+        ]
       }
     },
     "parameters": {
@@ -6242,6 +6327,142 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/email-verifications": {
+      "post": {
+        "summary": "Verify a batch of email addresses the caller already holds (billed to the caller's org)",
+        "description": "Verdicts from BounceVerify (real SMTP + catch-all detection) for up to 50 addresses, verified 10 at a time (~3s each). Same guarantees as the reveal paths: every call is recorded in email_verifications (bronze, raw actor row verbatim); a decisive verdict under 30 days old is reused (reused: true, nothing billed); each fresh verification is a child run of x-run-id with cost apify-bounceverify-email provisioned, authorized against the caller's org (platform key), actualized on a decisive verdict (unknown is free) and the hold cancelled. `deliverable` is true ONLY for verdict `valid`. Duplicates (case-insensitive) are verified once; results come back in first-seen order, one per distinct address. ALL OR NOTHING: if any address cannot be verified the whole call answers 502 {type: \"email_verification\"} and no verdict is returned — a retry reuses whatever was already decided.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Caller's run ID — parent of the email-find run the cost hangs on"
+            },
+            "required": true,
+            "description": "Caller's run ID — parent of the email-find run the cost hangs on",
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) — single UUID or comma-separated list"
+            },
+            "required": false,
+            "description": "Brand ID(s) — single UUID or comma-separated list",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyEmailsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "One verdict per distinct address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyEmailsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error (bad body, or x-org-id / x-user-id / x-run-id missing)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "At least one address could not be verified (verifier down, runs/billing unreachable, insufficient balance). Nothing is returned as deliverable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "email_verification"
+                      ]
+                    },
+                    "source": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "source",
+                    "error"
+                  ]
                 }
               }
             }

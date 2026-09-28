@@ -270,6 +270,60 @@ export async function verifyRevealedEmail(rawEmail: string, ctx: VerificationCon
   }
 }
 
+/** Most addresses one batch call may carry. A slice of a paced release is far smaller. */
+export const MAX_VERIFY_BATCH = 50;
+
+/**
+ * How many addresses of one batch are verified at once. BounceVerify takes ~3s
+ * an address, so a full batch answers in ~15s typically; the worst case is
+ * bounded by ceil(MAX_VERIFY_BATCH / this) actor timeouts.
+ */
+export const VERIFY_BATCH_CONCURRENCY = 10;
+
+/**
+ * Verdicts for addresses a caller already HOLDS (not a reveal): each one goes
+ * through verifyRevealedEmail, so the bronze row, the 30-day reuse and the
+ * cost protocol are exactly the reveal path's. Duplicates (after lower-casing)
+ * are verified once. Returned in first-seen input order.
+ *
+ * All or nothing: if ANY address cannot be verified this throws
+ * EmailVerificationError naming the failures, and the caller gets no verdict
+ * at all — a partial answer invites sending to the half it covers while the
+ * other half is silently dropped. What did succeed is already stored, so a
+ * retry reuses every decisive verdict for free and re-runs only the rest.
+ */
+export async function verifyEmailBatch(rawEmails: string[], ctx: VerificationContext): Promise<EmailVerificationResult[]> {
+  const emails: string[] = [];
+  for (const raw of rawEmails) {
+    const email = normalizeEmail(raw);
+    if (!email) throw new EmailVerificationError("empty email in batch");
+    if (!emails.includes(email)) emails.push(email);
+  }
+  if (emails.length > MAX_VERIFY_BATCH) {
+    throw new EmailVerificationError(`batch of ${emails.length} exceeds ${MAX_VERIFY_BATCH}`);
+  }
+
+  const results = new Array<EmailVerificationResult | undefined>(emails.length);
+  const failures: string[] = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < emails.length) {
+      const i = next++;
+      try {
+        results[i] = await verifyRevealedEmail(emails[i], ctx);
+      } catch (err) {
+        failures.push(`${emails[i]}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(VERIFY_BATCH_CONCURRENCY, emails.length) }, worker));
+
+  if (failures.length > 0) {
+    throw new EmailVerificationError(`${failures.length} of ${emails.length} address(es) could not be verified — ${failures.slice(0, 5).join("; ")}`);
+  }
+  return results as EmailVerificationResult[];
+}
+
 /** Verify when there is an address to verify; null otherwise (no email = nothing to send to). */
 export async function verificationFor(
   email: string | null | undefined,
