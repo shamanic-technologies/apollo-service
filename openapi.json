@@ -4247,6 +4247,183 @@
           "people"
         ]
       },
+      "AudienceCompaniesResponse": {
+        "type": "object",
+        "properties": {
+          "apolloAudienceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "count": {
+            "type": "integer",
+            "description": "Live verified-email match count of the audience (people, not companies)."
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "companies": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "rank": {
+                  "type": "integer",
+                  "description": "1-based position in Apollo's rank order of the audience's people. Stable across calls."
+                },
+                "name": {
+                  "type": "string"
+                },
+                "apolloOrganizationId": {
+                  "type": "string",
+                  "nullable": true,
+                  "description": "Null when no Apollo organization carries exactly this name (then every firmographic is null)."
+                },
+                "domain": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "websiteUrl": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "logoUrl": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "linkedinUrl": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "shortDescription": {
+                  "type": "string",
+                  "nullable": true,
+                  "description": "Apollo's company description, verbatim (may be several sentences)."
+                },
+                "industry": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "estimatedNumEmployees": {
+                  "type": "number",
+                  "nullable": true
+                },
+                "city": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "state": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "country": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "foundedYear": {
+                  "type": "number",
+                  "nullable": true
+                },
+                "annualRevenuePrinted": {
+                  "type": "string",
+                  "nullable": true,
+                  "example": "67.5B"
+                },
+                "totalFundingPrinted": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "latestFundingStage": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "keywords": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Up to 10 of Apollo's keyword tags for the company."
+                },
+                "peopleInSample": {
+                  "type": "integer",
+                  "description": "People of the audience at this company among the walked teaser pages (rank hint, not headcount)."
+                },
+                "person": {
+                  "type": "object",
+                  "properties": {
+                    "apolloPersonId": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Apollo person id from the free teaser: the handle `POST /enrich` accepts to reveal + verify this person's email (billed there, not here)."
+                    },
+                    "firstName": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "lastNameObfuscated": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "As Apollo's free teaser serves it, e.g. \"Ni***s\"."
+                    },
+                    "title": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "apolloPersonId",
+                    "firstName",
+                    "lastNameObfuscated",
+                    "title"
+                  ],
+                  "description": "The first-ranked person of the audience at this company. Never an email, phone or full name."
+                }
+              },
+              "required": [
+                "rank",
+                "name",
+                "apolloOrganizationId",
+                "domain",
+                "websiteUrl",
+                "logoUrl",
+                "linkedinUrl",
+                "shortDescription",
+                "industry",
+                "estimatedNumEmployees",
+                "city",
+                "state",
+                "country",
+                "foundedYear",
+                "annualRevenuePrinted",
+                "totalFundingPrinted",
+                "latestFundingStage",
+                "keywords",
+                "peopleInSample",
+                "person"
+              ]
+            }
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "Another chunk (offset + limit) may hold companies. Always false once 100 is reached."
+          },
+          "creditsCharged": {
+            "type": "integer",
+            "description": "Apollo credits billed to the caller's org by this call (apollo-credit): 1 per company not already in the 90-day firmographics cache."
+          }
+        },
+        "required": [
+          "apolloAudienceId",
+          "count",
+          "offset",
+          "limit",
+          "companies",
+          "hasMore",
+          "creditsCharged"
+        ]
+      },
       "PhoneRevealResponse": {
         "type": "object",
         "properties": {
@@ -6035,6 +6212,165 @@
           },
           "400": {
             "description": "Missing identity header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (unknown id or another org's audience)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/audiences/{apolloAudienceId}/companies": {
+      "get": {
+        "summary": "Up to 100 real companies reached by a persisted Apollo audience, with firmographics and one person each",
+        "description": "Distinct employers of the audience's people (the audience's full filters, person-level included), in Apollo's rank order, chunked by offset/limit (max 100 in total). Each company carries Apollo's firmographics and the first-ranked person of the audience there (first name, obfuscated last name, title, apolloPersonId). Employers and organization ids come from free Apollo calls; the full organization record costs 1 apollo-credit per company, declared on a child run of x-run-id against the caller's org (provision, authorize for platform keys, actualize, hold released) and cached globally for 90 days, so a repeat call is free. Never an email, a phone or a filter object. 402 when the org cannot afford the chunk.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "apolloAudienceId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "minimum": 0,
+              "maximum": 99,
+              "default": 0,
+              "description": "Rank of the first company to return (0-based)."
+            },
+            "required": false,
+            "description": "Rank of the first company to return (0-based).",
+            "name": "offset",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25,
+              "description": "Companies in this chunk. offset+limit is capped at 100."
+            },
+            "required": false,
+            "description": "Companies in this chunk. offset+limit is capped at 100.",
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Companies",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceCompaniesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing identity header (x-org-id, x-user-id, x-run-id) or bad query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Insufficient credits",
             "content": {
               "application/json": {
                 "schema": {

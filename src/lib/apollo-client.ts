@@ -569,6 +569,64 @@ export async function searchPeople(
   return response.json();
 }
 
+/** A shallow organization record from Apollo's FREE name lookup. */
+export interface ApolloOrganizationCandidate {
+  id: string;
+  name?: string | null;
+  domain?: string | null;
+  website_url?: string | null;
+  logo_url?: string | null;
+}
+
+/**
+ * FREE organization lookup by (fuzzy) name: `POST organizations/search` in
+ * `fuzzy_select_mode`, the endpoint behind Apollo's own free "Organization
+ * Lookup". Returns shallow candidates only (id, name, domain, website_url,
+ * logo_url). Measured 2026-09-29: zero `lead_credit` movement over 101 calls,
+ * while the SAME query sent to `mixed_companies/search` costs 1 credit each —
+ * do not swap the path.
+ */
+export async function lookupOrganizationsByName(
+  apiKey: string,
+  name: string,
+  perPage: number,
+  alertIdentity?: CreditAlertIdentity
+): Promise<ApolloOrganizationCandidate[]> {
+  const response = await sendApolloRequest("organizations/search (lookup)", "Apollo organization lookup failed", alertIdentity, () => fetchWithTimeout(`${APOLLO_API_BASE}/organizations/search`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Api-Key": apiKey },
+    body: JSON.stringify({ q_organization_fuzzy_name: name, display_mode: "fuzzy_select_mode", page: 1, per_page: perPage }),
+  }));
+  const body = (await response.json()) as { organizations?: ApolloOrganizationCandidate[] };
+  return body.organizations ?? [];
+}
+
+/**
+ * BILLED: the complete organization record (industry, headcount, location,
+ * description, …) by Apollo organization id — `GET organizations/{id}`. Costs
+ * 1 lead credit per call that returns an organization (measured 2026-09-29).
+ * Returns null on a 404 (no such organization — nothing to bill).
+ */
+export async function getOrganizationById(
+  apiKey: string,
+  organizationId: string,
+  alertIdentity?: CreditAlertIdentity
+): Promise<ApolloOrganization | null> {
+  const url = `${APOLLO_API_BASE}/organizations/${encodeURIComponent(organizationId)}`;
+  const first = await fetchWithTimeout(url, { method: "GET", headers: { "X-Api-Key": apiKey } });
+  if (first.status === 404) return null;
+  let replayed = false;
+  const response = await sendApolloRequest("organizations/{id}", "Apollo organization fetch failed", alertIdentity, () => {
+    if (!replayed) {
+      replayed = true;
+      return Promise.resolve(first);
+    }
+    return fetchWithTimeout(url, { method: "GET", headers: { "X-Api-Key": apiKey } });
+  });
+  const body = (await response.json()) as { organization?: ApolloOrganization | null };
+  return body.organization ?? null;
+}
+
 /**
  * Enrich a single person using Apollo API
  */
