@@ -391,19 +391,25 @@ identity, idempotency, persistence and cost.
   `meta.credits_charged` → `explee-credit` quantity. Provision the worst case
   (treg `TREG_MAX_COST_MICRO`; Explee the preset's credits), post the reported
   figure as `actual`, cancel the hold. A miss reports 0 → hold cancelled.
-- **treg: $0.006 ceiling per find, cheapest first, work-email partners only
-  (2026-09-26, was $0.01).** `TREG_MAX_COST_MICRO = 6_000` is sent as
-  `X-Treg-Route-Max-Cost: 0.006000`; every child priced above it is `skipped:
-  "would exceed max cost"`, never called. treg ALREADY walks its plan cheapest
-  per hit — there is no order header, so the ceiling is the only price lever.
-  Left: quickenrich $0.004834, trykitt $0.005, aiark $0.005267. Dropped tomba
-  ($0.0089: 57c for 10 valid on the 2026-09-25 benchmark). `X-Treg-Route-Exclude:
+- **treg: $0.01 ceiling per find, cheapest first, work-email partners only
+  (2026-09-28; $0.006 on 09-26..28, $0.01 before).** `TREG_MAX_COST_MICRO =
+  10_000` is sent as `X-Treg-Route-Max-Cost: 0.010000`; every child priced above
+  it is `skipped`, never called, and when EVERY candidate for the identity we
+  sent is above it treg answers **402 `route_max_cost`** (nothing charged).
+  treg walks its plan cheapest per hit — no order header, the ceiling is the
+  only price lever. **The ceiling must admit the cheapest NAME+DOMAIN child**,
+  since most finds carry no LinkedIn URL: on 2026-09-28 treg dropped trykitt
+  ($0.005), tomba ($0.0089) became the cheapest name+domain child, and the
+  $0.006 ceiling 402'd 265 of 268 finds. $0.01 admits tomba and nothing dearer
+  (next: dropleads $0.018), so a runaway price stops at a 402. The 402 body
+  carries treg's whole `plan[]` with prices — read it before moving the ceiling.
+  tomba's personal inboxes are caught by `rejectNonWorkEmail`. `X-Treg-Route-Exclude:
   leadmagic` drops the personal-email finder's PROVIDER (an endpoint id there is
   silently ignored).
 - **The treg silver preset NAMES THE ROUTING POLICY** (`TREG_PRESET` =
-  `routed-max-6000`; `routed` = the $0.01 era). A miss under a $0.006 plan is
-  not a miss under a $0.01 one, so changing the ceiling is a NEW question: one
-  more lookup per person, old rows kept as history. Every treg call sends
+  `routed-max-10000`; `routed-max-6000` / `routed` = older ceilings). A miss
+  under one plan is not a miss under another, so changing the ceiling is a NEW
+  question: one more lookup per person, old rows kept as history. Every treg call sends
   `Cache-Control: no-cache` — our silver row is the cache, and the only re-ask
   is a policy change, where treg's archived answer would be the old policy's.
 - **Bronze records the REQUEST headers** (`email_finder_calls.request_headers`,

@@ -29,19 +29,24 @@ export const TREG_COST_NAME = "treg-micro-usd";
 export const EXPLEE_COST_NAME = "explee-credit";
 
 /**
- * Ceiling on one treg routed find, in micro-USD: $0.006 (was $0.01 until
- * 2026-09-26). Sent to treg as `X-Treg-Route-Max-Cost`: every child priced
- * above it is `skipped: "would exceed max cost"` and never called (verified
- * live 2026-09-25, and on ~290 post-deploy calls whose largest charge was the
- * dearest child under the ceiling). treg already walks the plan CHEAPEST FIRST
- * ("cheapest per hit" — there is no order header to send), so the ceiling is
- * the only lever on price. The plan it leaves: quickenrich $0.004834, trykitt
- * $0.005 (name + domain), aiark $0.005267 (LinkedIn). It drops tomba ($0.0089):
- * on the 2026-09-25 benchmark tomba cost 57c for 10 BounceVerify-valid
- * addresses (27 of its 63 answers were personal inboxes), against 60c for 54
- * valid from quickenrich + aiark.
+ * Ceiling on one treg routed find, in micro-USD: $0.01 (2026-09-28; was
+ * $0.006 from 2026-09-26, $0.01 before). Sent to treg as
+ * `X-Treg-Route-Max-Cost`: every child priced above it is `skipped: "would
+ * exceed max cost"` and never called, and when EVERY candidate for the
+ * identity we sent sits above it treg answers 402 `route_max_cost` (nothing
+ * charged). treg already walks the plan CHEAPEST FIRST ("cheapest per hit" —
+ * there is no order header), so the ceiling is the only lever on price.
+ *
+ * Why $0.01: on 2026-09-28 treg removed trykitt ($0.005), the only name+domain
+ * child under $0.006, so every find without a LinkedIn URL 402'd (265 of 268
+ * that day). treg's plan on that date, cheapest first — LinkedIn: quickenrich
+ * $0.004834, aiark $0.005267, tomba $0.0089, then $0.0198+; name+domain: tomba
+ * $0.0089, then dropleads $0.018+. $0.01 admits tomba and NOTHING dearer, so a
+ * price move beyond it stops at a 402 instead of doubling the cost. tomba
+ * returns personal inboxes often; `rejectNonWorkEmail` turns those into
+ * `not_found` (the charge stands and is declared).
  */
-export const TREG_MAX_COST_MICRO = 6_000;
+export const TREG_MAX_COST_MICRO = 10_000;
 
 /**
  * treg has no preset; the silver key names the ROUTING POLICY instead, because
@@ -49,7 +54,8 @@ export const TREG_MAX_COST_MICRO = 6_000;
  * under $0.006" is not the answer to "not found among the children under
  * $0.01". Changing the ceiling therefore starts a new question per person
  * (one new lookup each); old rows stay as history under their own preset.
- * Rows before 2026-09-26 carry the policy-less name "routed" ($0.01 ceiling).
+ * Rows before 2026-09-26 carry the policy-less name "routed" ($0.01 ceiling,
+ * with trykitt still in the plan), 2026-09-26..28 "routed-max-6000".
  */
 export const TREG_PRESET = `routed-max-${TREG_MAX_COST_MICRO}`;
 
