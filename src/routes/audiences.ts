@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray, gt } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloAudiences } from "../db/schema.js";
 import { serviceAuth, orgAuth, AuthenticatedRequest } from "../middleware/auth.js";
@@ -7,8 +7,25 @@ import { decryptKey } from "../lib/keys-client.js";
 import { buildFiltersPrompt, APOLLO_UNDOCUMENTED_FILTERS_ENCART } from "../lib/filters-prompt.js";
 import { refineAudience, dryRunCount } from "../lib/audience-refine.js";
 import { previewAudience } from "../lib/audience-preview.js";
+import {
+  collectEmployers,
+  resolveOrganization,
+  mapConcurrent,
+  toFirmographics,
+  MAX_COMPANIES,
+  DEFAULT_COMPANIES_LIMIT,
+  LOOKUP_CONCURRENCY,
+  ORG_CACHE_DAYS,
+  COMPANY_FIRMOGRAPHICS_COST_NAME,
+} from "../lib/audience-companies.js";
+import { getOrganizationById, type ApolloOrganization } from "../lib/apollo-client.js";
+import { apolloOrganizations } from "../db/schema.js";
+import { advisoryXactLock } from "../lib/advisory-lock.js";
+import { createRun, updateRun, addCosts, updateCostStatus, type IdentityHeaders } from "../lib/runs-client.js";
+import { authorizeCredit } from "../lib/billing-client.js";
+import { assertKeySource } from "../lib/validators.js";
 import { toCreditAlertIdentity } from "../lib/credit-alert.js";
-import { SuggestFromSegmentRequestSchema, ApolloNativeSearchFiltersSchema } from "../schemas.js";
+import { SuggestFromSegmentRequestSchema, ApolloNativeSearchFiltersSchema, AudienceCompaniesQuerySchema } from "../schemas.js";
 import { providerErrorFields } from "../lib/provider-error.js";
 import { planQuickenrich } from "../lib/quickenrich.js";
 import { ServeSourceRequestSchema } from "../schemas.js";
@@ -238,6 +255,202 @@ router.get("/audiences/:apolloAudienceId/preview", serviceAuth, async (req: Auth
     res.json({ apolloAudienceId: row.id, ...preview });
   } catch (error) {
     console.error("[Apollo Service][GET /audiences/:id/preview] ERROR:", error);
+    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
+  }
+});
+
+type EnrichOutcome =
+  | { kind: "ok"; orgs: Map<string, ApolloOrganization>; creditsCharged: number }
+  | { kind: "insufficient"; balance_cents: number; required_cents: number };
+
+/**
+ * The full organization record for each id: served from the global cache when
+ * fresher than ORG_CACHE_DAYS, otherwise bought from Apollo (1 credit each)
+ * under provision → authorize → execute → actualize against the CALLER's org.
+ * An advisory lock per audience keeps two concurrent calls for the same chunk
+ * from paying twice. A fetched record is cached even when a sibling fetch
+ * fails, so the retry only pays for what is still missing.
+ */
+async function enrichOrganizations(args: {
+  ids: string[];
+  audienceRowId: string;
+  apolloApiKey: string;
+  keySource: "org" | "platform";
+  identity: IdentityHeaders;
+  runId: string;
+  req: AuthenticatedRequest;
+}): Promise<EnrichOutcome> {
+  const { ids, apolloApiKey, keySource, identity, runId, req } = args;
+  const orgs = new Map<string, ApolloOrganization>();
+  if (ids.length === 0) return { kind: "ok", orgs, creditsCharged: 0 };
+
+  return db.transaction(async (tx) => {
+    await advisoryXactLock(tx, `apollo-audience-companies:${args.audienceRowId}`);
+
+    const freshAfter = new Date(Date.now() - ORG_CACHE_DAYS * 24 * 60 * 60 * 1000);
+    const cached = await tx
+      .select()
+      .from(apolloOrganizations)
+      .where(and(inArray(apolloOrganizations.id, ids), gt(apolloOrganizations.fetchedAt, freshAfter)));
+    for (const row of cached) orgs.set(row.id, row.raw as ApolloOrganization);
+
+    const missing = ids.filter((id) => !orgs.has(id));
+    if (missing.length === 0) return { kind: "ok" as const, orgs, creditsCharged: 0 };
+
+    const run = await createRun({
+      orgId: identity.orgId,
+      userId: identity.userId,
+      brandIds: identity.brandIds,
+      campaignId: identity.campaignId,
+      audienceId: identity.audienceId,
+      featureSlug: identity.featureSlug,
+      workflowSlug: identity.workflowSlug,
+      serviceName: "apollo-service",
+      taskName: "audience-companies",
+      parentRunId: runId,
+    });
+
+    // PROVISION the worst case (every missing company billed) before anything is spent.
+    const provisioned = await addCosts(
+      run.id,
+      [{ costName: COMPANY_FIRMOGRAPHICS_COST_NAME, costSource: keySource, quantity: missing.length, status: "provisioned" }],
+      identity,
+    );
+    const provisionedCostId = provisioned.costs?.[0]?.id ?? null;
+    const releaseHold = async (status: "completed" | "failed") => {
+      if (provisionedCostId) await updateCostStatus(run.id, provisionedCostId, "cancelled", identity);
+      await updateRun(run.id, status, identity);
+    };
+
+    // AUTHORIZE platform-key spend (a BYOK org pays Apollo directly).
+    if (keySource === "platform") {
+      const auth = await authorizeCredit({
+        items: [{ costName: COMPANY_FIRMOGRAPHICS_COST_NAME, quantity: missing.length }],
+        description: "apollo-audience-companies",
+        orgId: identity.orgId,
+        userId: identity.userId!,
+        runId,
+        brandIds: identity.brandIds,
+        campaignId: identity.campaignId,
+        audienceId: identity.audienceId,
+        featureSlug: identity.featureSlug,
+        workflowSlug: identity.workflowSlug,
+      });
+      if (!auth.sufficient) {
+        await releaseHold("failed");
+        return { kind: "insufficient" as const, balance_cents: auth.balance_cents, required_cents: auth.required_cents };
+      }
+    }
+
+    // EXECUTE.
+    const alertIdentity = toCreditAlertIdentity(req);
+    const results = await mapConcurrent(missing, LOOKUP_CONCURRENCY, async (id) => {
+      try {
+        return { id, org: await getOrganizationById(apolloApiKey, id, alertIdentity), error: null as unknown };
+      } catch (error) {
+        return { id, org: null, error };
+      }
+    });
+    const fetched = results.filter((r): r is { id: string; org: ApolloOrganization; error: unknown } => r.org !== null);
+    for (const r of fetched) {
+      orgs.set(r.id, r.org);
+      // Outside the tx on purpose: a record Apollo billed us for is kept even if this request fails later.
+      await db
+        .insert(apolloOrganizations)
+        .values({ id: r.id, raw: r.org, fetchedAt: new Date() })
+        .onConflictDoUpdate({ target: apolloOrganizations.id, set: { raw: r.org, fetchedAt: new Date() } });
+    }
+
+    // ACTUALIZE what Apollo returned (a 404 bills nothing), then release the hold.
+    if (fetched.length > 0) {
+      await addCosts(run.id, [{ costName: COMPANY_FIRMOGRAPHICS_COST_NAME, costSource: keySource, quantity: fetched.length }], identity);
+    }
+    const failure = results.find((r) => r.error);
+    await releaseHold(failure ? "failed" : "completed");
+    if (failure) throw failure.error;
+
+    return { kind: "ok" as const, orgs, creditsCharged: fetched.length };
+  });
+}
+
+/**
+ * GET /audiences/:apolloAudienceId/companies?offset=&limit= — up to 100
+ * distinct companies where people of the audience work, in Apollo's rank
+ * order, each with firmographics and the one person to write to. Chunked so a
+ * consumer gets its first rows in a couple of seconds; repeat calls return the
+ * same order and never pay twice for a company (global cache).
+ * See src/lib/audience-companies.ts for how each step was measured.
+ */
+router.get("/audiences/:apolloAudienceId/companies", serviceAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const parsed = AudienceCompaniesQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json({ type: "validation", error: "Invalid query", details: parsed.error.flatten() });
+    }
+    const { offset, limit } = parsed.data;
+    if (!req.runId) {
+      return res.status(400).json({ type: "validation", error: "x-run-id header required" });
+    }
+    const { apolloAudienceId } = req.params;
+
+    const [row] = await db
+      .select()
+      .from(apolloAudiences)
+      .where(and(eq(apolloAudiences.id, apolloAudienceId), eq(apolloAudiences.orgId, req.orgId!)))
+      .limit(1);
+    if (!row) {
+      return res.status(404).json({ type: "not_found", error: "Audience not found" });
+    }
+
+    const brandIds = row.brandId ? [row.brandId] : req.brandIds;
+    const tracking = { brandIds, campaignId: req.campaignId, audienceId: req.audienceId, featureSlug: req.featureSlug, workflowSlug: req.workflowSlug };
+    const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, ...tracking };
+
+    const { key: apolloApiKey, keySource } = await decryptKey(
+      req.orgId!,
+      req.userId!,
+      "apollo",
+      { callerMethod: "GET", callerPath: "/audiences/:apolloAudienceId/companies" },
+      tracking,
+    );
+    assertKeySource(keySource);
+
+    const filters = row.filters as Record<string, unknown>;
+    const alertIdentity = toCreditAlertIdentity(req);
+    const end = Math.min(offset + limit, MAX_COMPANIES);
+    const collection = end > offset ? await collectEmployers(apolloApiKey, filters, end, alertIdentity) : { count: 0, employers: [], morePages: false };
+    const chunk = collection.employers.slice(offset, end);
+
+    const candidates = await mapConcurrent(chunk, LOOKUP_CONCURRENCY, (e) => resolveOrganization(apolloApiKey, filters, e, alertIdentity));
+    const ids = [...new Set(candidates.map((c) => c?.id).filter((id): id is string => !!id))];
+
+    const enriched = await enrichOrganizations({ ids, audienceRowId: row.id, apolloApiKey, keySource, identity, runId: req.runId, req });
+    if (enriched.kind === "insufficient") {
+      return res.status(402).json({
+        type: "credit_insufficient",
+        error: "Insufficient credits",
+        balance_cents: enriched.balance_cents,
+        required_cents: enriched.required_cents,
+      });
+    }
+
+    const companies = chunk.map((e, i) => {
+      const candidate = candidates[i];
+      const org = candidate ? enriched.orgs.get(candidate.id) ?? null : null;
+      return { rank: offset + i + 1, name: e.name, ...toFirmographics(candidate, org), peopleInSample: e.peopleInSample, person: e.person };
+    });
+
+    res.json({
+      apolloAudienceId: row.id,
+      count: collection.count,
+      offset,
+      limit,
+      companies,
+      hasMore: end < MAX_COMPANIES && (collection.employers.length > end || collection.morePages),
+      creditsCharged: enriched.creditsCharged,
+    });
+  } catch (error) {
+    console.error("[Apollo Service][GET /audiences/:id/companies] ERROR:", error);
     res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
   }
 });
