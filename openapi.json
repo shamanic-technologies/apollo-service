@@ -5009,11 +5009,11 @@
           {
             "schema": {
               "type": "string",
-              "description": "Campaign ID",
+              "description": "Campaign ID. Optional on /enrich only: a reveal made outside any campaign (e.g. signed-out onboarding) is the same billed, verified, cached reveal, recorded with campaign_id NULL.",
               "example": "campaign-1"
             },
-            "required": true,
-            "description": "Campaign ID",
+            "required": false,
+            "description": "Campaign ID. Optional on /enrich only: a reveal made outside any campaign (e.g. signed-out onboarding) is the same billed, verified, cached reveal, recorded with campaign_id NULL.",
             "name": "x-campaign-id",
             "in": "header"
           },

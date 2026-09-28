@@ -264,6 +264,45 @@ describe("Billing credit authorization", () => {
     expect(mockEnrichPerson).not.toHaveBeenCalled();
   });
 
+  // ─── POST /enrich outside any campaign ─────────────────────────────────
+
+  it("POST /enrich without x-campaign-id is the SAME billed reveal: authorized, costed, verified, no campaign invented", async () => {
+    const { "X-Campaign-Id": _omit, ...noCampaign } = HEADERS;
+    const res = await request(app)
+      .post("/enrich")
+      .set({ ...noCampaign, "X-Audience-Id": "aud-1" })
+      .send({ apolloPersonId: "p-1" })
+      .expect(200);
+
+    expect(res.body.person.email).toBe("a@b.com");
+    expect(res.body.emailVerification).toMatchObject({ verdict: "valid", deliverable: true });
+    expect(mockEnrichPerson).toHaveBeenCalledTimes(1);
+    // Metered against the caller's org exactly as a campaign reveal.
+    expect(mockAuthorizeCredit).toHaveBeenCalledWith(
+      expect.objectContaining({ orgId: "org-123", items: [{ costName: "apollo-credit", quantity: 1 }], campaignId: undefined }),
+    );
+    expect(mockAddCosts).toHaveBeenCalledWith(
+      expect.any(String),
+      [{ costName: "apollo-credit", costSource: "platform", quantity: 1 }],
+      expect.objectContaining({ orgId: "org-123", campaignId: undefined }),
+    );
+    // Every run it opens carries no campaign id at all.
+    for (const [arg] of mockCreateRun.mock.calls) expect((arg as { campaignId?: string }).campaignId).toBeUndefined();
+  });
+
+  it("POST /enrich still requires x-run-id and x-brand-id", async () => {
+    const { "X-Campaign-Id": _c, "X-Brand-Id": _b, ...h } = HEADERS;
+    const res = await request(app).post("/enrich").set(h).send({ apolloPersonId: "p-1" }).expect(400);
+    expect(res.body.error).toBe("x-run-id and x-brand-id headers required");
+    expect(mockEnrichPerson).not.toHaveBeenCalled();
+  });
+
+  it("POST /search/next still requires x-campaign-id (the cursor is campaign-keyed)", async () => {
+    const { "X-Campaign-Id": _c, ...h } = HEADERS;
+    await request(app).post("/search/next").set(h).send({ searchParams: { personTitles: ["CEO"] } }).expect(400);
+    expect(mockSearchPeople).not.toHaveBeenCalled();
+  });
+
   // ─── POST /search/next ─────────────────────────────────────────────────
 
   it("should NOT call authorizeCredit on POST /search/next (search is free)", async () => {
