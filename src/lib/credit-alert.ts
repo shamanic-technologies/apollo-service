@@ -4,7 +4,8 @@
  * Apollo signals credit exhaustion in two ways, both of which used to be silent
  * here: a 200 response whose `email` is the `email_not_unlocked@domain.com`
  * sentinel (an email exists but the plan/credits cannot reveal it), and an
- * outright 402/403/429 on the request. Without this alert the service keeps
+ * outright 402/403 on the request (a 429 is Apollo's per-minute rate limit and
+ * only counts when its body names credits). Without this alert the service keeps
  * running and simply produces nothing, which reads downstream like an exhausted
  * lead pool rather than a dry provider.
  *

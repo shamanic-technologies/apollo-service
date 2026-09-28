@@ -528,7 +528,7 @@ owner decision; do not build it by default.
 
 Apollo signals credit exhaustion two ways, and BOTH used to be silent here: a
 200 response whose `email` is the `email_not_unlocked@domain.com` sentinel (an
-email exists but the plan/credits cannot reveal it) and an outright 402/403/429.
+email exists but the plan/credits cannot reveal it) and an outright 402/403.
 The sentinel is the nastier one — `withVerifiedEmailOnly` nulls it, so downstream
 a dry provider is byte-identical to "this person has no verified email", i.e. the
 service keeps running and quietly serves nothing. Both signals now raise a staff
@@ -563,15 +563,25 @@ Apollo HTTP call goes through (`src/lib/apollo-client.ts`).
   the plan's lead credits hit zero is a plain **422** whose body reads
   `{"error":"You have insufficient credits! … Upgrade your plan … lead credits."}`.
   422 is also what an ordinary API error returns (a malformed range filter, a
-  cursor paging past the 50k cap — issue #131), so neither "402/403/429 only" nor
+  cursor paging past the 50k cap — issue #131), so neither "402/403 only" nor
   "422 means exhausted" works. `looksLikeApolloCreditExhaustion(status, body)` in
-  `src/lib/apollo-client.ts` alerts when the status is 402/403/429 (credit-related
+  `src/lib/apollo-client.ts` alerts when the status is 402/403 (credit-related
   by definition) OR the body matches a narrow out-of-credits pattern (every
   pattern requires the word "credit"/"credits"). Keep the patterns narrow — a
   detector that fires on ordinary errors trains staff to ignore the alert.
   (Cost: the 2026-07-28 and 2026-08-22 exhaustions were both fleet-wide, lasted
   days, and raised nothing — the status-only detector could not see the one
   signal Apollo sends.)
+- **A 429 is a RATE LIMIT, not exhaustion — unless its body says credits.**
+  Apollo answers 429 when we exceed its per-minute API quota
+  (`USAGE.RATE_LIMIT.API_RATE_LIMIT_EXCEEDED`, 200/min on
+  `mixed_people/api_search`). Counting every 429 as exhaustion mailed staff
+  "apollo is out of credits" on a busy minute and marked the failure
+  `retryable: false` for callers (2026-09-28). `sendApolloRequest` (the single
+  exit every Apollo call goes through) now RETRIES a rate-limit 429 up to 3 times
+  (2s/5s/10s, or `Retry-After` capped at 10s — `/match` holds an advisory lock
+  around the call), raises no alert, and throws a plain error if it still fails.
+  A 429 whose body matches the credit patterns stays exhaustion, unretried.
 - **Env vars:** `TRANSACTIONAL_EMAIL_SERVICE_URL` +
   `TRANSACTIONAL_EMAIL_SERVICE_API_KEY` (shared fleet values), read lazily inside
   the alert call — their absence cannot break boot or any endpoint, it only makes
