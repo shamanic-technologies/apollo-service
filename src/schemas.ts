@@ -1451,6 +1451,49 @@ registry.registerPath({
   },
 });
 
+const AudiencePreviewResponseSchema = z
+  .object({
+    apolloAudienceId: z.string().uuid(),
+    count: z.number().int().openapi({ description: "Live verified-email match count of the stored filters (not persisted)." }),
+    companies: z
+      .array(
+        z.object({
+          name: z.string().openapi({ example: "Experience Travel Group" }),
+          peopleInSample: z.number().int().openapi({ description: "How many of the sampled people work there (rank hint, not headcount)." }),
+        }),
+      )
+      .openapi({ description: "Up to 10 distinct real employers of the sampled people, in Apollo rank order. Name only: domain/industry/size/location are not obtainable for free." }),
+    people: z
+      .array(
+        z.object({
+          firstName: z.string().nullable(),
+          lastNameObfuscated: z.string().nullable().openapi({ description: "As Apollo's free teaser serves it, e.g. \"Ni***s\"." }),
+          title: z.string().nullable(),
+          company: z.string().nullable(),
+        }),
+      )
+      .openapi({ description: "Up to 20 real people, round-robin across employers. Never an email, phone or full name." }),
+  })
+  .openapi("AudiencePreviewResponse");
+
+registry.registerPath({
+  method: "get",
+  path: "/audiences/{apolloAudienceId}/preview",
+  summary: "Free sample of real companies and people in a persisted Apollo audience",
+  description:
+    "One free Apollo people-search teaser call (page 1, 100 rows, zero credits) over the audience's stored filters. Returns up to 10 distinct employers and up to 20 people as the teaser serves them: first name, obfuscated last name, title, employer. No email, phone or reveal; no cost declared. Read-only: no cursor advance, no row written, count snapshot not refreshed. An audience with no match returns count 0 and empty arrays. Page 1 of Apollo's ranking, so repeat calls are stable.",
+  request: {
+    headers: audienceHeaders,
+    params: z.object({ apolloAudienceId: z.string() }),
+  },
+  responses: {
+    200: { description: "Sample", content: { "application/json": { schema: AudiencePreviewResponseSchema } } },
+    400: { description: "Missing identity header", content: { "application/json": { schema: ErrorResponseSchema } } },
+    404: { description: "Not found (unknown id or another org's audience)", content: { "application/json": { schema: ErrorResponseSchema } } },
+    500: { description: "Internal server error", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
 // ─── Phone reveal ────────────────────────────────────────────────────────────
 // Apollo does not return phone numbers by default: the reveal is OPT-IN, billed
 // separately, and ASYNCHRONOUS. Hence a route of its own (no existing caller can
