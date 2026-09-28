@@ -50,7 +50,8 @@ export const apolloPeopleEnrichments = pgTable(
 
     // Hierarchy IDs
     brandIds: text("brand_ids").array().notNull(),
-    campaignId: text("campaign_id").notNull(),
+    // NULL = a reveal made outside any campaign (POST /enrich without x-campaign-id).
+    campaignId: text("campaign_id"),
     audienceId: text("audience_id"),
     featureSlug: text("feature_slug"),
     workflowSlug: text("workflow_slug"),

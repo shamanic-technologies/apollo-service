@@ -761,7 +761,13 @@ registry.registerPath({
   description:
     "Enrich a single person by Apollo person ID. Uses 12-month cache. If runId is provided, stores record and tracks costs.",
   request: {
-    headers: runContextHeaders,
+    headers: runContextHeaders.extend({
+      "x-campaign-id": z.string().optional().openapi({
+        description:
+          "Campaign ID. Optional on /enrich only: a reveal made outside any campaign (e.g. signed-out onboarding) is the same billed, verified, cached reveal, recorded with campaign_id NULL.",
+        example: "campaign-1",
+      }),
+    }),
     body: {
       content: { "application/json": { schema: EnrichRequestSchema } },
       required: true,

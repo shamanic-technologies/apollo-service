@@ -279,6 +279,18 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
   break boot or any existing endpoint — only `/audiences/suggest-from-segment`
   would 500 until they are set.
 
+## `POST /enrich` works OUTSIDE a campaign (x-campaign-id optional there only)
+
+A reveal can precede any campaign: signed-out onboarding reveals a few preview
+people to prove they are reachable (consumer: human-service). So `/enrich`
+requires only `x-run-id` + `x-brand-id`; without `x-campaign-id` it is the SAME
+billed reveal (authorize, `apollo-credit`, BounceVerify, 12-month cache keyed on
+the person, so a later campaign serve never pays twice), metered on the caller's
+org/brand/run/audience. The enrichment row and child runs hold `campaign_id`
+NULL (migration `0028` dropped NOT NULL). Nothing is invented in its place, so
+it never enters a campaign's attribution or stats. `/search/next` and `/match`
+still require a campaign (the cursor is campaign-keyed).
+
 ## Audience preview (`GET /audiences/:id/preview`) is FREE and READ-ONLY
 
 A sample of who is in a persisted audience, for showing a signed-out prospect
