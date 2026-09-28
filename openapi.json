@@ -2250,6 +2250,69 @@
           "findingId": {
             "type": "string",
             "description": "The treg finding (email_findings) that answered, when source=quickenrich."
+          },
+          "revealSkipped": {
+            "type": "object",
+            "properties": {
+              "skipId": {
+                "type": "string",
+                "description": "Row in reveal_skips."
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "catch_all_domain",
+                  "checker_blocked_domain"
+                ]
+              },
+              "organizationName": {
+                "type": "string"
+              },
+              "organizationId": {
+                "type": "string"
+              },
+              "evidence": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "domain": {
+                      "type": "string"
+                    },
+                    "verdict": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "verificationId": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "verifiedAt": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "probed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "domain",
+                    "verdict",
+                    "verificationId",
+                    "verifiedAt",
+                    "probed"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "skipId",
+              "reason",
+              "organizationName",
+              "organizationId",
+              "evidence"
+            ],
+            "description": "Present when the Apollo reveal was NOT bought: every mail domain of the person's employer is catch-all (no address on it can verify valid) or refuses the verifier (unknown, re-probed after 7 days). person is then null and no apollo-credit is spent; a domain the fleet never verified is probed with one random address (apify-bounceverify-email, decisive verdicts only)."
           }
         },
         "required": [

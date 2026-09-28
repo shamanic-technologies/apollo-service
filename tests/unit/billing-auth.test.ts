@@ -2,6 +2,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import express from "express";
 import request from "supertest";
 
+// Reveal domain gate: covered in reveal-domain-gate.test.ts; here it lets every reveal through.
+vi.mock("../../src/lib/reveal-domain-gate.js", () => ({
+  gateReveal: vi.fn().mockResolvedValue({ action: "reveal", basis: "no_employer" }),
+  recordRevealSkip: vi.fn(),
+  rememberTeaserEmployers: vi.fn().mockResolvedValue(undefined),
+}));
+
+
 // Pre-serve verification is covered in email-verification.test.ts; here it is a
 // stub that answers "valid" for any address.
 
@@ -209,6 +217,38 @@ describe("Billing credit authorization", () => {
         items: [{ costName: "apollo-credit", quantity: 1 }],
       })
     );
+  });
+
+  it("a person whose employer's mail domain is catch-all costs ZERO reveal credits: no authorize, no Apollo call, skip recorded", async () => {
+    const gate = await import("../../src/lib/reveal-domain-gate.js");
+    const evidence = [{ domain: "dugasdental.com", verdict: "catch_all", verificationId: "ver-1", verifiedAt: "2026-09-28T00:00:00.000Z", probed: false }];
+    vi.mocked(gate.gateReveal).mockResolvedValueOnce({
+      action: "skip",
+      reason: "catch_all_domain",
+      organizationName: "Dugas Dental",
+      organizationId: "org-1",
+      evidence: evidence as never,
+    });
+    vi.mocked(gate.recordRevealSkip).mockResolvedValueOnce("skip-1");
+
+    const res = await request(app).post("/enrich").set(HEADERS).send({ apolloPersonId: "p-1" }).expect(200);
+
+    expect(res.body).toMatchObject({
+      enrichmentId: null,
+      person: null,
+      emailVerification: null,
+      revealSkipped: { skipId: "skip-1", reason: "catch_all_domain", organizationName: "Dugas Dental", evidence },
+    });
+    expect(mockAuthorizeCredit).not.toHaveBeenCalled();
+    expect(mockEnrichPerson).not.toHaveBeenCalled();
+    expect(gate.recordRevealSkip).toHaveBeenCalledWith("p-1", expect.objectContaining({ reason: "catch_all_domain" }), expect.objectContaining({ runId: expect.any(String) }));
+  });
+
+  it("the gate runs BEFORE the Apollo spend and a passing gate reveals as before", async () => {
+    const gate = await import("../../src/lib/reveal-domain-gate.js");
+    await request(app).post("/enrich").set(HEADERS).send({ apolloPersonId: "p-1" }).expect(200);
+    expect(gate.gateReveal).toHaveBeenCalledWith("p-1", expect.objectContaining({ apolloApiKey: expect.any(String) }));
+    expect(vi.mocked(gate.gateReveal).mock.invocationCallOrder.at(-1)!).toBeLessThan(mockEnrichPerson.mock.invocationCallOrder.at(-1)!);
   });
 
   it("should skip billing authorization for BYOK on POST /enrich", async () => {

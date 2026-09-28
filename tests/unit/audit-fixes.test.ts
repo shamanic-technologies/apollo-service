@@ -2,6 +2,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import express from "express";
 import request from "supertest";
 
+// Reveal domain gate: covered in reveal-domain-gate.test.ts; here it lets every reveal through.
+vi.mock("../../src/lib/reveal-domain-gate.js", () => ({
+  gateReveal: vi.fn().mockResolvedValue({ action: "reveal", basis: "no_employer" }),
+  recordRevealSkip: vi.fn(),
+  rememberTeaserEmployers: vi.fn().mockResolvedValue(undefined),
+}));
+
+
 // Pre-serve verification is covered in email-verification.test.ts; here it is a
 // stub that answers "valid" for any address.
 

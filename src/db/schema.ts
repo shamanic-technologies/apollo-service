@@ -149,6 +149,7 @@ export const apolloPeopleEnrichments = pgTable(
     index("idx_enrichments_brand_ids").using("gin", table.brandIds),
     index("idx_enrichments_email").on(table.email),
     index("idx_enrichments_person_id").on(table.apolloPersonId),
+    index("idx_enrichments_organization_id").on(table.organizationId),
     index("idx_enrichments_campaign").on(table.campaignId),
     index("idx_enrichments_audience").on(table.audienceId),
     index("idx_enrichments_feature_slug").on(table.featureSlug),
@@ -445,7 +446,11 @@ export const emailVerifications = pgTable(
     durationMs: integer("duration_ms"),
     verifiedAt: timestamp("verified_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [index("idx_email_verifications_email_at").on(table.email, table.verifiedAt)]
+  (table) => [
+    index("idx_email_verifications_email_at").on(table.email, table.verifiedAt),
+    // Domain-level lookup for the reveal domain gate (catch-all is a domain fact).
+    index("idx_email_verifications_domain_at").on(sql`split_part(${table.email}, '@', 2)`, table.verifiedAt),
+  ]
 );
 
 // ─── QuickEnrich (free candidate source) ────────────────────────────────────
@@ -503,6 +508,44 @@ export const apolloOrganizations = pgTable("apollo_organizations", {
   raw: jsonb("raw").notNull(),
   fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// ─── Reveal domain gate ─────────────────────────────────────────────────────
+// Who an Apollo teaser person works for. The free teaser carries the employer
+// NAME only (no domain, no org id); /search/next records it here so /enrich can
+// judge the employer's mail domain BEFORE paying for the reveal. A fact about
+// Apollo's data, not about the org that searched: no org_id.
+export const apolloTeaserPeople = pgTable("apollo_teaser_people", {
+  apolloPersonId: text("apollo_person_id").primaryKey(),
+  organizationName: text("organization_name").notNull(),
+  firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Every reveal NOT bought because the person's mail domain cannot pass the
+// deliverability gate (src/lib/reveal-domain-gate.ts). `evidence` names each
+// domain judged, its verdict and the email_verifications row that proves it.
+export const revealSkips = pgTable(
+  "reveal_skips",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id").notNull(),
+    runId: text("run_id").notNull(),
+    brandIds: text("brand_ids").array(),
+    campaignId: text("campaign_id"),
+    audienceId: text("audience_id"),
+    apolloPersonId: text("apollo_person_id").notNull(),
+    organizationName: text("organization_name"),
+    organizationId: text("organization_id"),
+    // "catch_all_domain" | "checker_blocked_domain"
+    reason: text("reason").notNull(),
+    evidence: jsonb("evidence").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_reveal_skips_campaign").on(table.campaignId, table.createdAt),
+    index("idx_reveal_skips_org").on(table.orgId),
+  ]
+);
 
 export type ApolloPeopleSearch = typeof apolloPeopleSearches.$inferSelect;
 export type NewApolloPeopleSearch = typeof apolloPeopleSearches.$inferInsert;

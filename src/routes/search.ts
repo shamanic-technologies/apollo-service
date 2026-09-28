@@ -3,6 +3,7 @@ import { eq, and, gt, isNotNull, desc, inArray, count, sum, sql, arrayOverlaps }
 import { db } from "../db/index.js";
 import { apolloPeopleSearches, apolloPeopleEnrichments, apolloSearchCursors } from "../db/schema.js";
 import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
+import { gateReveal, recordRevealSkip, rememberTeaserEmployers } from "../lib/reveal-domain-gate.js";
 import { searchPeople, enrichPerson, ApolloPerson, buildWaterfallWebhookUrl, withVerifiedEmailOnly, isBilledApolloPerson, BILLED_NO_EMAIL_CACHE_DAYS } from "../lib/apollo-client.js";
 import { providerErrorFields } from "../lib/provider-error.js";
 import { advisoryXactLock, enrichLockKey } from "../lib/advisory-lock.js";
@@ -279,6 +280,27 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
     const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/enrich" }, tracking);
     assertKeySource(keySource);
+
+    // Reveal domain gate: before buying, judge the employer's mail domain. A
+    // catch-all domain, or one whose server refuses our checker, can never
+    // yield a `valid` verdict, so the reveal would be a credit thrown away. The
+    // skip is recorded with its evidence and returned; the person comes back
+    // null, exactly like a reveal that yields no email.
+    const gate = await gateReveal(apolloPersonId, { apolloApiKey, alertIdentity: toCreditAlertIdentity(req), verify: verifyCtx });
+    if (gate.action === "skip") {
+      const skipId = await recordRevealSkip(apolloPersonId, gate, { orgId: req.orgId!, runId, brandIds, campaignId, audienceId });
+      const domains = gate.evidence.map((e) => `${e.domain}=${e.verdict}${e.probed ? "(probed)" : ""}`).join(",");
+      console.log(`[Apollo Service][POST /enrich] reveal skipped person=${apolloPersonId} org="${gate.organizationName}" reason=${gate.reason} domains=${domains} skipId=${skipId}`);
+      traceEvent(runId, { service: "apollo-service", event: "enrich-skipped", detail: `apolloPersonId=${apolloPersonId}, reason=${gate.reason}, domains=${domains}`, data: { skipId, reason: gate.reason, evidence: gate.evidence } }, req.headers).catch(() => {});
+      return res.json({
+        enrichmentId: null,
+        person: null,
+        cached: false,
+        emailVerification: null,
+        revealSkipped: { skipId, reason: gate.reason, organizationName: gate.organizationName, organizationId: gate.organizationId, evidence: gate.evidence },
+      });
+    }
+    traceEvent(runId, { service: "apollo-service", event: "enrich-gate-pass", detail: `apolloPersonId=${apolloPersonId}, basis=${gate.basis}` }, req.headers).catch(() => {});
 
     // Waterfall disabled 2026-05-28 — authorize the direct Apollo cost (1
     // credit per email). Revive comment block below if waterfall is re-enabled
@@ -640,6 +662,8 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     const result = await searchPeople(apolloApiKey, apolloParams, toCreditAlertIdentity(req));
     const totalEntries = result.total_entries ?? result.pagination?.total_entries ?? 0;
     const people = result.people ?? [];
+    // Remember each teaser's employer so /enrich can judge its mail domain before paying.
+    await rememberTeaserEmployers(people);
 
     if (people.length < 1) {
       console.warn(`[Apollo Service][POST /search/next] ⚠ Apollo returned 0 people page=${currentPage} campaignId=${campaignId} runId=${runId} (cursor stays open — totalPages drives exhaustion)`);
