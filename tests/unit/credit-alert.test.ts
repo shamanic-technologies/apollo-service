@@ -4,8 +4,11 @@ import {
   enrichPerson,
   matchPersonByName,
   APOLLO_PLACEHOLDER_EMAIL,
+  APOLLO_RATE_LIMIT_RETRY_DELAYS_MS,
   looksLikeApolloCreditExhaustion,
+  isApolloRateLimit,
 } from "../../src/lib/apollo-client.js";
+import { ApolloCreditsExhaustedError } from "../../src/lib/provider-error.js";
 import {
   reportApolloCreditsExhausted,
   toCreditAlertIdentity,
@@ -27,6 +30,13 @@ import {
  */
 const APOLLO_INSUFFICIENT_CREDITS_BODY =
   '{"error":"You have insufficient credits! <a href=\'https://app.apollo.io/#/settings/plans/upgrade\' aria-onclick=\'close_alert\'>Upgrade your plan</a> to increase your number of lead credits."}';
+
+/**
+ * Apollo's literal per-minute rate-limit answer, copied from the prod alert of
+ * 2026-09-28 that was wrongly mailed as "apollo is out of credits".
+ */
+const APOLLO_RATE_LIMIT_BODY =
+  '{"message":"The maximum number of api calls allowed for api/v1/mixed_people/api_search is 200 times per minute. Please upgrade your plan from https://app.apollo.io/#/settings/plans/upgrade?source=api_rate_limit.","error_details":{"code":"USAGE.RATE_LIMIT.API_RATE_LIMIT_EXCEEDED","message":"You have made more API requests than your plan allows in this time window.","suggestions":[{"label":"Wait until the rate limit resets, then retry the API request."}]}}';
 
 const IDENTITY = {
   orgId: "org-1",
@@ -109,15 +119,58 @@ describe("Apollo credit-exhaustion staff alert", () => {
     expect(body.bccEmails).toBeUndefined();
   });
 
-  it("alerts and still throws when Apollo answers 429", async () => {
-    apolloRejects(429, "quota exceeded");
+  it("does NOT alert on Apollo's per-minute rate limit — retries, then throws a plain error", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    apolloRejects(429, APOLLO_RATE_LIMIT_BODY);
 
-    await expect(searchPeople("key", { person_titles: ["CEO"] }, IDENTITY)).rejects.toThrow(
-      /Apollo search failed: 429/,
+    const call = searchPeople("key", { person_titles: ["CEO"] }, IDENTITY);
+    const assertion = expect(call).rejects.toSatisfy(
+      (err: Error) => /Apollo search failed: 429/.test(err.message) && !(err instanceof ApolloCreditsExhaustedError),
+    );
+    await vi.runAllTimersAsync();
+    await assertion;
+    vi.useRealTimers();
+    await flushAlert();
+
+    expect(alertCalls(fetchMock)).toHaveLength(0);
+    const apolloCalls = fetchMock.mock.calls.filter(([url]) => String(url).includes("api.apollo.io"));
+    expect(apolloCalls).toHaveLength(1 + APOLLO_RATE_LIMIT_RETRY_DELAYS_MS.length);
+  });
+
+  it("returns the result when a rate-limited call succeeds on retry", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    let apolloCalls = 0;
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).includes("/platform-send")) {
+        return { ok: true, status: 200, json: async () => ({ results: [] }) };
+      }
+      apolloCalls++;
+      if (apolloCalls === 1) return { ok: false, status: 429, text: async () => APOLLO_RATE_LIMIT_BODY };
+      return { ok: true, status: 200, json: async () => ({ people: [], total_entries: 7 }) };
+    });
+
+    const call = searchPeople("key", { person_titles: ["CEO"] }, IDENTITY);
+    await vi.runAllTimersAsync();
+    const result = await call;
+    vi.useRealTimers();
+    await flushAlert();
+
+    expect(result).toEqual({ people: [], total_entries: 7 });
+    expect(apolloCalls).toBe(2);
+    expect(alertCalls(fetchMock)).toHaveLength(0);
+  });
+
+  it("still alerts, without retrying, on a 429 whose body says the credits are gone", async () => {
+    apolloRejects(429, APOLLO_INSUFFICIENT_CREDITS_BODY);
+
+    await expect(searchPeople("key", { person_titles: ["CEO"] }, IDENTITY)).rejects.toBeInstanceOf(
+      ApolloCreditsExhaustedError,
     );
     await flushAlert();
 
     expect(alertCalls(fetchMock)).toHaveLength(1);
+    const apolloCalls = fetchMock.mock.calls.filter(([url]) => String(url).includes("api.apollo.io"));
+    expect(apolloCalls).toHaveLength(1);
   });
 
   it("alerts when Apollo answers 200 with the email_not_unlocked sentinel", async () => {
@@ -274,9 +327,16 @@ describe("looksLikeApolloCreditExhaustion", () => {
   });
 
   it("keeps matching the already-covered rejected statuses whatever the body", () => {
-    for (const status of [402, 403, 429]) {
+    for (const status of [402, 403]) {
       expect(looksLikeApolloCreditExhaustion(status, "")).toBe(true);
     }
+  });
+
+  it("does not read Apollo's per-minute rate limit as exhaustion", () => {
+    expect(looksLikeApolloCreditExhaustion(429, APOLLO_RATE_LIMIT_BODY)).toBe(false);
+    expect(isApolloRateLimit(429, APOLLO_RATE_LIMIT_BODY)).toBe(true);
+    expect(isApolloRateLimit(429, APOLLO_INSUFFICIENT_CREDITS_BODY)).toBe(false);
+    expect(isApolloRateLimit(422, APOLLO_RATE_LIMIT_BODY)).toBe(false);
   });
 
   it("does not match ordinary Apollo errors", () => {
