@@ -112,9 +112,9 @@ describe("GET /audiences/:id/preview", () => {
         { name: "Inside Asia Tours", peopleInSample: 1 },
       ],
       people: [
-        { firstName: "Melissa", lastNameObfuscated: "Ni***s", title: "Co Founder", company: "Experience Travel Group" },
-        { firstName: "Ana", lastNameObfuscated: "Li***a", title: "Managing Director", company: "Inside Asia Tours" },
-        { firstName: "Tom", lastNameObfuscated: "Sm***h", title: "Owner", company: "Experience Travel Group" },
+        { apolloPersonId: "id-Melissa", firstName: "Melissa", lastNameObfuscated: "Ni***s", title: "Co Founder", company: "Experience Travel Group" },
+        { apolloPersonId: "id-Ana", firstName: "Ana", lastNameObfuscated: "Li***a", title: "Managing Director", company: "Inside Asia Tours" },
+        { apolloPersonId: "id-Tom", firstName: "Tom", lastNameObfuscated: "Sm***h", title: "Owner", company: "Experience Travel Group" },
       ],
     });
 
@@ -127,6 +127,18 @@ describe("GET /audiences/:id/preview", () => {
     // Read-only: no row inserted / updated (no cursor, no count refresh).
     expect(state.writes).toEqual([]);
     expect(JSON.stringify(res.body)).not.toMatch(/email|phone/i);
+  });
+
+  it("each person carries the teaser's Apollo id as `apolloPersonId` — the handle POST /enrich accepts", async () => {
+    mockSearchPeople.mockResolvedValue({
+      total_entries: 2,
+      people: [teaser("Melissa", "Ni***s", "Co Founder", "Acme"), { ...teaser("Tom", "Sm***h", "Owner", "Acme"), id: undefined }],
+    });
+    const res = await request(app).get(`/audiences/${ROW.id}/preview`).set(HEADERS).expect(200);
+    expect(res.body.people.map((p: any) => p.apolloPersonId)).toEqual(["id-Melissa", null]);
+    // Still one free search, still no write: the handle rides the same teaser page.
+    expect(mockSearchPeople).toHaveBeenCalledTimes(1);
+    expect(state.writes).toEqual([]);
   });
 
   it("an audience with no match answers an empty sample, not an error", async () => {

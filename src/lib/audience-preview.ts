@@ -44,6 +44,13 @@ export interface PreviewCompany {
 }
 
 export interface PreviewPerson {
+  /**
+   * Apollo's person id, verbatim from the teaser: the handle `POST /enrich`
+   * accepts (`{ apolloPersonId }`) to reveal + verify THIS person's email, the
+   * same one `/search/next` teasers carry. Free: the teaser already serves it,
+   * and it is an opaque id, not contact data. Null only if Apollo omits it.
+   */
+  apolloPersonId: string | null;
   firstName: string | null;
   /** As Apollo's free teaser serves it, e.g. "Ni***s". The full last name is a paid reveal. */
   lastNameObfuscated: string | null;
@@ -65,6 +72,7 @@ function str(v: unknown): string | null {
 
 function toPreviewPerson(p: TeaserPerson): PreviewPerson {
   return {
+    apolloPersonId: str(p.id),
     firstName: str(p.first_name),
     lastNameObfuscated: str(p.last_name_obfuscated),
     title: str(p.title),
