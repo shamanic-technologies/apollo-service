@@ -307,6 +307,39 @@ purpose: `mixed_companies/search` moved `lead_credit` by 1 per page, and would
 ignore the audience's person filters anyway. Do not add them without a billed
 path. Page 1 (not random pages) so repeat calls are stable.
 
+## Audience companies (`GET /audiences/:id/companies`) — 100 companies, 1 credit each, cached
+
+Up to 100 distinct companies where people OF THE AUDIENCE work, with firmographics
+and the one person to write to (consumer: human-service → signed-out onboarding).
+`src/lib/audience-companies.ts`; chunked by `offset`/`limit` (default 25, total
+capped at 100), `x-run-id` required. Every step measured on prod 2026-09-29 via
+`POST usage_stats/credit_usage_stats` before/after, zero baseline drift:
+
+- **Employers: FREE.** The audience's own people teaser (so person filters hold),
+  page 1, pages 2..5 in parallel only if page 1 lacks employers. First-ranked
+  person per employer = the person. The teaser carries NO organization id.
+- **Organization id: FREE.** `POST organizations/search` +
+  `display_mode:"fuzzy_select_mode"` (Apollo's free Lookup): 0 credits over 101
+  calls. The SAME body on `mixed_companies/search` costs 1 credit per call — do
+  not swap paths. Only an EXACT (case/space-insensitive) name match resolves;
+  several exact matches are settled by a free people search scoped to each
+  candidate id (first holding an audience person wins); else id null and every
+  firmographic null. Never a fuzzy guess.
+- **Firmographics: 1 `apollo-credit` per company** (`GET organizations/{id}`).
+  Rejected: `mixed_companies/search` with 100 `organization_ids` is 1 credit per
+  REQUEST but returns no industry/headcount/location/description;
+  `organizations/bulk_enrich` is also 1 per company. So 100 companies ≤ 100
+  credits (11.8¢ each at org price ≈ $11.80). Global cache `apollo_organizations`
+  (no org_id — firmographics are facts; not in transfer-brand) for 90 days: a
+  cached company is never paid again, whoever asks.
+- **Metering**: child run `audience-companies` of `x-run-id`, PROVISION the
+  uncached count → AUTHORIZE (platform key; 402 + hold released if short) →
+  EXECUTE → ACTUALIZE what Apollo returned → cancel the hold. A fetched record is
+  cached even if a sibling fetch fails (the retry pays only for the rest). An
+  advisory lock per audience stops two concurrent chunks paying twice.
+- Never an email, a phone (not even the switchboard) or a filter object. The
+  preview route is untouched.
+
 ## Phone reveal is OPT-IN, ASYNCHRONOUS, and lives on its own route
 
 Apollo does not return phone numbers by default and never has — that is why

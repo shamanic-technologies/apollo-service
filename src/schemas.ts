@@ -1505,6 +1505,78 @@ registry.registerPath({
   },
 });
 
+export const AudienceCompaniesQuerySchema = z.object({
+  offset: z.coerce.number().int().min(0).max(99).default(0).openapi({ description: "Rank of the first company to return (0-based)." }),
+  limit: z.coerce.number().int().min(1).max(100).default(25).openapi({ description: "Companies in this chunk. offset+limit is capped at 100." }),
+});
+
+const CompanyPersonSchema = z.object({
+  apolloPersonId: z.string().nullable().openapi({ description: "Apollo person id from the free teaser: the handle `POST /enrich` accepts to reveal + verify this person's email (billed there, not here)." }),
+  firstName: z.string().nullable(),
+  lastNameObfuscated: z.string().nullable().openapi({ description: "As Apollo's free teaser serves it, e.g. \"Ni***s\"." }),
+  title: z.string().nullable(),
+});
+
+const AudienceCompanySchema = z.object({
+  rank: z.number().int().openapi({ description: "1-based position in Apollo's rank order of the audience's people. Stable across calls." }),
+  name: z.string(),
+  apolloOrganizationId: z.string().nullable().openapi({ description: "Null when no Apollo organization carries exactly this name (then every firmographic is null)." }),
+  domain: z.string().nullable(),
+  websiteUrl: z.string().nullable(),
+  logoUrl: z.string().nullable(),
+  linkedinUrl: z.string().nullable(),
+  shortDescription: z.string().nullable().openapi({ description: "Apollo's company description, verbatim (may be several sentences)." }),
+  industry: z.string().nullable(),
+  estimatedNumEmployees: z.number().nullable(),
+  city: z.string().nullable(),
+  state: z.string().nullable(),
+  country: z.string().nullable(),
+  foundedYear: z.number().nullable(),
+  annualRevenuePrinted: z.string().nullable().openapi({ example: "67.5B" }),
+  totalFundingPrinted: z.string().nullable(),
+  latestFundingStage: z.string().nullable(),
+  keywords: z.array(z.string()).openapi({ description: "Up to 10 of Apollo's keyword tags for the company." }),
+  peopleInSample: z.number().int().openapi({ description: "People of the audience at this company among the walked teaser pages (rank hint, not headcount)." }),
+  person: CompanyPersonSchema.openapi({ description: "The first-ranked person of the audience at this company. Never an email, phone or full name." }),
+});
+
+const AudienceCompaniesResponseSchema = z
+  .object({
+    apolloAudienceId: z.string().uuid(),
+    count: z.number().int().openapi({ description: "Live verified-email match count of the audience (people, not companies)." }),
+    offset: z.number().int(),
+    limit: z.number().int(),
+    companies: z.array(AudienceCompanySchema),
+    hasMore: z.boolean().openapi({ description: "Another chunk (offset + limit) may hold companies. Always false once 100 is reached." }),
+    creditsCharged: z.number().int().openapi({ description: "Apollo credits billed to the caller's org by this call (apollo-credit): 1 per company not already in the 90-day firmographics cache." }),
+  })
+  .openapi("AudienceCompaniesResponse");
+
+registry.registerPath({
+  method: "get",
+  path: "/audiences/{apolloAudienceId}/companies",
+  summary: "Up to 100 real companies reached by a persisted Apollo audience, with firmographics and one person each",
+  description:
+    "Distinct employers of the audience's people (the audience's full filters, person-level included), in Apollo's rank order, chunked by offset/limit (max 100 in total). Each company carries Apollo's firmographics and the first-ranked person of the audience there (first name, obfuscated last name, title, apolloPersonId). Employers and organization ids come from free Apollo calls; the full organization record costs 1 apollo-credit per company, declared on a child run of x-run-id against the caller's org (provision, authorize for platform keys, actualize, hold released) and cached globally for 90 days, so a repeat call is free. Never an email, a phone or a filter object. 402 when the org cannot afford the chunk.",
+  request: {
+    headers: audienceHeaders.extend({
+      "x-run-id": z.string(),
+      "x-audience-id": z.string().optional(),
+      "x-campaign-id": z.string().optional(),
+      "x-feature-slug": z.string().optional(),
+    }),
+    params: z.object({ apolloAudienceId: z.string() }),
+    query: AudienceCompaniesQuerySchema,
+  },
+  responses: {
+    200: { description: "Companies", content: { "application/json": { schema: AudienceCompaniesResponseSchema } } },
+    400: { description: "Missing identity header (x-org-id, x-user-id, x-run-id) or bad query", content: { "application/json": { schema: ErrorResponseSchema } } },
+    402: { description: "Insufficient credits", content: { "application/json": { schema: ErrorResponseSchema } } },
+    404: { description: "Not found (unknown id or another org's audience)", content: { "application/json": { schema: ErrorResponseSchema } } },
+    500: { description: "Internal server error", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
 // ─── Phone reveal ────────────────────────────────────────────────────────────
 // Apollo does not return phone numbers by default: the reveal is OPT-IN, billed
 // separately, and ASYNCHRONOUS. Hence a route of its own (no existing caller can

@@ -493,6 +493,17 @@ export const quickenrichPeople = pgTable(
   }
 );
 
+// Global cache of Apollo's full organization record (GET organizations/{id},
+// 1 lead credit each), keyed on the Apollo organization id. Firmographics are
+// facts about a company, not about the org that asked, so there is no org_id:
+// a company paid for once is served free to every later caller until it is
+// ORG_CACHE_DAYS old. `raw` is the record verbatim (bronze).
+export const apolloOrganizations = pgTable("apollo_organizations", {
+  id: text("id").primaryKey(),
+  raw: jsonb("raw").notNull(),
+  fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type ApolloPeopleSearch = typeof apolloPeopleSearches.$inferSelect;
 export type NewApolloPeopleSearch = typeof apolloPeopleSearches.$inferInsert;
 export type ApolloPeopleEnrichment = typeof apolloPeopleEnrichments.$inferSelect;
