@@ -4168,6 +4168,78 @@
           "count"
         ]
       },
+      "AudiencePreviewResponse": {
+        "type": "object",
+        "properties": {
+          "apolloAudienceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "count": {
+            "type": "integer",
+            "description": "Live verified-email match count of the stored filters (not persisted)."
+          },
+          "companies": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "example": "Experience Travel Group"
+                },
+                "peopleInSample": {
+                  "type": "integer",
+                  "description": "How many of the sampled people work there (rank hint, not headcount)."
+                }
+              },
+              "required": [
+                "name",
+                "peopleInSample"
+              ]
+            },
+            "description": "Up to 10 distinct real employers of the sampled people, in Apollo rank order. Name only: domain/industry/size/location are not obtainable for free."
+          },
+          "people": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "firstName": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "lastNameObfuscated": {
+                  "type": "string",
+                  "nullable": true,
+                  "description": "As Apollo's free teaser serves it, e.g. \"Ni***s\"."
+                },
+                "title": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "company": {
+                  "type": "string",
+                  "nullable": true
+                }
+              },
+              "required": [
+                "firstName",
+                "lastNameObfuscated",
+                "title",
+                "company"
+              ]
+            },
+            "description": "Up to 20 real people, round-robin across employers. Never an email, phone or full name."
+          }
+        },
+        "required": [
+          "apolloAudienceId",
+          "count",
+          "companies",
+          "people"
+        ]
+      },
       "PhoneRevealResponse": {
         "type": "object",
         "properties": {
@@ -5868,6 +5940,104 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/audiences/{apolloAudienceId}/preview": {
+      "get": {
+        "summary": "Free sample of real companies and people in a persisted Apollo audience",
+        "description": "One free Apollo people-search teaser call (page 1, 100 rows, zero credits) over the audience's stored filters. Returns up to 10 distinct employers and up to 20 people as the teaser serves them: first name, obfuscated last name, title, employer. No email, phone or reveal; no cost declared. Read-only: no cursor advance, no row written, count snapshot not refreshed. An audience with no match returns count 0 and empty arrays. Page 1 of Apollo's ranking, so repeat calls are stable.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "apolloAudienceId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-run-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sample",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudiencePreviewResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing identity header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (unknown id or another org's audience)",
             "content": {
               "application/json": {
                 "schema": {

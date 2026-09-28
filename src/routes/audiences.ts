@@ -6,6 +6,7 @@ import { serviceAuth, orgAuth, AuthenticatedRequest } from "../middleware/auth.j
 import { decryptKey } from "../lib/keys-client.js";
 import { buildFiltersPrompt, APOLLO_UNDOCUMENTED_FILTERS_ENCART } from "../lib/filters-prompt.js";
 import { refineAudience, dryRunCount } from "../lib/audience-refine.js";
+import { previewAudience } from "../lib/audience-preview.js";
 import { toCreditAlertIdentity } from "../lib/credit-alert.js";
 import { SuggestFromSegmentRequestSchema, ApolloNativeSearchFiltersSchema } from "../schemas.js";
 import { providerErrorFields } from "../lib/provider-error.js";
@@ -199,6 +200,45 @@ router.patch("/audiences/:apolloAudienceId/serve-source", orgAuth, async (req: A
   } catch (error) {
     console.error("[Apollo Service][PATCH /audiences/:id/serve-source] ERROR:", error);
     res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error" });
+  }
+});
+
+/**
+ * GET /audiences/:apolloAudienceId/preview — a FREE, read-only sample of who is
+ * in a persisted audience: up to 10 real employers and up to 20 real people, as
+ * Apollo's free people-search teaser serves them (no email, no phone, no full
+ * last name). One teaser call, zero credits. Writes nothing and never touches
+ * the serve cursor. An audience with no match answers an empty sample.
+ * See src/lib/audience-preview.ts for why company descriptors are omitted.
+ */
+router.get("/audiences/:apolloAudienceId/preview", serviceAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { apolloAudienceId } = req.params;
+
+    const [row] = await db
+      .select()
+      .from(apolloAudiences)
+      .where(and(eq(apolloAudiences.id, apolloAudienceId), eq(apolloAudiences.orgId, req.orgId!)))
+      .limit(1);
+
+    if (!row) {
+      return res.status(404).json({ type: "not_found", error: "Audience not found" });
+    }
+
+    const { key: apolloApiKey } = await decryptKey(
+      req.orgId!,
+      req.userId!,
+      "apollo",
+      { callerMethod: "GET", callerPath: "/audiences/:apolloAudienceId/preview" },
+      { brandIds: row.brandId ? [row.brandId] : req.brandIds, featureSlug: req.featureSlug, workflowSlug: req.workflowSlug },
+    );
+
+    const preview = await previewAudience(apolloApiKey, row.filters as Record<string, unknown>, toCreditAlertIdentity(req));
+
+    res.json({ apolloAudienceId: row.id, ...preview });
+  } catch (error) {
+    console.error("[Apollo Service][GET /audiences/:id/preview] ERROR:", error);
+    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
   }
 });
 

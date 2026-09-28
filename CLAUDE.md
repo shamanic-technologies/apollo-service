@@ -279,6 +279,19 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
   break boot or any existing endpoint — only `/audiences/suggest-from-segment`
   would 500 until they are set.
 
+## Audience preview (`GET /audiences/:id/preview`) is FREE and READ-ONLY
+
+A sample of who is in a persisted audience, for showing a signed-out prospect
+real output (consumer: human-service). `src/lib/audience-preview.ts`. ONE Apollo
+people-search teaser call (page 1, per_page 100; zero credits, measured
+2026-09-28 via `credit_usage_stats` before/after 3 calls) → up to 10 distinct
+employers (name only) + up to 20 people (first name, obfuscated last name,
+title, employer), round-robin across the listed employers. No cursor, no row
+written, no count refresh, no cost declared. Company descriptors are omitted on
+purpose: `mixed_companies/search` moved `lead_credit` by 1 per page, and would
+ignore the audience's person filters anyway. Do not add them without a billed
+path. Page 1 (not random pages) so repeat calls are stable.
+
 ## Phone reveal is OPT-IN, ASYNCHRONOUS, and lives on its own route
 
 Apollo does not return phone numbers by default and never has — that is why
