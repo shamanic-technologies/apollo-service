@@ -716,7 +716,7 @@ export const EnrichRequestSchema = z
   })
   .openapi("EnrichRequest");
 
-export const EmailVerificationSchema = z
+export const EmailVerificationObjectSchema = z
   .object({
     email: z.string().openapi({ description: "The verified address, lower-cased." }),
     verdict: z.enum(["valid", "invalid", "catch_all", "risky", "unknown"]).openapi({
@@ -730,6 +730,9 @@ export const EmailVerificationSchema = z
     verifiedAt: z.string(),
     reused: z.boolean().openapi({ description: "true = a decisive verdict under 30 days old was reused; nothing billed." }),
   })
+  .openapi("EmailVerificationVerdict");
+
+export const EmailVerificationSchema = EmailVerificationObjectSchema
   .nullable()
   .openapi("EmailVerification", {
     description:
@@ -1658,5 +1661,41 @@ registry.registerPath({
   responses: {
     200: { description: "Findings", content: { "application/json": { schema: z.object({ findings: z.array(EmailFindingSchema) }) } } },
     400: { description: "Validation error", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+// ─── Standalone verification of addresses a caller already holds ────────────
+
+registry.registerPath({
+  method: "post",
+  path: "/email-verifications",
+  summary: "Verify a batch of email addresses the caller already holds (billed to the caller's org)",
+  description:
+    "Verdicts from BounceVerify (real SMTP + catch-all detection) for up to 50 addresses, verified 10 at a time (~3s each). Same guarantees as the reveal paths: every call is recorded in email_verifications (bronze, raw actor row verbatim); a decisive verdict under 30 days old is reused (reused: true, nothing billed); each fresh verification is a child run of x-run-id with cost apify-bounceverify-email provisioned, authorized against the caller's org (platform key), actualized on a decisive verdict (unknown is free) and the hold cancelled. `deliverable` is true ONLY for verdict `valid`. Duplicates (case-insensitive) are verified once; results come back in first-seen order, one per distinct address. ALL OR NOTHING: if any address cannot be verified the whole call answers 502 {type: \"email_verification\"} and no verdict is returned — a retry reuses whatever was already decided.",
+  request: {
+    headers: emailFindHeaders,
+    body: {
+      content: {
+        "application/json": {
+          schema: z
+            .object({
+              emails: z.array(z.string()).min(1).max(50).openapi({ description: "1 to 50 addresses." }),
+              source: z.string().optional().openapi({ description: "Caller label stored on each bronze row as `verify:<source>`." }),
+            })
+            .openapi("VerifyEmailsRequest"),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: "One verdict per distinct address",
+      content: { "application/json": { schema: z.object({ results: z.array(EmailVerificationObjectSchema) }).openapi("VerifyEmailsResponse") } },
+    },
+    400: { description: "Validation error (bad body, or x-org-id / x-user-id / x-run-id missing)", content: { "application/json": { schema: ErrorResponseSchema } } },
+    502: {
+      description: "At least one address could not be verified (verifier down, runs/billing unreachable, insufficient balance). Nothing is returned as deliverable.",
+      content: { "application/json": { schema: z.object({ type: z.literal("email_verification"), source: z.string(), error: z.string() }) } },
+    },
   },
 });

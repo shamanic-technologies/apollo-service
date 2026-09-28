@@ -363,6 +363,13 @@ pre-serve verification moved here from human-service. `/enrich`, `/match` and
 - **Fail loud: 502 `{type:"email_verification"}`.** Never an unverified email
   labelled deliverable. The reveal / finding is already stored, so a retry is
   a cache hit that re-runs only the verification.
+- **Addresses a caller already HOLDS: `POST /email-verifications`** (2026-09-28,
+  first caller transactional-email-service's paced mailing-list release). 1-50
+  addresses, 10 verified at once, each through `verifyRevealedEmail` — same
+  bronze, 30-day reuse, child run of `x-run-id`, cost authorized against the
+  CALLER's org. ALL OR NOTHING: one address that cannot be verified 502s the
+  whole call, so a caller never holds a partial answer to send half of. Bronze
+  `source` = `verify:<caller label>`.
 - Callers of `/match` today: human-service AND journalists-service — both now
   receive the verdict and its cost. Do not make it opt-in per caller; the
   owner's rule is that no revealed email leaves unverified.
