@@ -751,6 +751,27 @@ const EnrichResponseSchema = z
       description: "Present when apolloPersonId was a `qe:<emp_id>` QuickEnrich person: the email was found with treg (no Apollo credit; cost `treg-micro-usd`) and verified. `cached` then means the finding was reused (no vendor call).",
     }),
     findingId: z.string().optional().openapi({ description: "The treg finding (email_findings) that answered, when source=quickenrich." }),
+    revealSkipped: z
+      .object({
+        skipId: z.string().openapi({ description: "Row in reveal_skips." }),
+        reason: z.enum(["catch_all_domain", "checker_blocked_domain"]),
+        organizationName: z.string(),
+        organizationId: z.string(),
+        evidence: z.array(
+          z.object({
+            domain: z.string(),
+            verdict: z.string().nullable(),
+            verificationId: z.string().nullable(),
+            verifiedAt: z.string().nullable(),
+            probed: z.boolean(),
+          })
+        ),
+      })
+      .optional()
+      .openapi({
+        description:
+          "Present when the Apollo reveal was NOT bought: every mail domain of the person's employer is catch-all (no address on it can verify valid) or refuses the verifier (unknown, re-probed after 7 days). person is then null and no apollo-credit is spent; a domain the fleet never verified is probed with one random address (apify-bounceverify-email, decisive verdicts only).",
+      }),
   })
   .openapi("EnrichResponse");
 

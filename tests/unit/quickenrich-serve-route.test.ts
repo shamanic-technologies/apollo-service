@@ -2,6 +2,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import express from "express";
 import request from "supertest";
 
+// Reveal domain gate: covered in reveal-domain-gate.test.ts; here it lets every reveal through.
+vi.mock("../../src/lib/reveal-domain-gate.js", () => ({
+  gateReveal: vi.fn().mockResolvedValue({ action: "reveal", basis: "no_employer" }),
+  recordRevealSkip: vi.fn(),
+  rememberTeaserEmployers: vi.fn().mockResolvedValue(undefined),
+}));
+
+
 /**
  * The QuickEnrich serve path on POST /search/next and POST /enrich: the
  * switch, the fall-through to Apollo, and the `qe:` reveal via treg.
