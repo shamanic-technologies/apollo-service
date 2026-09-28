@@ -214,7 +214,7 @@ describe("POST /email-finder/find — treg", () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
       vendor: "treg",
-      preset: "routed-max-6000",
+      preset: "routed-max-10000",
       status: "found",
       email: "ada@example.com",
       vendorMailboxStatus: "verified",
@@ -231,8 +231,8 @@ describe("POST /email-finder/find — treg", () => {
     expect(init.headers["X-Treg-Token"]).toBe("vendor-key");
     expect(init.headers["X-Treg-Org"]).toBe("vendor-key");
     expect(mockDecryptKey).toHaveBeenCalledWith("org-1", "user-1", "treg-org", expect.anything(), expect.anything());
-    // $0.006 ceiling: treg skips every child priced above it, never calls it.
-    expect(init.headers["X-Treg-Route-Max-Cost"]).toBe("0.006000");
+    // $0.01 ceiling: treg skips every child priced above it, never calls it.
+    expect(init.headers["X-Treg-Route-Max-Cost"]).toBe("0.010000");
     // Always a live answer under this routing, never treg's archived one.
     expect(init.headers["Cache-Control"]).toBe("no-cache");
     // Work-email partners only: the personal-email finder's provider is excluded.
@@ -241,11 +241,11 @@ describe("POST /email-finder/find — treg", () => {
     expect(JSON.parse(init.body)).toMatchObject({ first_name: "Ada", last_name: "Lovelace", domain: "example.com" });
 
     // Provision worst case → actual = reported → hold cancelled.
-    expect(mockAuthorizeCredit).toHaveBeenCalledWith(expect.objectContaining({ items: [{ costName: "treg-micro-usd", quantity: 6_000 }] }));
+    expect(mockAuthorizeCredit).toHaveBeenCalledWith(expect.objectContaining({ items: [{ costName: "treg-micro-usd", quantity: 10_000 }] }));
     expect(mockAddCosts).toHaveBeenNthCalledWith(
       1,
       "find-run-1",
-      [{ costName: "treg-micro-usd", costSource: "platform", quantity: 6_000, status: "provisioned" }],
+      [{ costName: "treg-micro-usd", costSource: "platform", quantity: 10_000, status: "provisioned" }],
       expect.anything()
     );
     expect(mockAddCosts).toHaveBeenNthCalledWith(
@@ -259,9 +259,9 @@ describe("POST /email-finder/find — treg", () => {
 
     // Bronze: verbatim, with the cost header.
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ vendor: "treg", preset: "routed-max-6000", httpStatus: 200, chargedQuantity: "5000", underlyingProvider: "trykitt.people.email.find" });
+    expect(calls[0]).toMatchObject({ vendor: "treg", preset: "routed-max-10000", httpStatus: 200, chargedQuantity: "5000", underlyingProvider: "trykitt.people.email.find" });
     // Bronze proves what we asked for (ceiling, exclusion) — and never holds the token.
-    expect(calls[0].requestHeaders).toMatchObject({ "X-Treg-Route-Max-Cost": "0.006000", "X-Treg-Route-Exclude": "leadmagic", "X-Treg-Token": "[redacted]" });
+    expect(calls[0].requestHeaders).toMatchObject({ "X-Treg-Route-Max-Cost": "0.010000", "X-Treg-Route-Exclude": "leadmagic", "X-Treg-Token": "[redacted]" });
     expect(calls[0].responseHeaders["x-treg-cost-micro"]).toBe("5000");
     expect(calls[0].responseBody.raw).toEqual({ x: 1 });
 
@@ -287,6 +287,19 @@ describe("POST /email-finder/find — treg", () => {
     expect(res.body).toMatchObject({ status: "found", vendorMailboxStatus: "catch_all", mailboxStatus: "catch_all", chargedQuantity: 0, underlyingProvider: "tomba.people.email.find" });
     // A hit treg did not charge for declares nothing actual.
     expect(mockAddCosts).toHaveBeenCalledTimes(1);
+  });
+
+  it("a name+domain find served by tomba at $0.0089 is under the $0.01 ceiling: declared exactly, nothing flagged (2026-09-28)", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, { output: { email: "ada@example.com", verified: true } }, { "x-treg-cost-micro": "8900", "x-treg-served-by": "tomba.people.email.find" })
+    );
+    const app = await buildApp();
+    const res = await request(app).post("/email-finder/find").set(HEADERS).send({ vendor: "treg", person: PERSON });
+    expect(res.body).toMatchObject({ status: "found", chargedQuantity: 8900, underlyingProvider: "tomba.people.email.find" });
+    expect(mockAddCosts).toHaveBeenNthCalledWith(2, "find-run-1", [{ costName: "treg-micro-usd", costSource: "platform", quantity: 8900, status: "actual" }], expect.anything());
+    expect(errSpy.mock.calls.some((c) => String(c[0]).includes("above the"))).toBe(false);
+    errSpy.mockRestore();
   });
 
   it("a child that sends no verified flag reads as unverified (live: quickenrich)", async () => {
@@ -622,19 +635,20 @@ describe("isPersonalEmail / rejectNonWorkEmail", () => {
 
   it("the ceiling and the exclusion are what treg is sent", async () => {
     const { TREG_MAX_COST_MICRO, TREG_EXCLUDED_PROVIDERS } = await import("../../src/lib/email-finders.js");
-    expect(TREG_MAX_COST_MICRO).toBe(6_000);
+    expect(TREG_MAX_COST_MICRO).toBe(10_000);
     expect(TREG_EXCLUDED_PROVIDERS).toContain("leadmagic");
   });
 
-  it("the silver key names the routing policy, so a finding asked under the $0.01 ceiling does not answer the $0.006 one", async () => {
+  it("the silver key names the routing policy, so a finding asked under an older ceiling does not answer the $0.01 one", async () => {
     const { TREG_PRESET } = await import("../../src/lib/email-finders.js");
-    expect(TREG_PRESET).toBe("routed-max-6000");
+    expect(TREG_PRESET).toBe("routed-max-10000");
     // A row settled under the old policy ("routed") is history, not an answer to the new question.
     findings.push({ id: "old-1", vendor: "treg", preset: "routed", personKey: "apollo:ap-1", status: "found", email: "old@example.com" });
+    findings.push({ id: "old-2", vendor: "treg", preset: "routed-max-6000", personKey: "apollo:ap-1", status: "failed", email: null });
     fetchMock.mockResolvedValue(jsonResponse(200, { output: { email: null } }, { "x-treg-cost-micro": "0" }));
     const app = await buildApp();
     const res = await request(app).post("/email-finder/find").set(HEADERS).send({ vendor: "treg", person: PERSON });
-    expect(res.body).toMatchObject({ preset: "routed-max-6000", status: "not_found", reused: false });
+    expect(res.body).toMatchObject({ preset: "routed-max-10000", status: "not_found", reused: false });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

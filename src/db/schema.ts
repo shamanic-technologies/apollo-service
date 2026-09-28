@@ -323,7 +323,7 @@ export const emailFinderCalls = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     findingId: uuid("finding_id").notNull(),
     vendor: text("vendor").notNull(), // "treg" | "explee"
-    preset: text("preset").notNull(), // explee: "basic" | "premium"; treg: routing policy ("routed-max-6000"; "routed" = $0.01 era)
+    preset: text("preset").notNull(), // explee: "basic" | "premium"; treg: routing policy ("routed-max-10000"; "routed-max-6000" / "routed" = older ceilings)
     orgId: uuid("org_id").notNull(),
     userId: text("user_id"),
     runId: text("run_id"),
