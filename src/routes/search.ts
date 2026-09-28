@@ -187,8 +187,14 @@ async function findCachedEnrichmentByPersonId(
 router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
   try {
     const { runId, brandIds, campaignId, audienceId, featureSlug, workflowSlug } = req;
-    if (!runId || !brandIds?.length || !campaignId) {
-      return res.status(400).json({ type: "validation", error: "x-run-id, x-brand-id, and x-campaign-id headers required" });
+    // x-campaign-id is OPTIONAL here (and only here): a reveal can happen before
+    // any campaign exists (signed-out onboarding proving it can reach a previewed
+    // person). Such a reveal is the SAME billed reveal — authorize, credit cost,
+    // BounceVerify, cache — metered on the org/brand/run/audience it carries; its
+    // enrichment row and runs simply hold campaign_id NULL. Nothing is invented
+    // in its place, so it never lands in any campaign's attribution or stats.
+    if (!runId || !brandIds?.length) {
+      return res.status(400).json({ type: "validation", error: "x-run-id and x-brand-id headers required" });
     }
     const identity: IdentityHeaders = { orgId: req.orgId!, userId: req.userId, brandIds, campaignId, audienceId, featureSlug, workflowSlug };
     const tracking = { brandIds, campaignId, audienceId, featureSlug, workflowSlug };
