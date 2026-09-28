@@ -364,8 +364,16 @@ export function withVerifiedEmailOnly(person: ApolloPerson): ApolloPerson {
 
 /**
  * HTTP statuses Apollo returns when the account cannot pay for the call:
- * 402 (payment required), 403 (plan/credit gate), 429 (quota exhausted — Apollo
- * uses it for both rate limiting and credit limits, so it is worth surfacing).
+ * 402 (payment required), 403 (plan/credit gate).
+ *
+ * 429 is deliberately NOT here. Apollo answers 429 for its per-minute API rate
+ * limit (`USAGE.RATE_LIMIT.API_RATE_LIMIT_EXCEEDED`, "The maximum number of api
+ * calls allowed for api/v1/mixed_people/api_search is 200 times per minute"),
+ * which says "slow down", not "the account is empty". Treating it as exhaustion
+ * mailed staff "apollo is out of credits" on a busy minute and told callers the
+ * failure was not retryable (2026-09-28). A 429 still counts as exhaustion when
+ * its BODY says so, through the patterns below; otherwise it is retried
+ * (`sendApolloRequest`).
  *
  * This set alone is NOT sufficient: the status Apollo actually returns when the
  * lead credits run out is a plain **422** with the exhaustion stated only in the
@@ -373,7 +381,7 @@ export function withVerifiedEmailOnly(person: ApolloPerson): ApolloPerson {
  * because a rejected request on any of these statuses is credit-related by
  * definition, whatever the body says.
  */
-const APOLLO_CREDIT_DENIED_STATUSES = new Set([402, 403, 429]);
+const APOLLO_CREDIT_DENIED_STATUSES = new Set([402, 403]);
 
 /**
  * Body patterns that mean "Apollo has no credits left", regardless of status.
@@ -408,6 +416,61 @@ const APOLLO_CREDIT_EXHAUSTED_BODY_PATTERNS: RegExp[] = [
 export function looksLikeApolloCreditExhaustion(status: number, body: string): boolean {
   if (APOLLO_CREDIT_DENIED_STATUSES.has(status)) return true;
   return APOLLO_CREDIT_EXHAUSTED_BODY_PATTERNS.some((pattern) => pattern.test(body));
+}
+
+/**
+ * Apollo's per-minute API rate limit: a 429 whose body does not speak of
+ * credits. Transient by definition — the window resets within a minute.
+ */
+export function isApolloRateLimit(status: number, body: string): boolean {
+  return status === 429 && !looksLikeApolloCreditExhaustion(status, body);
+}
+
+/**
+ * Waits before each retry of a rate-limited Apollo call. Bounded on purpose:
+ * `/match` and `/enrich` hold a DB advisory lock around the call, so the total
+ * extra hold is at most ~17s. A 429 means Apollo rejected the request, so a
+ * retry never pays twice.
+ */
+export const APOLLO_RATE_LIMIT_RETRY_DELAYS_MS = [2_000, 5_000, 10_000];
+
+/** Longest `Retry-After` we honour, for the same lock-hold reason. */
+const APOLLO_RATE_LIMIT_MAX_WAIT_MS = 10_000;
+
+function retryAfterMs(response: Response): number | undefined {
+  const raw = response.headers?.get?.("retry-after");
+  const seconds = raw ? Number(raw) : NaN;
+  if (!Number.isFinite(seconds) || seconds < 0) return undefined;
+  return Math.min(seconds * 1000, APOLLO_RATE_LIMIT_MAX_WAIT_MS);
+}
+
+/**
+ * Single exit for every Apollo HTTP call: returns the response when it is ok,
+ * retries a rate-limit 429 a bounded number of times, and otherwise throws the
+ * error built by `apolloRequestFailure` (which raises the credit alert when —
+ * and only when — the account is out of credits).
+ */
+async function sendApolloRequest(
+  operation: string,
+  label: string,
+  alertIdentity: CreditAlertIdentity | undefined,
+  send: () => Promise<Response>,
+): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    const response = await send();
+    if (response.ok) return response;
+    const body = await response.text();
+    if (isApolloRateLimit(response.status, body) && attempt < APOLLO_RATE_LIMIT_RETRY_DELAYS_MS.length) {
+      const waitMs = retryAfterMs(response) ?? APOLLO_RATE_LIMIT_RETRY_DELAYS_MS[attempt];
+      console.warn(`[Apollo Service] ${operation} rate-limited by Apollo (429), retry ${attempt + 1} in ${waitMs}ms`, {
+        body: body.slice(0, 300),
+      });
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      continue;
+    }
+    console.error(`[Apollo Service] ${operation} Apollo API error`, { status: response.status, body });
+    throw apolloRequestFailure(operation, label, response.status, body, alertIdentity);
+  }
 }
 
 /**
@@ -485,7 +548,7 @@ export async function searchPeople(
   params: ApolloSearchParams,
   alertIdentity?: CreditAlertIdentity
 ): Promise<ApolloSearchResponse> {
-  const response = await fetch(`${APOLLO_API_BASE}/mixed_people/api_search`, {
+  const response = await sendApolloRequest("mixed_people/api_search", "Apollo search failed", alertIdentity, () => fetch(`${APOLLO_API_BASE}/mixed_people/api_search`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -501,16 +564,7 @@ export async function searchPeople(
       page: params.page || 1,
       per_page: params.per_page || 25,
     }),
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    console.error("[Apollo Service][searchPeople] Apollo API error", {
-      status: response.status,
-      error,
-    });
-    throw apolloRequestFailure("mixed_people/api_search", "Apollo search failed", response.status, error, alertIdentity);
-  }
+  }));
 
   return response.json();
 }
@@ -535,7 +589,7 @@ export async function enrichPerson(
   alertIdentity?: CreditAlertIdentity,
   options: EnrichPersonOptions = {}
 ): Promise<ApolloEnrichResponse> {
-  const response = await fetchWithTimeout(`${APOLLO_API_BASE}/people/match`, {
+  const response = await sendApolloRequest("people/match (enrich)", "Apollo enrich failed", alertIdentity, () => fetchWithTimeout(`${APOLLO_API_BASE}/people/match`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -553,12 +607,7 @@ export async function enrichPerson(
       ...(options.revealPhoneNumber && { reveal_phone_number: true }),
       ...(webhookUrl && { webhook_url: webhookUrl }),
     }),
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    throw apolloRequestFailure("people/match (enrich)", "Apollo enrich failed", response.status, error, alertIdentity);
-  }
+  }));
 
   const parsed = await parseWithSafeRequestId<ApolloEnrichResponse>(response);
   reportIfPlaceholderEmail("people/match (enrich)", [parsed.person], alertIdentity);
@@ -577,7 +626,7 @@ export async function matchPersonByName(
   webhookUrl?: string,
   alertIdentity?: CreditAlertIdentity
 ): Promise<ApolloMatchResponse> {
-  const response = await fetchWithTimeout(`${APOLLO_API_BASE}/people/match`, {
+  const response = await sendApolloRequest("people/match", "Apollo match failed", alertIdentity, () => fetchWithTimeout(`${APOLLO_API_BASE}/people/match`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -592,12 +641,7 @@ export async function matchPersonByName(
       run_waterfall_email: false,
       ...(webhookUrl && { webhook_url: webhookUrl }),
     }),
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    throw apolloRequestFailure("people/match", "Apollo match failed", response.status, error, alertIdentity);
-  }
+  }));
 
   const parsed = await parseWithSafeRequestId<ApolloMatchResponse>(response);
   reportIfPlaceholderEmail("people/match", [parsed.person], alertIdentity);
@@ -614,7 +658,7 @@ export async function bulkEnrichPeople(
   webhookUrl?: string,
   alertIdentity?: CreditAlertIdentity
 ): Promise<{ matches: ApolloPerson[]; waterfall?: ApolloWaterfallStatus; request_id?: string | number }> {
-  const response = await fetch(`${APOLLO_API_BASE}/people/bulk_match`, {
+  const response = await sendApolloRequest("people/bulk_match", "Apollo bulk enrich failed", alertIdentity, () => fetch(`${APOLLO_API_BASE}/people/bulk_match`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -627,12 +671,7 @@ export async function bulkEnrichPeople(
       run_waterfall_email: false,
       ...(webhookUrl && { webhook_url: webhookUrl }),
     }),
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    throw apolloRequestFailure("people/bulk_match", "Apollo bulk enrich failed", response.status, error, alertIdentity);
-  }
+  }));
 
   const parsed = await parseWithSafeRequestId<{ matches: ApolloPerson[]; waterfall?: ApolloWaterfallStatus; request_id?: string | number }>(response);
   reportIfPlaceholderEmail("people/bulk_match", parsed.matches ?? [], alertIdentity);
