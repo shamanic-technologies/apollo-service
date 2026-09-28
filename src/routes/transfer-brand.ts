@@ -128,6 +128,12 @@ export const TABLE_MOVES: TableMove[] = [
     where: (ids) => sql`org_id = ${ids.sourceOrgId} AND ${brandOrCampaign(ids)}`,
   },
   {
+    // Reveals the domain gate did not buy: solo-brand, or brandless on a brand campaign.
+    tableName: "reveal_skips",
+    brandColumn: "brand_ids",
+    where: (ids) => sql`org_id = ${ids.sourceOrgId} AND ${brandOrCampaign(ids)}`,
+  },
+  {
     tableName: "apollo_people_searches",
     brandColumn: "brand_ids",
     where: (ids) => sql`org_id = ${ids.sourceOrgId} AND ${soloBrand("brand_ids", ids.sourceBrandId)}`,

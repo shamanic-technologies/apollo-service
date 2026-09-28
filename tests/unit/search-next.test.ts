@@ -2,6 +2,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import express from "express";
 import request from "supertest";
 
+// Reveal domain gate: covered in reveal-domain-gate.test.ts; here it lets every reveal through.
+vi.mock("../../src/lib/reveal-domain-gate.js", () => ({
+  gateReveal: vi.fn().mockResolvedValue({ action: "reveal", basis: "no_employer" }),
+  recordRevealSkip: vi.fn(),
+  rememberTeaserEmployers: vi.fn().mockResolvedValue(undefined),
+}));
+
+
 /**
  * Tests for POST /search/next — server-managed pagination.
  *
@@ -197,6 +205,9 @@ describe("POST /search/next", () => {
     expect(res.body.done).toBe(false);
     expect(res.body.totalEntries).toBe(250);
     expect(mockSearchPeople).toHaveBeenCalledTimes(1);
+    // Each teaser's employer is remembered for the reveal domain gate.
+    const gate = await import("../../src/lib/reveal-domain-gate.js");
+    expect(vi.mocked(gate.rememberTeaserEmployers).mock.calls.at(-1)![0]).toHaveLength(3);
     // Cursor insert should have been called
     expect(mockInsertReturning).toHaveBeenCalled();
   });

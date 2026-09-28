@@ -211,6 +211,13 @@
       "when": 1779926400000,
       "tag": "0029_apollo_organizations",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1780012800000,
+      "tag": "0030_reveal_domain_gate",
+      "breakpoints": true
     }
   ]
 }

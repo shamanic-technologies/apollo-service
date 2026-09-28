@@ -435,6 +435,34 @@ pre-serve verification moved here from human-service. `/enrich`, `/match` and
   receive the verdict and its cost. Do not make it opt-in per caller; the
   owner's rule is that no revealed email leaves unverified.
 
+## Reveal domain gate — no Apollo credit on a domain that cannot verify `valid`
+
+`POST /enrich` (Apollo path, cache miss) judges the employer's MAIL DOMAIN
+before authorizing or calling Apollo (`src/lib/reveal-domain-gate.ts`).
+catch_all and checker-refused (`unknown`) are DOMAIN facts: on prod
+2026-09-25..29, a domain already holding a catch_all verdict gave 132 more
+catch_alls and 0 valids; one holding an unknown gave 121 unknowns and 0 valids.
+A reveal is 11.8¢, a BounceVerify check 0.445¢ (0 on unknown).
+
+- **Employer**: the free teaser only carries `organization.name`, so
+  `/search/next` upserts it into `apollo_teaser_people` (global, no org).
+  Migration 0030 backfilled 14 days of `apollo_people_searches`.
+- **Domains**: Apollo's FREE org lookup, EXACT name to ONE org id (else no
+  gate), its domain + every email domain already revealed at that org id.
+- **Judge** (`judgeDomain`, fleet-wide `email_verifications`, any org/source):
+  latest decisive verdict within 30d decides (catch_all = bad, else ok); no
+  decisive one + an unknown within 7d = bad (`checker_blocked_domain`, TRANSIENT,
+  re-probed after); nothing = PROBE one random `zz-probe-…@domain` address through
+  `verifyRevealedEmail` (source `reveal-domain-probe`, normal cost protocol).
+- **Skip only when EVERY domain is bad**; no employer / no exact org / ambiguous
+  name / no domain → reveal as before (benefit of the doubt). A probe failure
+  502s like any verification failure, never a silent pass.
+- **A skip**: `person: null`, `emailVerification: null`, additive
+  `revealSkipped {skipId, reason, evidence[]}`, a `reveal_skips` row (moved by
+  transfer-brand), an `enrich-skipped` trace. No apollo-credit authorized or spent.
+  human-service already treats `person: null` as a no-email reveal.
+- The DELIVERABLE policy is unchanged: only `valid` is served.
+
 ## Other email finders: treg.to and Explee (bronze / silver / exact cost)
 
 apollo-service holds our enrichment PROVIDERS, not only Apollo. `POST
