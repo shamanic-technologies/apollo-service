@@ -722,6 +722,37 @@ contract that fixes it lives in `src/lib/provider-error.ts`:
   still returns 200 with a null email (making it throw would be breaking). Only
   a REJECTED Apollo response carries `providerError`.
 
+## Every provisioned hold is in `cost_holds`, and a reconciler settles the ones nobody closed
+
+A hold (`status:"provisioned"`) counts against the customer's balance until it
+becomes `actual` or `cancelled`. Every route closes its own holds; what a route
+cannot close is its own death (crash, deploy swap mid-call, a failed cleanup
+call). runs-service has no cross-org list of open holds, so this service keeps
+one: `runs-client` writes a `cost_holds` row for every provisioned cost it
+creates (a failed ledger write releases the hold at once and fails the call) and
+marks it settled on every `updateCostStatus`. No call site can forget.
+
+- **`src/lib/hold-reconciler.ts`**, in-process every 10 min after `listen`
+  (holds older than 1h; phone reveals after 24h), mutex inside the function.
+  Per hold, from evidence, never blanket: already closed in runs-service →
+  recorded; the run already carries the real charge (same cost name, `actual`)
+  → cancel; verify-email with a billed bronze verdict → actual; email-find with
+  a vendor-reported charge in `email_finder_calls` → that charge as actual, hold
+  cancelled; phone reveal → Apollo's `creditsConsumed`, or cancel if it never
+  delivered; anything else → cancel (benefit of the doubt to the customer).
+  A run still `running` is then closed: completed if charged, failed otherwise.
+- **`POST /internal/cost-holds/reconcile`** `{dryRun, olderThanMinutes?, limit?}`
+  (x-api-key = `APOLLO_SERVICE_API_KEY`) runs one pass by hand; `dryRun` writes
+  nothing and returns every decision with its reason.
+- `/match`, `/enrich`, `/search/next` fail the run they opened on any error
+  (`failOpenRun`), so an error no longer leaves a run `running` forever.
+- History (2026-09-29): 198 apollo holds had sat provisioned since May, $102 on
+  one customer. 179 were 20-credit waterfall holds the timeout path left for a
+  webhook that never came; disabling the waterfall (2026-05-28) also commented
+  out the only code that ever closed them. None had an email or a callback, so
+  all were cancelled. The rest were treg / BounceVerify holds orphaned by the
+  2026-09-25 container swaps.
+
 ## Brand transfer (`POST /internal/transfer-brand`) moves EVERY table, in one transaction
 
 Fleet contract (brand-service fans it out): `{sourceBrandId, sourceOrgId,

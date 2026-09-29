@@ -547,6 +547,47 @@ export const revealSkips = pgTable(
   ]
 );
 
+// ─── Cost holds ─────────────────────────────────────────────────────────────
+// Every PROVISIONED cost this service opens in runs-service, recorded the moment
+// runs-service returns its id (src/lib/runs-client.ts addCosts) and settled the
+// moment any path flips it to actual/cancelled (updateCostStatus). A hold still
+// unsettled long after its request is one the request never closed (a crash, a
+// deploy swap, a failed cleanup); src/lib/hold-reconciler.ts settles it from
+// what the call actually did. Identity columns are what runs-service needs to
+// PATCH the hold and the run later, with no request left to read them from.
+export const costHolds = pgTable(
+  "cost_holds",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    costId: text("cost_id").notNull(),
+    runId: text("run_id").notNull(),
+    costName: text("cost_name").notNull(),
+    costSource: text("cost_source").notNull(),
+    quantity: decimal("quantity", { precision: 20, scale: 6 }).notNull(),
+    orgId: uuid("org_id").notNull(),
+    userId: text("user_id"),
+    brandIds: text("brand_ids").array(),
+    campaignId: text("campaign_id"),
+    audienceId: text("audience_id"),
+    featureSlug: text("feature_slug"),
+    workflowSlug: text("workflow_slug"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    // "actual" | "cancelled" — what the hold became
+    settledStatus: text("settled_status"),
+    // "request" (the path that opened it) | "reconciler" (src/lib/hold-reconciler.ts)
+    settledBy: text("settled_by"),
+    // Reconciler only: the evidence the decision rests on, in one sentence.
+    settlementReason: text("settlement_reason"),
+    settledAt: timestamp("settled_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("idx_cost_holds_cost").on(table.costId),
+    index("idx_cost_holds_unsettled").on(table.createdAt).where(sql`settled_at IS NULL`),
+  ]
+);
+
+export type CostHold = typeof costHolds.$inferSelect;
+
 export type ApolloPeopleSearch = typeof apolloPeopleSearches.$inferSelect;
 export type NewApolloPeopleSearch = typeof apolloPeopleSearches.$inferInsert;
 export type ApolloPeopleEnrichment = typeof apolloPeopleEnrichments.$inferSelect;

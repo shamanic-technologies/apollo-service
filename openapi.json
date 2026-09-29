@@ -3359,6 +3359,108 @@
           "targetOrgId"
         ]
       },
+      "ReconcileHoldsResponse": {
+        "type": "object",
+        "properties": {
+          "dryRun": {
+            "type": "boolean"
+          },
+          "examined": {
+            "type": "integer"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "costId": {
+                  "type": "string"
+                },
+                "runId": {
+                  "type": "string"
+                },
+                "orgId": {
+                  "type": "string"
+                },
+                "costName": {
+                  "type": "string"
+                },
+                "quantity": {
+                  "type": "string"
+                },
+                "taskName": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "decision": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "reason"
+                  ],
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                },
+                "runClosedAs": {
+                  "type": "string",
+                  "enum": [
+                    "completed",
+                    "failed"
+                  ]
+                }
+              },
+              "required": [
+                "costId",
+                "runId",
+                "orgId",
+                "costName",
+                "quantity",
+                "taskName",
+                "decision"
+              ],
+              "additionalProperties": {
+                "nullable": true
+              }
+            }
+          }
+        },
+        "required": [
+          "dryRun",
+          "examined",
+          "items"
+        ]
+      },
+      "ReconcileHoldsRequest": {
+        "type": "object",
+        "properties": {
+          "dryRun": {
+            "type": "boolean"
+          },
+          "olderThanMinutes": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "maximum": 1000
+          }
+        },
+        "required": [
+          "dryRun"
+        ]
+      },
       "ValidateResponse": {
         "type": "object",
         "properties": {
@@ -5770,6 +5872,74 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TransferBrandResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid x-api-key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/cost-holds/reconcile": {
+      "post": {
+        "summary": "Settle provisioned cost holds their request never closed",
+        "description": "One pass of the hold reconciler (it also runs in-process every 10 minutes). Every provisioned hold this service opened in runs-service that is still unsettled after olderThanMinutes (default 60) is decided from what the call actually did: already closed in runs-service -> recorded; the real charge already declared on the run -> cancel; verify-email with a billed verdict -> actual; email-find with a vendor-reported charge -> that charge as actual, hold cancelled; phone-reveal after 24h -> Apollo's reported credits, or cancel if Apollo never delivered; anything else -> cancel. A run still running is then closed (completed if it carries an actual charge, failed otherwise). dryRun: true writes nothing and returns every decision. Requires x-api-key = APOLLO_SERVICE_API_KEY.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReconcileHoldsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Per-hold decisions (applied unless dryRun)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconcileHoldsResponse"
                 }
               }
             }

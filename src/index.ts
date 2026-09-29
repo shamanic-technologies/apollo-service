@@ -18,6 +18,8 @@ import phoneRevealRoutes from "./routes/phone-reveal.js";
 import emailFinderRoutes from "./routes/email-finder.js";
 import emailVerificationRoutes from "./routes/email-verifications.js";
 import webhookRoutes from "./routes/webhook.js";
+import costHoldRoutes from "./routes/cost-holds.js";
+import { startHoldReconciler } from "./lib/hold-reconciler.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -59,6 +61,7 @@ app.use(emailFinderRoutes);
 app.use(emailVerificationRoutes);
 app.use(transferBrandRoutes);
 app.use(webhookRoutes);
+app.use(costHoldRoutes);
 
 // 404 handler
 app.use((req, res) => {
@@ -81,6 +84,7 @@ if (process.env.NODE_ENV !== "test") {
   const startServer = () => {
     app.listen(Number(PORT), "::", () => {
       console.log(`[Apollo Service] running on port ${PORT}`);
+      if (dbUrl) startHoldReconciler();
     });
   };
 

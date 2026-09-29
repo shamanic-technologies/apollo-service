@@ -7,7 +7,7 @@ import { matchPersonByName, buildWaterfallWebhookUrl, withVerifiedEmailOnly, isB
 import { providerErrorFields } from "../lib/provider-error.js";
 import { advisoryXactLock, matchLockKey } from "../lib/advisory-lock.js";
 import { decryptKey } from "../lib/keys-client.js";
-import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/runs-client.js";
+import { createRun, updateRun, addCosts, failOpenRun, type IdentityHeaders } from "../lib/runs-client.js";
 import { authorizeCredit } from "../lib/billing-client.js";
 import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment } from "../lib/transform.js";
 import { MatchRequestSchema } from "../schemas.js";
@@ -111,6 +111,9 @@ async function findCachedMatch(
  * POST /match - Match a single person by name + domain
  */
 router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
+  // A run this request opened and has not closed yet: the error path fails it,
+  // so no run is left `running` forever.
+  let openRun: { id: string; identity: IdentityHeaders } | null = null;
   try {
     const { runId, brandIds, campaignId, audienceId, featureSlug, workflowSlug } = req;
     if (!runId || !brandIds?.length || !campaignId) {
@@ -223,6 +226,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
         parentRunId: runId,
         workflowSlug,
       });
+      openRun = { id: matchRun.id, identity };
 
       let enrichmentId: string | null = null;
 
@@ -265,6 +269,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
       }
 
       await updateRun(matchRun.id, "completed", identity);
+      openRun = null;
 
       return { kind: "fresh", person, enrichmentId };
     });
@@ -298,6 +303,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
     await reply({ enrichmentId: outcome.enrichmentId, person: transformed, cached: false });
   } catch (error) {
     console.error("[Apollo Service][POST /match] ERROR:", error);
+    await failOpenRun(openRun, "match");
     if (req.runId) {
       traceEvent(req.runId, { service: "apollo-service", event: "match-error", detail: error instanceof Error ? error.message : "Unknown error", level: "error" }, req.headers).catch(() => {});
     }
