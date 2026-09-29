@@ -1640,6 +1640,8 @@ const SignalCoverageResponseSchema = z
         windowDays: z.number().int(),
         jobTitles: z.array(z.string()).nullable(),
         count: z.number().int().openapi({ description: "Verified-email people matching ICP + signal in the window." }),
+        companies: z.number().int().openapi({ description: "Distinct employers of those people (a people count can hide 200 people at 2 firms)." }),
+        companiesExact: z.boolean().openapi({ description: "True when every matching person was read; false = companies counted over the first 500 people (a floor)." }),
       }),
     ),
   })
