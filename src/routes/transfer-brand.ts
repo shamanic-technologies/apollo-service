@@ -146,6 +146,12 @@ export const TABLE_MOVES: TableMove[] = [
     where: (ids) => sql`org_id = ${ids.sourceOrgId} AND ${soloBrand("brand_ids", ids.sourceBrandId)}`,
   },
   {
+    // Which buying-signal cohort served a person to one of the brand's campaigns.
+    tableName: "apollo_signal_serves",
+    brandColumn: "brand_ids",
+    where: (ids) => sql`org_id = ${ids.sourceOrgId} AND ${soloBrand("brand_ids", ids.sourceBrandId)}`,
+  },
+  {
     tableName: "apollo_people_enrichments",
     brandColumn: "brand_ids",
     where: (ids) => sql`org_id = ${ids.sourceOrgId} AND ${soloBrand("brand_ids", ids.sourceBrandId)}`,

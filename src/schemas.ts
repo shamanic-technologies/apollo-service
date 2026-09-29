@@ -560,8 +560,57 @@ const LegacySearchFilterAliasesSchema = z.object({
   organization_industry_tag_ids: z.array(z.string().min(1)).optional(),
 }).strict();
 
+// ── Buying signal (distribute-owned, NOT an Apollo field) ──
+// A RELATIVE recency criterion ("companies hiring in the last 30 days") that
+// apollo-service materializes into Apollo's own date filters at call time
+// (src/lib/buying-signals.ts). Relative on purpose: a consumer stores the
+// filters once and forwards them verbatim, and the window keeps rolling. Kept
+// OUT of ApolloNativeSearchFiltersSchema so the refine loop and
+// /search/filters-prompt never offer it — a signal audience is a staff choice.
+export const BUYING_SIGNAL_TYPES = ["hiring", "job_change", "funding"] as const;
+const IsoDaySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD");
+
+export const BuyingSignalFilterSchema = z
+  .object({
+    type: z.enum(BUYING_SIGNAL_TYPES).openapi({
+      description:
+        "hiring = the employer posted a job in the window (Apollo organization_job_posted_at_range, optionally narrowed by job_titles); job_change = the person started their current title in the window (Apollo person_days_in_current_title_range); funding = the employer's latest funding round falls in the window (Apollo latest_funding_date_range).",
+    }),
+    window_days: z.number().int().min(1).max(365).openapi({
+      description: "Recency window in days, counted back from the day the audience is served (rolling).",
+      example: 30,
+    }),
+    job_titles: z.array(z.string().min(1)).optional().openapi({
+      description: "hiring only: roles the employer is hiring for (Apollo q_organization_job_titles). Omit for any role.",
+      example: ["head of sales"],
+    }),
+    as_of: IsoDaySchema.optional().openapi({
+      description: "Set by apollo-service on a served cohort (the day it was materialized). Callers omit it.",
+    }),
+    since: IsoDaySchema.optional().openapi({
+      description: "Set by apollo-service on a follow-up cohort: only signals after the previous cohort's day. Callers omit it.",
+    }),
+  })
+  .strict()
+  .superRefine((v, ctx) => {
+    if (v.job_titles && v.type !== "hiring") {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["job_titles"], message: "job_titles is only valid for type=hiring" });
+    }
+  })
+  .openapi("BuyingSignalFilter");
+
+const BuyingSignalExtensionSchema = z
+  .object({
+    buying_signal: BuyingSignalFilterSchema.optional().openapi({
+      description:
+        "Distribute-owned relative buying-signal criterion (not an Apollo field). apollo-service turns it into Apollo's date filters for the current window at every call, so the audience fills continuously. Must not be combined with the Apollo field it drives.",
+    }),
+  })
+  .strict();
+
 export const SearchFiltersSchema = ApolloNativeSearchFiltersSchema
   .merge(LegacySearchFilterAliasesSchema)
+  .merge(BuyingSignalExtensionSchema)
   .strict()
   .openapi("SearchFiltersRuntime", {
     description:
@@ -739,10 +788,27 @@ export const EmailVerificationSchema = EmailVerificationObjectSchema
       "Pre-serve verification of the revealed email. null when there is no email. Billed as apify-bounceverify-email (decisive verdicts only). A verification that fails answers 502 {type: \"email_verification\"} — an unverified email is never returned as deliverable.",
   });
 
+export const BuyingSignalEvidenceSchema = z
+  .object({
+    type: z.enum(BUYING_SIGNAL_TYPES),
+    occurredOn: z.string().openapi({ description: "Day the signal happened (YYYY-MM-DD), as Apollo recorded it.", example: "2026-09-21" }),
+    fact: z.string().openapi({
+      description: "One English sentence stating the signal, for the email writer to reference.",
+      example: "Acme Clinics posted a job for Office Manager (Austin, United States) on September 21, 2026",
+    }),
+    source: z.string().openapi({ description: "apollo:job_postings (hiring) or apollo:enrichment (funding, job_change).", example: "apollo:job_postings" }),
+    sourceUrl: z.string().nullable().openapi({ description: "The posting or news link when Apollo gives one." }),
+  })
+  .openapi("BuyingSignalEvidence");
+
 const EnrichResponseSchema = z
   .object({
     enrichmentId: z.string().nullable(),
     person: PersonSchema.nullable(),
+    buyingSignal: BuyingSignalEvidenceSchema.nullable().optional().openapi({
+      description:
+        "The buying signal this person's audience matched (hiring / job_change / funding), with its date and a one-line fact. Present on Apollo reveals; null when the person was not served by a buying-signal audience or Apollo holds no dated evidence in the window (never invented). Hiring evidence is Apollo's job postings for the employer: 1 apollo-credit per company per 7 days, billed to this org (0 when Apollo has no postings).",
+    }),
     cached: z.boolean().openapi({
       description: "True if the result was served from the 12-month cache (no Apollo API call, no cost).",
     }),
@@ -1530,6 +1596,106 @@ registry.registerPath({
     },
     404: { description: "Not found", content: { "application/json": { schema: ErrorResponseSchema } } },
     500: { description: "Internal server error", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+// ─── Buying-signal audiences ────────────────────────────────────────────────
+
+const SignalBaseSchema = z.object({
+  apolloAudienceId: z.string().uuid().optional().openapi({
+    description: "The ICP: an existing apollo audience of this org whose filters are kept as-is. Exactly one of apolloAudienceId / filters.",
+  }),
+  filters: SearchFiltersSchema.optional().openapi({
+    description: "The ICP as Apollo filters, when there is no audience yet. Exactly one of apolloAudienceId / filters.",
+  }),
+});
+
+const exactlyOneBase = (v: { apolloAudienceId?: string; filters?: unknown }, ctx: z.RefinementCtx) => {
+  if ((v.apolloAudienceId ? 1 : 0) + (v.filters ? 1 : 0) !== 1) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Provide exactly one of apolloAudienceId or filters" });
+  }
+};
+
+export const SignalCoverageRequestSchema = SignalBaseSchema.extend({
+  windowDays: z.array(z.number().int().min(1).max(365)).min(1).max(4).optional().openapi({
+    description: "Windows to count, in days. Default [30, 90]. The 30-day count is the signal's monthly volume.",
+    example: [30, 90],
+  }),
+  jobTitles: z.array(z.string().min(1)).optional().openapi({
+    description: "Roles for the hiring signal. Omit to count employers hiring for any role.",
+    example: ["office manager"],
+  }),
+})
+  .strict()
+  .superRefine(exactlyOneBase)
+  .openapi("SignalCoverageRequest");
+
+const SignalCoverageResponseSchema = z
+  .object({
+    measuredOn: z.string().openapi({ description: "UTC day the counts were taken (YYYY-MM-DD)." }),
+    baseCount: z.number().int().openapi({ description: "Verified-email people matching the ICP with no signal." }),
+    signals: z.array(
+      z.object({
+        type: z.enum(BUYING_SIGNAL_TYPES),
+        windowDays: z.number().int(),
+        jobTitles: z.array(z.string()).nullable(),
+        count: z.number().int().openapi({ description: "Verified-email people matching ICP + signal in the window." }),
+      }),
+    ),
+  })
+  .openapi("SignalCoverageResponse");
+
+export const CreateSignalAudienceRequestSchema = SignalBaseSchema.extend({
+  brandId: z.string().optional().openapi({ description: "Brand the audience belongs to. Defaults to the base audience's brand." }),
+  name: z.string().min(1).max(200).optional().openapi({ description: "Audience name (English). Defaults to the base name plus the signal." }),
+  signal: z
+    .object({
+      type: z.enum(BUYING_SIGNAL_TYPES),
+      windowDays: z.number().int().min(1).max(365),
+      jobTitles: z.array(z.string().min(1)).optional(),
+    })
+    .strict(),
+})
+  .strict()
+  .superRefine(exactlyOneBase)
+  .openapi("CreateSignalAudienceRequest");
+
+const CreateSignalAudienceResponseSchema = z
+  .object({
+    apolloAudienceId: z.string().uuid(),
+    name: z.string(),
+    description: z.string(),
+    filters: z.record(z.string(), z.unknown()).openapi({ description: "ICP filters plus the relative buying_signal. Store and forward verbatim to /search/next; the window keeps rolling." }),
+    count: z.number().int().openapi({ description: "Size estimate: verified-email people matching ICP + signal in the current window. Free." }),
+    window: z.object({ from: z.string(), to: z.string() }),
+  })
+  .openapi("CreateSignalAudienceResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/audiences/signal-coverage",
+  summary: "Measure how many people a buying signal yields for an ICP (free)",
+  description:
+    "Counts, for one ICP, the verified-email people matching each buying signal (hiring, job_change, funding) over each window. Free Apollo teaser counts, nothing is persisted or billed. Use it before creating a signal audience.",
+  request: { headers: audienceHeaders, body: { content: { "application/json": { schema: SignalCoverageRequestSchema } } } },
+  responses: {
+    200: { description: "Counts per signal and window", content: { "application/json": { schema: SignalCoverageResponseSchema } } },
+    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponseSchema } } },
+    404: { description: "Base audience not found", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/audiences/signal",
+  summary: "Create an audience = ICP + one buying signal + a recency window",
+  description:
+    "Persists an apollo audience whose filters are the ICP plus a RELATIVE buying_signal, and returns its size estimate (free count). Served through /search/next like any audience: each day's serve walks a cohort of the signals in the current window, then only the new ones. Leads revealed through /enrich carry `buyingSignal` (type, date, one-line fact).",
+  request: { headers: audienceHeaders, body: { content: { "application/json": { schema: CreateSignalAudienceRequestSchema } } } },
+  responses: {
+    200: { description: "The persisted signal audience and its size", content: { "application/json": { schema: CreateSignalAudienceResponseSchema } } },
+    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponseSchema } } },
+    404: { description: "Base audience not found", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
 

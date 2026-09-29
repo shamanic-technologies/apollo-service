@@ -1,5 +1,6 @@
 import type { ApolloPerson, ApolloSearchParams } from "./apollo-client.js";
 import type { ApolloPeopleEnrichment } from "../db/schema.js";
+import { BuyingSignalConflictError, materializeBuyingSignal, readSignalSpec, signalConflicts } from "./buying-signal-spec.js";
 
 /**
  * Legacy compatibility for the old `revenueRange` string-array alias. Apollo's
@@ -67,7 +68,19 @@ function cleanRange<T extends number | string>(
  * Apollo-native names; legacy camelCase aliases are accepted only as a
  * transition shim and are not shown in /search/filters-prompt.
  */
-export function toApolloSearchParams(sp: Record<string, unknown>): ApolloSearchParams {
+export function toApolloSearchParams(sp: Record<string, unknown>, now: Date = new Date()): ApolloSearchParams {
+  // A distribute-owned relative buying signal becomes Apollo's own date filters
+  // for the window that is current on `now` (src/lib/buying-signals.ts).
+  const signal = readSignalSpec(sp);
+  if (signal) {
+    const conflicts = signalConflicts(sp);
+    if (conflicts.length > 0) throw new BuyingSignalConflictError(conflicts);
+    return { ...toApolloFilterParams(sp), ...materializeBuyingSignal(signal, now) };
+  }
+  return toApolloFilterParams(sp);
+}
+
+function toApolloFilterParams(sp: Record<string, unknown>): ApolloSearchParams {
   const pick = <T>(native: string, legacy?: string): T | undefined =>
     (sp[native] ?? (legacy ? sp[legacy] : undefined)) as T | undefined;
   const lowerStringArray = (values: unknown): string[] | undefined =>

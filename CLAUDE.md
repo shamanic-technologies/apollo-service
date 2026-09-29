@@ -345,6 +345,48 @@ capped at 100), `x-run-id` required. Every step measured on prod 2026-09-29 via
 - Never an email, a phone (not even the switchboard) or a filter object. The
   preview route is untouched.
 
+## Buying signals are an AUDIENCE CRITERION (hiring / job_change / funding)
+
+An audience can be ICP + one buying signal + a recency window. Not a new
+channel or campaign type: the audience is served, revealed and costed like any
+other. `src/lib/buying-signal-spec.ts` (pure) + `src/lib/buying-signals.ts`.
+
+- **All three are native Apollo People Search filters, measured honored live
+  2026-09-29** (free teaser counts, baseline CEO+US 356,526): hiring =
+  `organization_job_posted_at_range` (+ `q_organization_job_titles`), job_change
+  = `person_days_in_current_title_range`, funding = `latest_funding_date_range`.
+  Impossible bounds return 0 and max bounds are honored. treg was not needed.
+- **Filters carry a RELATIVE `buying_signal` {type, window_days, job_titles?}**,
+  distribute-owned and kept OUT of `ApolloNativeSearchFiltersSchema` (the refine
+  loop and `/search/filters-prompt` never offer it). `toApolloSearchParams(sp, now)`
+  turns it into Apollo's date filters for the current window; it throws (400) if
+  the ICP already sets the Apollo field the signal drives, never a silent override.
+- **Rolling cohorts, no new state beyond the cursor table.** human-service
+  forwards stored filters verbatim to `/search/next`, so `resolveSignalCohort`
+  pins them to a day (`as_of`): first serve = whole window; an open cohort keeps
+  being walked; one walked out on an earlier day opens a new cohort covering only
+  signals `since` that day; walked out today = `done` until tomorrow. human-service
+  persists `reachableCount` on exhaustion but asks again next serve, so the
+  audience keeps filling.
+- **Evidence travels with the lead: `/enrich` returns `buyingSignal`
+  {type, occurredOn, fact, source, sourceUrl} | null.** Only for a person a signal
+  cohort served to this org (`apollo_signal_serves`, gold, org data, in
+  transfer-brand). funding + job_change are read FREE from the enrichment Apollo
+  already returned (funding_events, current employment start_date); hiring buys
+  the employer's job postings: `GET organizations/{id}/job_postings`, **1 lead
+  credit per call that returns postings, 0 for an empty list** (measured, 3 rounds,
+  zero drift), cached per company `JOB_POSTINGS_CACHE_DAYS` (7) in bronze
+  `apollo_job_postings_fetches`, provision → authorize → execute → actualize on a
+  `buying-signal-evidence` child run, 402 when the org cannot pay. Every dated fact
+  lands in silver `buying_signals` (global). No dated evidence in the window =
+  null, never invented. job_change allows 31 days of slack for Apollo's
+  month-precision start dates.
+- **Endpoints:** `POST /audiences/signal-coverage` (free counts per signal x
+  window for an ICP, the "is it worth it" check) and `POST /audiences/signal`
+  (persist ICP + signal, return the size estimate). The consumer registers the
+  returned `apolloAudienceId` + `filters` with human-service `POST /orgs/audiences`
+  (send the filters too, or serve 422s).
+
 ## Phone reveal is OPT-IN, ASYNCHRONOUS, and lives on its own route
 
 Apollo does not return phone numbers by default and never has — that is why

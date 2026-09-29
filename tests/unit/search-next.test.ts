@@ -17,6 +17,18 @@ vi.mock("../../src/lib/reveal-domain-gate.js", () => ({
  * exhaustion, page advance, cost tracking.
  */
 
+// Buying-signal cohorts: the DB half is covered in buying-signals.test.ts; here
+// the route must pin the cohort and record who it served.
+const PINNED = { person_titles: ["Owner"], buying_signal: { type: "hiring", window_days: 30, as_of: "2026-09-29" } };
+const mockResolveSignalCohort = vi.fn(async () => PINNED);
+const mockRecordSignalServes = vi.fn(async () => undefined);
+vi.mock("../../src/lib/buying-signals.js", () => ({
+  resolveSignalCohort: (...a: unknown[]) => mockResolveSignalCohort(...(a as [])),
+  recordSignalServes: (...a: unknown[]) => mockRecordSignalServes(...(a as [])),
+  buyingSignalForEnrich: vi.fn(async () => null),
+  BuyingSignalInsufficientCreditError: class extends Error {},
+}));
+
 // Mock runs-client
 const mockCreateRun = vi.fn();
 const mockUpdateRun = vi.fn().mockResolvedValue({});
@@ -807,5 +819,64 @@ describe("POST /search/next", () => {
       expect.objectContaining({ page: 7 }),
       expect.objectContaining({ orgId: expect.any(String) })
     );
+  });
+
+  // ─── Buying-signal audience ────────────────────────────────────────────────
+
+  it("a buying-signal audience walks its day-pinned cohort and records who the cohort served", async () => {
+    mockCursor = null;
+    mockCursorLookup.mockImplementation(() => Promise.resolve([]));
+    mockInsertReturning.mockResolvedValue([{ id: "cursor-signal" }]);
+
+    await request(app)
+      .post("/search/next")
+      .set("X-API-Key", "test-key")
+      .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
+      .send({ searchParams: { person_titles: ["Owner"], buying_signal: { type: "hiring", window_days: 30 } } })
+      .expect(200);
+
+    expect(mockResolveSignalCohort).toHaveBeenCalledWith(
+      "org_test",
+      "campaign-1",
+      { person_titles: ["Owner"], buying_signal: { type: "hiring", window_days: 30 } },
+      expect.any(Date),
+    );
+    // Apollo receives the cohort's absolute window, never the relative key.
+    const params = mockSearchPeople.mock.calls[0][1];
+    expect(params.organization_job_posted_at_range).toEqual({ min: "2026-08-30", max: "2026-09-29" });
+    expect(params).not.toHaveProperty("buying_signal");
+    expect(mockRecordSignalServes).toHaveBeenCalledWith(
+      expect.objectContaining({ cursorId: "cursor-signal", campaignId: "campaign-1", spec: PINNED.buying_signal, apolloPersonIds: ["p1", "p2", "p3"] }),
+    );
+  });
+
+  it("a plain audience never touches the cohort machinery", async () => {
+    await request(app)
+      .post("/search/next")
+      .set("X-API-Key", "test-key")
+      .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
+      .send({ searchParams: SEARCH_PARAMS })
+      .expect(200);
+    expect(mockResolveSignalCohort).not.toHaveBeenCalled();
+    expect(mockRecordSignalServes).not.toHaveBeenCalled();
+  });
+
+  it("an ICP that sets the Apollo field its signal drives is a 400, not a silent override", async () => {
+    const conflicting = { ...PINNED, organization_job_posted_at_range: { min: "2020-01-01" } };
+    mockResolveSignalCohort.mockResolvedValueOnce(conflicting as never);
+    const res = await request(app)
+      .post("/search/next")
+      .set("X-API-Key", "test-key")
+      .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
+      .send({ searchParams: conflicting })
+      .expect(400);
+    expect(res.body.fields).toEqual(["organization_job_posted_at_range"]);
+    expect(mockSearchPeople).not.toHaveBeenCalled();
   });
 });
