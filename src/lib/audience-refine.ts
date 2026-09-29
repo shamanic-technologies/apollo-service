@@ -53,24 +53,44 @@ import { toCreditAlertIdentity, type CreditAlertIdentity } from "./credit-alert.
 import { searchPeople, type ApolloPerson } from "./apollo-client.js";
 import { SearchFiltersSchema } from "../schemas.js";
 
-/** The model this loop runs on: OpenAI GPT-6 Astra, since 2026-09-09.
+/** The model this loop runs on: Anthropic Claude Sonnet 5.5, since 2026-09-29.
  *
- * The owner moved every onboarding step that PRE-FILLS something for a user
- * onto Astra for quality ("les users doivent vraiment avoir le meilleur service
- * possible"); the cost is accepted. Two Astra constraints hold here: it rejects
- * `temperature` != 1 and `top_p` with a 400, so this call sends NO sampling
- * parameter, and `disableThinking` maps to its lowest reasoning level — which
- * this loop does not set, because judgement is the whole job.
+ * Owner decision: every LLM call of the public onboarding moves to Sonnet 5.5.
+ * The previous model (OpenAI GPT-6 Astra, since 2026-09-09) ran ~10.8 s p50 per
+ * round, six sequential rounds per audience, and broke onboarding outright when
+ * the OpenAI credit ran out on 2026-09-28. This loop also serves campaign
+ * audience builds; they switch too.
  *
- * History, kept: the loop previously ran on `zai/glm-pro`, picked after a
- * head-to-head against `deepseek/deepseek-pro` on the Swiss-drugstores
- * description, 3 runs each (2026-09-01). `glm-pro` returned recognisable target
- * employers (Vita Drogerie AG, LANUR, PANVEGA); `deepseek-pro` returned a wider
- * spread AND off-target companies (Emmi Group, Transgourmet, CALIDA).
+ * Three Anthropic constraints shape the call (chat-service #464):
+ * - JSON mode REQUIRES a strict `responseSchema` (chat-service 400s without
+ *   one), so the decision is described by REFINE_DECISION_JSON_SCHEMA. A strict
+ *   schema cannot carry an open object, so `filters` travels as a JSON STRING —
+ *   the decision guard already decodes that form.
+ * - No `temperature` / `top_p`: Sonnet 5.5 answers 400 on a sampling parameter.
+ * - Thinking cannot be turned off. It defaults to effort `high`; this call sends
+ *   `disableThinking`, which chat-service maps to `output_config.effort: "low"`
+ *   — adaptive thinking still runs, at the lowest level the model accepts.
  *
- * Anthropic is off the table for this loop for good (#236/#241). */
-const REFINE_PROVIDER = "openai" as const;
-const REFINE_MODEL = "gpt-pro" as const;
+ * History, kept: before Astra the loop ran on `zai/glm-pro`, picked after a
+ * head-to-head against `deepseek/deepseek-pro` (2026-09-01); earlier Anthropic
+ * was dropped only because the platform account was usage-capped (#236). */
+const REFINE_PROVIDER = "anthropic" as const;
+const REFINE_MODEL = "sonnet" as const;
+
+/** Strict JSON Schema for one refine decision (Anthropic structured output:
+ * every property required, no additional properties). */
+export const REFINE_DECISION_JSON_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    filters: { type: "string" },
+    toContinue: { type: "boolean" },
+    whatWorked: { type: "string" },
+    whatToImprove: { type: "string" },
+    nextExperiment: { type: "string" },
+  },
+  required: ["filters", "toContinue", "whatWorked", "whatToImprove", "nextExperiment"],
+  additionalProperties: false,
+};
 
 /** Rounds of live dry-run feedback the model gets. Each one returns a count AND
  * a sample of who matched.
@@ -514,7 +534,7 @@ function buildSystemPrompt(catalog: string): string {
     "",
     "Each turn, reply with ONLY a JSON object (no prose, no code fences):",
     "{",
-    '  "filters": { ...filters... },',
+    '  "filters": "<the filters object, JSON-encoded as a string>",',
     '  "toContinue": true | false,',
     '  "whatWorked": "<one sentence>",',
     '  "whatToImprove": "<one sentence>",',
@@ -734,13 +754,16 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
         {
           message,
           systemPrompt,
-          // SCHEMALESS JSON mode — the Zod guards below validate the shape, so
-          // no responseSchema is sent. Reasoning stays ON: judgement is the
-          // whole job here. No `temperature`/`top_p`: Astra 400s on both.
+          // Strict JSON mode (Anthropic requires the schema); the Zod guards
+          // below still validate. Thinking at its lowest effort. No
+          // `temperature`/`top_p`: Sonnet 5.5 400s on both. maxTokens covers
+          // the adaptive thinking tokens as well as the decision itself.
           provider: REFINE_PROVIDER,
           model: REFINE_MODEL,
           responseFormat: "json",
-          maxTokens: 2000,
+          responseSchema: REFINE_DECISION_JSON_SCHEMA,
+          disableThinking: true,
+          maxTokens: 8000,
           // A completion still in flight at the deadline is worthless: the run
           // has to answer with what it has.
           signal: AbortSignal.timeout(Math.max(deadlineAt - Date.now(), 1)),
