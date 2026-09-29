@@ -3,6 +3,8 @@
  * Centralized run tracking and cost management
  */
 
+import { recordOpenedHolds, recordSettledHold } from "./cost-hold-ledger.js";
+
 const RUNS_SERVICE_URL = process.env.RUNS_SERVICE_URL || "https://runs.mcpfactory.org";
 const RUNS_SERVICE_API_KEY = process.env.RUNS_SERVICE_API_KEY || "";
 const RUNS_SERVICE_TIMEOUT_MS = Number(process.env.RUNS_SERVICE_TIMEOUT_MS) || 10_000;
@@ -50,6 +52,7 @@ export interface RunCost {
   costName: string;
   costSource: "platform" | "org";
   quantity: string;
+  status?: "provisioned" | "actual" | "cancelled" | "refunded";
   unitCostInUsdCents: string;
   totalCostInUsdCents: string;
   createdAt: string;
@@ -248,11 +251,30 @@ export async function addCosts(
   items: CostItem[],
   identity: IdentityHeaders
 ): Promise<{ costs: RunCost[] }> {
-  return runsRequest<{ costs: RunCost[] }>(`/v1/runs/${runId}/costs`, {
+  const result = await runsRequest<{ costs: RunCost[] }>(`/v1/runs/${runId}/costs`, {
     method: "POST",
     identity: { ...identity, runId },
     body: { items },
   });
+  if (items.some((i) => i.status === "provisioned")) {
+    const opened = (result.costs ?? []).filter((c) => c.status === "provisioned");
+    try {
+      await recordOpenedHolds(
+        opened.map((c) => ({ costId: c.id, runId, costName: c.costName, costSource: c.costSource, quantity: c.quantity })),
+        identity
+      );
+    } catch (err) {
+      // A hold missing from the ledger could never be reconciled if its request
+      // dies, so it must not outlive this failure: release it now, then fail the
+      // request loudly (the caller's own error path sees no hold id to release).
+      console.error(`[Apollo Service] cost_holds.record_failed run=${runId} — releasing ${opened.length} hold(s)`, err);
+      for (const c of opened) {
+        await updateCostStatus(runId, c.id, "cancelled", identity);
+      }
+      throw err;
+    }
+  }
+  return result;
 }
 
 /**
@@ -264,11 +286,35 @@ export async function updateCostStatus(
   status: "actual" | "provisioned" | "cancelled",
   identity: IdentityHeaders
 ): Promise<RunCost> {
-  return runsRequest<RunCost>(`/v1/runs/${runId}/costs/${costId}`, {
+  const cost = await runsRequest<RunCost>(`/v1/runs/${runId}/costs/${costId}`, {
     method: "PATCH",
     identity: { ...identity, runId },
     body: { status },
   });
+  if (status !== "provisioned") {
+    // The money write above succeeded, so this is bookkeeping: a failure here is
+    // logged, and the reconciler marks the row settled when it finds the hold
+    // already closed in runs-service.
+    await recordSettledHold(costId, status, "request").catch((err) =>
+      console.error(`[Apollo Service] cost_holds.settle_record_failed run=${runId} cost=${costId}`, err)
+    );
+  }
+  return cost;
+}
+
+/**
+ * Error-path helper: fail a run the request opened and never closed, so it is
+ * not left `running` forever. The request is already failing with its own
+ * error; a failure HERE is logged loudly and must not replace that error.
+ */
+export async function failOpenRun(
+  open: { id: string; identity: IdentityHeaders } | null,
+  where: string
+): Promise<void> {
+  if (!open) return;
+  await updateRun(open.id, "failed", open.identity).catch((err) =>
+    console.error(`[Apollo Service][${where}] run.mark_failed_failed run=${open.id}`, err)
+  );
 }
 
 /**

@@ -1223,6 +1223,61 @@ registry.registerPath({
   },
 });
 
+// ─── POST /internal/cost-holds/reconcile ─────────────────────────────────
+
+export const ReconcileHoldsRequestSchema = z
+  .object({
+    dryRun: z.boolean(),
+    olderThanMinutes: z.number().int().positive().optional(),
+    limit: z.number().int().positive().max(1000).optional(),
+  })
+  .openapi("ReconcileHoldsRequest");
+
+const ReconcileHoldsResponseSchema = z
+  .object({
+    dryRun: z.boolean(),
+    examined: z.number().int(),
+    items: z.array(
+      z
+        .object({
+          costId: z.string(),
+          runId: z.string(),
+          orgId: z.string(),
+          costName: z.string(),
+          quantity: z.string(),
+          taskName: z.string().nullable(),
+          decision: z.object({ kind: z.string(), reason: z.string() }).passthrough(),
+          runClosedAs: z.enum(["completed", "failed"]).optional(),
+        })
+        .passthrough()
+    ),
+  })
+  .openapi("ReconcileHoldsResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/cost-holds/reconcile",
+  summary: "Settle provisioned cost holds their request never closed",
+  description:
+    "One pass of the hold reconciler (it also runs in-process every 10 minutes). Every provisioned hold this service opened in runs-service that is still unsettled after olderThanMinutes (default 60) is decided from what the call actually did: already closed in runs-service -> recorded; the real charge already declared on the run -> cancel; verify-email with a billed verdict -> actual; email-find with a vendor-reported charge -> that charge as actual, hold cancelled; phone-reveal after 24h -> Apollo's reported credits, or cancel if Apollo never delivered; anything else -> cancel. A run still running is then closed (completed if it carries an actual charge, failed otherwise). dryRun: true writes nothing and returns every decision. Requires x-api-key = APOLLO_SERVICE_API_KEY.",
+  request: {
+    headers: z.object({ "x-api-key": z.string() }),
+    body: {
+      content: { "application/json": { schema: ReconcileHoldsRequestSchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      description: "Per-hold decisions (applied unless dryRun)",
+      content: { "application/json": { schema: ReconcileHoldsResponseSchema } },
+    },
+    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponseSchema } } },
+    401: { description: "Missing or invalid x-api-key", content: { "application/json": { schema: ErrorResponseSchema } } },
+    500: { description: "Internal server error", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
 // ─── POST /validate ──────────────────────────────────────────────────────────
 
 export const ValidateRequestSchema = z

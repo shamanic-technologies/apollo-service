@@ -34,6 +34,9 @@ vi.mock("../../src/lib/runs-client.js", () => ({
   createRun: (...args: unknown[]) => mockCreateRun(...args),
   updateRun: (...args: unknown[]) => mockUpdateRun(...args),
   addCosts: (...args: unknown[]) => mockAddCosts(...args),
+  failOpenRun: async (open: { id: string; identity: unknown } | null) => {
+    if (open) await Promise.resolve(mockUpdateRun(open.id, "failed", open.identity)).catch(() => {});
+  },
 }));
 
 // Mock auth

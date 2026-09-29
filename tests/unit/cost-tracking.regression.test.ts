@@ -50,6 +50,9 @@ vi.mock("../../src/lib/runs-client.js", () => ({
   createRun: (...args: unknown[]) => mockCreateRun(...args),
   updateRun: (...args: unknown[]) => mockUpdateRun(...args),
   addCosts: (...args: unknown[]) => mockAddCosts(...args),
+  failOpenRun: async (open: { id: string; identity: unknown } | null) => {
+    if (open) await Promise.resolve(mockUpdateRun(open.id, "failed", open.identity)).catch(() => {});
+  },
 }));
 
 // Mock auth middleware to pass through
@@ -544,6 +547,10 @@ describe("Apollo service cost tracking", () => {
       .expect(500);
 
     expect(res.body.error).toContain("Cost name not registered");
+    // The enrichment run it opened is failed, not left `running` forever.
+    const runId = (await mockCreateRun.mock.results[0].value).id;
+    expect(mockUpdateRun).toHaveBeenCalledWith(runId, "failed", expect.objectContaining({ orgId: "org_test" }));
+    expect(mockUpdateRun).not.toHaveBeenCalledWith(runId, "completed", expect.anything());
 
     errorSpy.mockRestore();
   });
