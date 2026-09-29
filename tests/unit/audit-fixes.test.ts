@@ -20,6 +20,12 @@ vi.mock("../../src/lib/quickenrich-serve.js", () => ({
   loadQuickenrichPerson: vi.fn(),
 }));
 
+vi.mock("../../src/lib/buying-signals.js", () => ({
+  buyingSignalForEnrich: vi.fn(async () => null),
+  recordSignalServes: vi.fn(async () => undefined),
+  resolveSignalCohort: vi.fn(async (_o: string, _c: string, p: unknown) => p),
+  BuyingSignalInsufficientCreditError: class extends Error {},
+}));
 vi.mock("../../src/lib/email-verification.js", () => ({
   EmailVerificationError: class EmailVerificationError extends Error {},
   verificationFor: async (email: string | null | undefined) =>

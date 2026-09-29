@@ -20,6 +20,12 @@ vi.mock("../../src/lib/quickenrich-serve.js", () => ({
   loadQuickenrichPerson: vi.fn(),
 }));
 
+vi.mock("../../src/lib/buying-signals.js", () => ({
+  buyingSignalForEnrich: vi.fn(async () => null),
+  recordSignalServes: vi.fn(async () => undefined),
+  resolveSignalCohort: vi.fn(async (_o: string, _c: string, p: unknown) => p),
+  BuyingSignalInsufficientCreditError: class extends Error {},
+}));
 vi.mock("../../src/lib/email-verification.js", () => ({
   EmailVerificationError: class EmailVerificationError extends Error {},
   verificationFor: async (email: string | null | undefined) =>
@@ -302,6 +308,27 @@ describe("Billing credit authorization", () => {
     expect(mockAuthorizeCredit).not.toHaveBeenCalled();
     expect(mockDecryptKey).not.toHaveBeenCalled();
     expect(mockEnrichPerson).not.toHaveBeenCalled();
+  });
+
+  it("a revealed person carries the buying signal its audience matched (evidence from buying-signals)", async () => {
+    const signals = await import("../../src/lib/buying-signals.js");
+    const evidence = { type: "hiring", occurredOn: "2026-09-21", fact: "Co posted a job for Office Manager on September 21, 2026", source: "apollo:job_postings", sourceUrl: null };
+    vi.mocked(signals.buyingSignalForEnrich).mockResolvedValueOnce(evidence as never);
+    const res = await request(app).post("/enrich").set(HEADERS).send({ apolloPersonId: "p-1" }).expect(200);
+    expect(res.body.buyingSignal).toEqual(evidence);
+    const call = vi.mocked(signals.buyingSignalForEnrich).mock.calls.at(-1)![0];
+    expect(call.apolloPersonId).toBe("p-1");
+    expect(call.ctx.identity.orgId).toBeDefined();
+  });
+
+  it("no person, no buying signal lookup", async () => {
+    const signals = await import("../../src/lib/buying-signals.js");
+    vi.mocked(signals.buyingSignalForEnrich).mockClear();
+    mockEnrichPerson.mockResolvedValueOnce({ person: null });
+    const res = await request(app).post("/enrich").set(HEADERS).send({ apolloPersonId: "p-none" }).expect(200);
+    expect(res.body.person).toBeNull();
+    expect(res.body.buyingSignal).toBeNull();
+    expect(signals.buyingSignalForEnrich).not.toHaveBeenCalled();
   });
 
   // ─── POST /enrich outside any campaign ─────────────────────────────────

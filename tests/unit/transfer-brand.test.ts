@@ -107,6 +107,7 @@ describe("POST /internal/transfer-brand", () => {
     "reveal_skips",
     "cost_holds",
     "apollo_people_searches",
+    "apollo_signal_serves",
     "apollo_people_enrichments",
     "apollo_search_cursors",
     "apollo_audiences",
@@ -151,8 +152,8 @@ describe("POST /internal/transfer-brand", () => {
       .send({ ...validBody, targetBrandId });
 
     expect(res.status).toBe(200);
-    // 3 brandless tables: 1 query; 8 branded tables: 2 queries
-    expect(mockExecute).toHaveBeenCalledTimes(3 + 8 * 2);
+    // 3 brandless tables: 1 query; 9 branded tables: 2 queries
+    expect(mockExecute).toHaveBeenCalledTimes(3 + 9 * 2);
     const counts = Object.fromEntries(res.body.updatedTables.map((t: any) => [t.tableName, t.count]));
     expect(counts.email_verifications).toBe(1);
     expect(counts.apollo_people_enrichments).toBe(2);

@@ -588,6 +588,68 @@ export const costHolds = pgTable(
 
 export type CostHold = typeof costHolds.$inferSelect;
 
+// ─── Buying signals (src/lib/buying-signals.ts) ─────────────────────────────
+// Bronze: every Apollo job-postings call verbatim (1 credit when it returns
+// postings). A fact about a company, so no org_id: the billed org is on the run.
+export const apolloJobPostingsFetches = pgTable(
+  "apollo_job_postings_fetches",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    apolloOrganizationId: text("apollo_organization_id").notNull(),
+    runId: text("run_id").notNull(),
+    postingsCount: integer("postings_count").notNull(),
+    responseBody: jsonb("response_body").notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("idx_job_postings_fetches_org").on(table.apolloOrganizationId, table.fetchedAt)]
+);
+
+// Silver: one canonical buying signal per (type, source, source_ref): a dated,
+// sourced fact about a company (hiring, funding) or a person (job_change).
+// Global like apollo_organizations: a signal is a fact, not org data.
+export const buyingSignals = pgTable(
+  "buying_signals",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    signalType: text("signal_type").notNull(), // hiring | job_change | funding
+    apolloOrganizationId: text("apollo_organization_id"),
+    apolloPersonId: text("apollo_person_id"),
+    occurredOn: text("occurred_on").notNull(), // YYYY-MM-DD
+    fact: text("fact").notNull(),
+    source: text("source").notNull(), // apollo:job_postings | apollo:enrichment
+    sourceRef: text("source_ref").notNull(),
+    sourceUrl: text("source_url"),
+    detail: jsonb("detail"),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("idx_buying_signals_source").on(table.signalType, table.source, table.sourceRef),
+    index("idx_buying_signals_org").on(table.apolloOrganizationId, table.signalType),
+    index("idx_buying_signals_person").on(table.apolloPersonId, table.signalType),
+  ]
+);
+
+// Gold: which buying-signal cohort served a teaser person to a campaign, so
+// /enrich knows which signal to attach (and which evidence to buy). Org data.
+export const apolloSignalServes = pgTable(
+  "apollo_signal_serves",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id").notNull(),
+    brandIds: text("brand_ids").array().notNull(),
+    campaignId: text("campaign_id").notNull(),
+    cursorId: uuid("cursor_id").notNull(),
+    apolloPersonId: text("apollo_person_id").notNull(),
+    signal: jsonb("signal").notNull(),
+    servedAt: timestamp("served_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("idx_signal_serves_org_campaign_person").on(table.orgId, table.campaignId, table.apolloPersonId),
+    index("idx_signal_serves_org_person").on(table.orgId, table.apolloPersonId),
+  ]
+);
+
 export type ApolloPeopleSearch = typeof apolloPeopleSearches.$inferSelect;
 export type NewApolloPeopleSearch = typeof apolloPeopleSearches.$inferInsert;
 export type ApolloPeopleEnrichment = typeof apolloPeopleEnrichments.$inferSelect;

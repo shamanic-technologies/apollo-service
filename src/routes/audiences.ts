@@ -28,7 +28,8 @@ import { toCreditAlertIdentity } from "../lib/credit-alert.js";
 import { SuggestFromSegmentRequestSchema, ApolloNativeSearchFiltersSchema, AudienceCompaniesQuerySchema } from "../schemas.js";
 import { providerErrorFields } from "../lib/provider-error.js";
 import { planQuickenrich } from "../lib/quickenrich.js";
-import { ServeSourceRequestSchema } from "../schemas.js";
+import { ServeSourceRequestSchema, SignalCoverageRequestSchema, CreateSignalAudienceRequestSchema, SearchFiltersSchema, BUYING_SIGNAL_TYPES } from "../schemas.js";
+import { signalConflicts, signalWindow, utcDay, type BuyingSignalSpec, type BuyingSignalType } from "../lib/buying-signal-spec.js";
 
 const router = Router();
 
@@ -491,6 +492,144 @@ router.post("/audiences/:apolloAudienceId/dry-run", serviceAuth, async (req: Aut
     res.json({ count });
   } catch (error) {
     console.error("[Apollo Service][POST /audiences/:id/dry-run] ERROR:", error);
+    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
+  }
+});
+
+// ─── Buying-signal audiences (src/lib/buying-signals.ts) ────────────────────
+
+const SIGNAL_LABELS: Record<BuyingSignalType, string> = {
+  hiring: "Hiring",
+  job_change: "New in role",
+  funding: "Recently funded",
+};
+
+function signalLabel(spec: BuyingSignalSpec): string {
+  const roles = spec.type === "hiring" && spec.job_titles?.length ? ` ${spec.job_titles.join(" / ")}` : "";
+  return `${SIGNAL_LABELS[spec.type]}${roles} (last ${spec.window_days} days)`;
+}
+
+/** The ICP a signal request starts from: a stored audience of this org, or inline filters. */
+async function loadSignalBase(
+  orgId: string,
+  body: { apolloAudienceId?: string; filters?: Record<string, unknown> },
+): Promise<{ filters: Record<string, unknown>; name: string | null; brandId: string | null } | null> {
+  if (body.filters) return { filters: body.filters, name: null, brandId: null };
+  const [row] = await db
+    .select()
+    .from(apolloAudiences)
+    .where(and(eq(apolloAudiences.id, body.apolloAudienceId!), eq(apolloAudiences.orgId, orgId)))
+    .limit(1);
+  if (!row) return null;
+  return { filters: row.filters as Record<string, unknown>, name: row.name, brandId: row.brandId };
+}
+
+/**
+ * POST /audiences/signal-coverage — how many verified-email people each buying
+ * signal yields for one ICP, per window. Free (teaser counts), nothing stored.
+ */
+router.post("/audiences/signal-coverage", serviceAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const parsed = SignalCoverageRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ type: "validation", error: "Invalid request", details: parsed.error.flatten() });
+    }
+    const base = await loadSignalBase(req.orgId!, parsed.data);
+    if (!base) return res.status(404).json({ type: "not_found", error: "Audience not found" });
+    const icp = { ...base.filters };
+    delete icp.buying_signal;
+
+    const { key: apolloApiKey } = await decryptKey(
+      req.orgId!,
+      req.userId!,
+      "apollo",
+      { callerMethod: "POST", callerPath: "/audiences/signal-coverage" },
+      { brandIds: base.brandId ? [base.brandId] : req.brandIds, featureSlug: req.featureSlug, workflowSlug: req.workflowSlug },
+    );
+    const alert = toCreditAlertIdentity(req);
+    const windows = parsed.data.windowDays ?? [30, 90];
+    const jobTitles = parsed.data.jobTitles?.length ? parsed.data.jobTitles : undefined;
+
+    const specs: BuyingSignalSpec[] = BUYING_SIGNAL_TYPES.flatMap((type) =>
+      windows.map((window_days) => ({ type, window_days, ...(type === "hiring" && jobTitles ? { job_titles: jobTitles } : {}) })),
+    );
+    for (const spec of specs) {
+      const conflicts = signalConflicts({ ...icp, buying_signal: spec });
+      if (conflicts.length > 0) {
+        return res.status(400).json({ type: "validation", error: `The ICP already sets ${conflicts.join(", ")}, which the ${spec.type} signal drives`, fields: conflicts });
+      }
+    }
+    const baseCount = await dryRunCount(apolloApiKey, icp, alert);
+    // Sequential on purpose: Apollo's people search allows 200 calls a minute.
+    const signals = [];
+    for (const spec of specs) {
+      const count = await dryRunCount(apolloApiKey, { ...icp, buying_signal: spec }, alert);
+      signals.push({ type: spec.type, windowDays: spec.window_days, jobTitles: spec.job_titles ?? null, count });
+    }
+    res.json({ measuredOn: utcDay(new Date()), baseCount, signals });
+  } catch (error) {
+    console.error("[Apollo Service][POST /audiences/signal-coverage] ERROR:", error);
+    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
+  }
+});
+
+/**
+ * POST /audiences/signal — persist an audience = ICP + one buying signal + a
+ * recency window, with its free size estimate. The stored filters carry the
+ * RELATIVE signal, so a consumer forwarding them to /search/next verbatim gets
+ * a rolling audience.
+ */
+router.post("/audiences/signal", serviceAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const parsed = CreateSignalAudienceRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ type: "validation", error: "Invalid request", details: parsed.error.flatten() });
+    }
+    const base = await loadSignalBase(req.orgId!, parsed.data);
+    if (!base) return res.status(404).json({ type: "not_found", error: "Audience not found" });
+
+    const { type, windowDays, jobTitles } = parsed.data.signal;
+    if (jobTitles?.length && type !== "hiring") {
+      return res.status(400).json({ type: "validation", error: "jobTitles is only valid for the hiring signal" });
+    }
+    const spec: BuyingSignalSpec = { type, window_days: windowDays, ...(jobTitles?.length ? { job_titles: jobTitles } : {}) };
+    const icp = { ...base.filters };
+    delete icp.buying_signal;
+    const filters = { ...icp, buying_signal: spec };
+    const checked = SearchFiltersSchema.safeParse(filters);
+    if (!checked.success) {
+      return res.status(400).json({ type: "validation", error: "Invalid filters", details: checked.error.flatten() });
+    }
+    const conflicts = signalConflicts(filters);
+    if (conflicts.length > 0) {
+      return res.status(400).json({ type: "validation", error: `The ICP already sets ${conflicts.join(", ")}, which the ${type} signal drives`, fields: conflicts });
+    }
+
+    const brandId = parsed.data.brandId ?? base.brandId ?? req.brandIds?.[0] ?? null;
+    const { key: apolloApiKey } = await decryptKey(
+      req.orgId!,
+      req.userId!,
+      "apollo",
+      { callerMethod: "POST", callerPath: "/audiences/signal" },
+      { brandIds: brandId ? [brandId] : req.brandIds, featureSlug: req.featureSlug, workflowSlug: req.workflowSlug },
+    );
+    const count = await dryRunCount(apolloApiKey, filters, toCreditAlertIdentity(req));
+    const now = new Date();
+    const window = signalWindow(spec, now);
+    const label = signalLabel(spec);
+    const name = parsed.data.name ?? (base.name ? `${base.name} · ${label}` : label);
+    const description = `${base.name ? `People of the "${base.name}" audience` : "People matching the ICP filters"} whose ${
+      type === "job_change" ? "current role started" : type === "funding" ? "employer raised its latest funding round" : "employer posted a job"
+    } in the last ${windowDays} days${type === "hiring" && jobTitles?.length ? ` (roles: ${jobTitles.join(", ")})` : ""}. The window rolls: each day serves the signals that are new since the last serve.`;
+
+    const [row] = await db
+      .insert(apolloAudiences)
+      .values({ orgId: req.orgId!, userId: req.userId ?? null, brandId, name, description, filters, count, countRefreshedAt: now })
+      .returning();
+
+    res.json({ apolloAudienceId: row.id, name, description, filters, count, window });
+  } catch (error) {
+    console.error("[Apollo Service][POST /audiences/signal] ERROR:", error);
     res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
   }
 });
