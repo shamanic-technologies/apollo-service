@@ -28,8 +28,8 @@ vi.mock("../../src/lib/buying-signals.js", () => ({
 }));
 vi.mock("../../src/lib/email-verification.js", () => ({
   EmailVerificationError: class EmailVerificationError extends Error {},
-  verificationFor: async (email: string | null | undefined) =>
-    email ? { email, verdict: "valid", deliverable: true, verifier: "bounceverify", verificationId: "ver-1", verifiedAt: "2026-09-25T00:00:00.000Z", reused: false } : null,
+  verificationFor: vi.fn(async (email: string | null | undefined) =>
+    email ? { email, verdict: "valid", deliverable: true, verifier: "bounceverify", verificationId: "ver-1", verifiedAt: "2026-09-25T00:00:00.000Z", reused: false } : null),
 }));
 
 
@@ -58,6 +58,7 @@ const mockAddCosts = vi.fn().mockResolvedValue({ costs: [] });
 vi.mock("../../src/lib/runs-client.js", () => ({
   createRun: (...args: unknown[]) => mockCreateRun(...args),
   updateRun: (...args: unknown[]) => mockUpdateRun(...args),
+  failOpenRun: vi.fn(async () => undefined),
   addCosts: (...args: unknown[]) => mockAddCosts(...args),
 }));
 
@@ -329,6 +330,24 @@ describe("Billing credit authorization", () => {
     expect(res.body.person).toBeNull();
     expect(res.body.buyingSignal).toBeNull();
     expect(signals.buyingSignalForEnrich).not.toHaveBeenCalled();
+  });
+
+  it("a verification failure on a CACHE HIT answers 502, it does not hang the request (reply is awaited)", async () => {
+    const ev = await import("../../src/lib/email-verification.js");
+    vi.mocked(ev.verificationFor).mockRejectedValueOnce(new ev.EmailVerificationError("apify bounceverify responded 403"));
+    const { db } = await import("../../src/db/index.js");
+    vi.mocked(db.select).mockReturnValueOnce({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          orderBy: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([{ id: "cached-1", apolloPersonId: "p-1", email: "a@b.com", emailStatus: "verified", createdAt: new Date() }]),
+          }),
+        }),
+      }),
+    } as any);
+    const res = await request(app).post("/enrich").set(HEADERS).send({ apolloPersonId: "p-1" });
+    expect(res.status).toBe(502);
+    expect(res.body.type).toBe("email_verification");
   });
 
   // ─── POST /enrich outside any campaign ─────────────────────────────────

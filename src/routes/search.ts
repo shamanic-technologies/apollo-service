@@ -285,7 +285,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       });
       await updateRun(cachedRun.id, "completed", identity);
 
-      return reply({
+      return await reply({
         enrichmentId: null,
         person: cacheHit.negative ? null : transformCachedEnrichment(apolloPersonId, cacheHit.record),
         cached: true,
@@ -429,7 +429,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       });
       await updateRun(cachedRun.id, "completed", identity);
       traceEvent(runId, { service: "apollo-service", event: "enrich-cache-hit", detail: `apolloPersonId=${apolloPersonId}, negative=${outcome.negative} (locked recheck)` }, req.headers).catch(() => {});
-      return reply({
+      return await reply({
         enrichmentId: null,
         person: outcome.negative ? null : transformCachedEnrichment(apolloPersonId, outcome.record),
         cached: true,
