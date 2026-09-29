@@ -17,8 +17,10 @@ import {
   LOOKUP_CONCURRENCY,
   ORG_CACHE_DAYS,
   COMPANY_FIRMOGRAPHICS_COST_NAME,
+  normalizeCompanyName,
 } from "../lib/audience-companies.js";
-import { getOrganizationById, type ApolloOrganization } from "../lib/apollo-client.js";
+import { getOrganizationById, searchPeople, type ApolloOrganization } from "../lib/apollo-client.js";
+import { toApolloSearchParams } from "../lib/transform.js";
 import { apolloOrganizations } from "../db/schema.js";
 import { advisoryXactLock } from "../lib/advisory-lock.js";
 import { createRun, updateRun, addCosts, updateCostStatus, type IdentityHeaders } from "../lib/runs-client.js";
@@ -509,6 +511,36 @@ function signalLabel(spec: BuyingSignalSpec): string {
   return `${SIGNAL_LABELS[spec.type]}${roles} (last ${spec.window_days} days)`;
 }
 
+/**
+ * People AND distinct employers a signal filter set matches, free (teaser pages
+ * of 100). A people count alone hides concentration: measured 2026-09-29, one
+ * "recently funded" audience held 217 people at 2 companies. Employers are
+ * counted over the first COVERAGE_MAX_PAGES pages, exact when the pool fits.
+ */
+const COVERAGE_MAX_PAGES = 5;
+async function countSignalEmployers(
+  apiKey: string,
+  filters: Record<string, unknown>,
+  alert: ReturnType<typeof toCreditAlertIdentity>,
+): Promise<{ count: number; companies: number; companiesExact: boolean }> {
+  const params = toApolloSearchParams(filters);
+  const names = new Set<string>();
+  let count = 0;
+  let walked = 0;
+  for (let page = 1; page <= COVERAGE_MAX_PAGES; page++) {
+    const res = await searchPeople(apiKey, { ...params, page, per_page: 100 }, alert);
+    count = res.total_entries ?? res.pagination?.total_entries ?? 0;
+    const people = res.people ?? [];
+    for (const p of people as Array<{ organization?: { name?: string | null } | null }>) {
+      const name = p.organization?.name;
+      if (typeof name === "string" && name.trim()) names.add(normalizeCompanyName(name));
+    }
+    walked += people.length;
+    if (people.length < 100 || walked >= count) break;
+  }
+  return { count, companies: names.size, companiesExact: walked >= count };
+}
+
 /** The ICP a signal request starts from: a stored audience of this org, or inline filters. */
 async function loadSignalBase(
   orgId: string,
@@ -563,8 +595,8 @@ router.post("/audiences/signal-coverage", serviceAuth, async (req: Authenticated
     // Sequential on purpose: Apollo's people search allows 200 calls a minute.
     const signals = [];
     for (const spec of specs) {
-      const count = await dryRunCount(apolloApiKey, { ...icp, buying_signal: spec }, alert);
-      signals.push({ type: spec.type, windowDays: spec.window_days, jobTitles: spec.job_titles ?? null, count });
+      const { count, companies, companiesExact } = await countSignalEmployers(apolloApiKey, { ...icp, buying_signal: spec }, alert);
+      signals.push({ type: spec.type, windowDays: spec.window_days, jobTitles: spec.job_titles ?? null, count, companies, companiesExact });
     }
     res.json({ measuredOn: utcDay(new Date()), baseCount, signals });
   } catch (error) {

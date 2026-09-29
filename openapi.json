@@ -4466,13 +4466,23 @@
                 "count": {
                   "type": "integer",
                   "description": "Verified-email people matching ICP + signal in the window."
+                },
+                "companies": {
+                  "type": "integer",
+                  "description": "Distinct employers of those people (a people count can hide 200 people at 2 firms)."
+                },
+                "companiesExact": {
+                  "type": "boolean",
+                  "description": "True when every matching person was read; false = companies counted over the first 500 people (a floor)."
                 }
               },
               "required": [
                 "type",
                 "windowDays",
                 "jobTitles",
-                "count"
+                "count",
+                "companies",
+                "companiesExact"
               ]
             }
           }
