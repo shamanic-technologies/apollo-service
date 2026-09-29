@@ -381,8 +381,10 @@ other. `src/lib/buying-signal-spec.ts` (pure) + `src/lib/buying-signals.ts`.
   lands in silver `buying_signals` (global). No dated evidence in the window =
   null, never invented. job_change allows 31 days of slack for Apollo's
   month-precision start dates.
-- **Endpoints:** `POST /audiences/signal-coverage` (free counts per signal x
-  window for an ICP, the "is it worth it" check) and `POST /audiences/signal`
+- **Endpoints:** `POST /audiences/signal-coverage` (free people AND distinct
+  companies per signal x window for an ICP, the "is it worth it" check; read
+  companies, not people: "recently funded" crypto market makers were 217 people
+  at 2 firms) and `POST /audiences/signal`
   (persist ICP + signal, return the size estimate). The consumer registers the
   returned `apolloAudienceId` + `filters` with human-service `POST /orgs/audiences`
   (send the filters too, or serve 422s).

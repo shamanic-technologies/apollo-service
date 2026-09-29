@@ -48,7 +48,11 @@ const mockSearchPeople = vi.fn(async (_k: unknown, p: any) => {
   if (p.organization_job_posted_at_range) total = p.q_organization_job_titles ? 12 : 800;
   if (p.person_days_in_current_title_range) total = 40;
   if (p.latest_funding_date_range) total = 3;
-  return { total_entries: total, people: [] };
+  // Page rows: the funded people all work at ONE firm; everyone else at their own.
+  const rows = p.per_page === 100 && total <= 100
+    ? Array.from({ length: total }, (_, i) => ({ organization: { name: p.latest_funding_date_range ? "Acme Capital" : `Firm ${i}` } }))
+    : [];
+  return { total_entries: total, people: rows };
 });
 vi.mock("../../src/lib/apollo-client.js", async (importOriginal) => ({
   ...((await importOriginal()) as Record<string, unknown>),
@@ -75,14 +79,17 @@ describe("POST /audiences/signal-coverage", () => {
   it("counts every signal per window for an ICP, free, nothing stored", async () => {
     const res = await request(await app()).post("/audiences/signal-coverage").set(H).send({ filters: ICP, windowDays: [30] }).expect(200);
     expect(res.body.baseCount).toBe(5000);
-    expect(res.body.signals).toEqual([
-      { type: "hiring", windowDays: 30, jobTitles: null, count: 800 },
-      { type: "job_change", windowDays: 30, jobTitles: null, count: 40 },
-      { type: "funding", windowDays: 30, jobTitles: null, count: 3 },
+    expect(res.body.signals.map((s: any) => [s.type, s.count])).toEqual([
+      ["hiring", 800],
+      ["job_change", 40],
+      ["funding", 3],
     ]);
+    // A people count hides concentration: 3 funded people, ONE firm.
+    expect(res.body.signals[2]).toMatchObject({ companies: 1, companiesExact: true });
+    expect(res.body.signals[1]).toMatchObject({ companies: 40, companiesExact: true });
     expect(state.inserted).toHaveLength(0);
-    // Every count is a per_page=1 teaser (zero credits).
-    for (const [, p] of mockSearchPeople.mock.calls) expect(p.per_page).toBe(1);
+    // Only the free teaser search is ever called (zero credits).
+    for (const [, p] of mockSearchPeople.mock.calls) expect([1, 100]).toContain(p.per_page);
   });
 
   it("narrows hiring by job titles, and reads the ICP from a stored audience", async () => {
@@ -92,7 +99,7 @@ describe("POST /audiences/signal-coverage", () => {
       .set(H)
       .send({ apolloAudienceId: "33333333-3333-4333-8333-333333333333", windowDays: [90], jobTitles: ["office manager"] })
       .expect(200);
-    expect(res.body.signals[0]).toEqual({ type: "hiring", windowDays: 90, jobTitles: ["office manager"], count: 12 });
+    expect(res.body.signals[0]).toMatchObject({ type: "hiring", windowDays: 90, jobTitles: ["office manager"], count: 12, companies: 12 });
   });
 
   it("404 for an unknown base audience; 400 without exactly one base", async () => {
