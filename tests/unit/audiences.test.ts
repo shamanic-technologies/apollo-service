@@ -189,18 +189,20 @@ describe("Apollo audience endpoints", () => {
     expect(res.body.count).toBe(42000);
     expect(res.body.degraded).toBe(false);
     expect(mockChatComplete).toHaveBeenCalledTimes(2);
-    // Schemaless JSON mode on OpenAI GPT-6 Astra. No Anthropic, no google/pro,
-    // no zai/glm-pro.
+    // Strict JSON mode on Anthropic Claude Sonnet 5.5.
     expect(mockChatComplete).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "openai", model: "gpt-pro", responseFormat: "json" }),
+      expect.objectContaining({ provider: "anthropic", model: "sonnet", responseFormat: "json" }),
       expect.anything(),
     );
-    // Astra 400s on any sampling parameter — none is sent.
+    // Sonnet 5.5 400s on any sampling parameter — none is sent.
     expect(mockChatComplete.mock.calls[0][0].temperature).toBeUndefined();
-    // Reasoning stays ON.
-    expect(mockChatComplete.mock.calls[0][0].disableThinking).toBeUndefined();
-    // Schemaless: no responseSchema is sent — the Zod guards validate.
-    expect(mockChatComplete.mock.calls[0][0].responseSchema).toBeUndefined();
+    // Thinking at its lowest effort (it cannot be turned off).
+    expect(mockChatComplete.mock.calls[0][0].disableThinking).toBe(true);
+    // Anthropic JSON mode requires a STRICT schema; filters travel as a string.
+    const schema = mockChatComplete.mock.calls[0][0].responseSchema;
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.properties.filters).toEqual({ type: "string" });
+    expect([...schema.required].sort()).toEqual(Object.keys(schema.properties).sort());
     // Each candidate was dry-run for free via Apollo per_page=1.
     expect(mockSearchPeople).toHaveBeenCalledWith("apollo-key", expect.objectContaining({ per_page: 1 }), expect.anything());
     // Stored row carries the winning filters + count snapshot + the sample.

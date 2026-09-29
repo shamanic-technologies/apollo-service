@@ -45,7 +45,8 @@ export interface ChatCompleteParams {
   temperature?: number;
   maxTokens?: number;
   /** Minimize the model's internal reasoning. Provider-floored: Gemini 3 (incl.
-   * flash-pro) drops to its lowest level (`minimal`), not full-off. */
+   * flash-pro) drops to its lowest level (`minimal`), not full-off; Claude
+   * Sonnet 5.5 drops to `output_config.effort: "low"`. */
   disableThinking?: boolean;
   /** Abort the outbound call. Used by callers that own a wall-clock bound (the
    * audience refine loop): a completion still in flight when the caller's

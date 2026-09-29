@@ -180,12 +180,17 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
     attempt's filters, count, sample and reasoning, in one structured `console.warn`.
     Nothing on the happy path. Without it, an over-strict judgement is
     indistinguishable from a broken call and the only option is a revert (#227).
-  - **The loop runs on `provider:"openai", model:"gpt-pro"` (GPT-6 Astra), schemaless
-    JSON, reasoning ON — since 2026-09-09.** The owner moved every onboarding step that
-    PRE-FILLS something for a user onto Astra for quality; the cost is accepted. Astra
-    REJECTS `temperature` != 1 and `top_p` with a 400 `unsupported_value`, so this call
-    sends NO sampling parameter — do not re-add one. Everything else below still holds
-    (schemaless, reasoning ON, no `disableThinking`).
+  - **The loop runs on `provider:"anthropic", model:"sonnet"` (Claude Sonnet 5.5) — since
+    2026-09-29.** Owner decision: every LLM call of the public onboarding moves to
+    Sonnet 5.5 (Astra was slow and broke onboarding when the OpenAI credit ran out on
+    2026-09-28); campaign audience builds switch with it. This SUPERSEDES the "Anthropic
+    is off the table" line below. Anthropic JSON mode REQUIRES a strict `responseSchema`
+    (`REFINE_DECISION_JSON_SCHEMA`), so `filters` travels as a JSON-ENCODED STRING and
+    the prompt says so; the Zod guard still decodes both forms. No sampling parameter
+    (Sonnet 5.5 400s on `temperature`). Thinking cannot be off: `disableThinking: true`
+    maps to `output_config.effort: "low"`; `maxTokens` 8000 covers the thinking tokens.
+  - **Previous model, kept: `provider:"openai", model:"gpt-pro"` (GPT-6 Astra),
+    2026-09-09 → 2026-09-29**, schemaless JSON, reasoning at its default, ~10.8 s p50 per round.
   - **Model history, kept: the loop previously ran on `provider:"zai", model:"glm-pro"`.**
     Cheap AND smart, per the owner's instruction. A/B'd against `deepseek/deepseek-pro`
     on the Swiss-drugstores description, 3 runs each (2026-09-01): glm-pro returned
