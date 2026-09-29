@@ -3,3 +3,4 @@ dist/
 .env
 .env.local
 openapi.json
+node_modules
