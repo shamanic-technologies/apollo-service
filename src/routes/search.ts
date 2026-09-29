@@ -8,7 +8,7 @@ import { searchPeople, enrichPerson, ApolloPerson, buildWaterfallWebhookUrl, wit
 import { providerErrorFields } from "../lib/provider-error.js";
 import { advisoryXactLock, enrichLockKey } from "../lib/advisory-lock.js";
 import { decryptKey } from "../lib/keys-client.js";
-import { createRun, updateRun, addCosts, type IdentityHeaders } from "../lib/runs-client.js";
+import { createRun, updateRun, addCosts, failOpenRun, type IdentityHeaders } from "../lib/runs-client.js";
 import { authorizeCredit } from "../lib/billing-client.js";
 import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment, toApolloSearchParams } from "../lib/transform.js";
 import { assertKeySource } from "../lib/validators.js";
@@ -186,6 +186,8 @@ async function findCachedEnrichmentByPersonId(
  * POST /enrich - Enrich a single person via Apollo to reveal their email
  */
 router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
+  // A run this request opened and has not closed yet: the error path fails it.
+  let openRun: { id: string; identity: IdentityHeaders } | null = null;
   try {
     const { runId, brandIds, campaignId, audienceId, featureSlug, workflowSlug } = req;
     // x-campaign-id is OPTIONAL here (and only here): a reveal can happen before
@@ -366,6 +368,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
           parentRunId: runId,
           workflowSlug,
         });
+        openRun = { id: enrichRun.id, identity };
 
         const [enrichment] = await tx.insert(apolloPeopleEnrichments).values({
           orgId: req.orgId!,
@@ -393,6 +396,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
         // Apollo returns no email.
 
         await updateRun(enrichRun.id, "completed", identity);
+        openRun = null;
       }
 
       return { kind: "fresh", person, enrichmentId };
@@ -427,6 +431,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
     await reply({ enrichmentId: outcome.enrichmentId, person: transformed, cached: false });
   } catch (error) {
     console.error("[Apollo Service][POST /enrich] ERROR:", error);
+    await failOpenRun(openRun, "enrich");
     if (req.runId) {
       traceEvent(req.runId, { service: "apollo-service", event: "enrich-error", detail: error instanceof Error ? error.message : "Unknown error", level: "error" }, req.headers).catch(() => {});
     }
@@ -467,6 +472,8 @@ async function findCursorForParams(
  * set resumes it. Each distinct filter set for a campaign walks its own pool.
  */
 router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) => {
+  // A run this request opened and has not closed yet: the error path fails it.
+  let openRun: { id: string; identity: IdentityHeaders } | null = null;
   try {
     const { runId, brandIds, campaignId, audienceId, featureSlug, workflowSlug } = req;
     if (!runId || !brandIds?.length || !campaignId) {
@@ -496,6 +503,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
       parentRunId: runId,
       workflowSlug,
     });
+    openRun = { id: searchRun.id, identity };
 
     const { key: apolloApiKey } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/search/next" }, tracking);
 
@@ -575,6 +583,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
 
       if (!resume) {
         await updateRun(searchRun.id, "completed", identity);
+        openRun = null;
         return res.status(400).json({
           type: "validation",
           error: "No search cursor found for this campaign. Provide searchParams to start a new search.",
@@ -613,6 +622,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
         traceEvent(runId, { service: "apollo-service", event: "quickenrich-page", detail: `audience=${quickenrichAudience.id}, pages=${served.pagesRead}, rows=${served.rowsSeen}, kept=${served.people.length}, exhausted=${served.exhausted}`, data: { rejected: served.rejected } }, req.headers).catch(() => {});
         if (served.people.length > 0 || !served.exhausted) {
           await updateRun(searchRun.id, "completed", identity);
+          openRun = null;
           return res.json({
             people: served.people,
             // QuickEnrich still has rows, or the Apollo walk comes next: never done here.
@@ -639,6 +649,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
           .where(eq(apolloSearchCursors.id, cursorId));
       }
       await updateRun(searchRun.id, "completed", identity);
+      openRun = null;
       const exhaustedTotalPages = Math.min(
         Math.ceil(cursorTotalEntries / DEFAULT_PER_PAGE),
         APOLLO_MAX_REACHABLE_PAGE,
@@ -711,6 +722,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     });
 
     await updateRun(searchRun.id, "completed", identity);
+    openRun = null;
 
     // Transform and respond
     const transformedPeople = people.map((person: ApolloPerson) =>
@@ -732,6 +744,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     });
   } catch (error) {
     console.error("[Apollo Service][POST /search/next] ERROR:", error);
+    await failOpenRun(openRun, "search/next");
     if (req.runId) {
       traceEvent(req.runId, { service: "apollo-service", event: "search-next-error", detail: error instanceof Error ? error.message : "Unknown error", level: "error" }, req.headers).catch(() => {});
     }

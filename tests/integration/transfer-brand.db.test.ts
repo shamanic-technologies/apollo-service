@@ -29,6 +29,7 @@ const TABLES = [
   "apollo_phone_reveals",
   "email_findings",
   "reveal_skips",
+  "cost_holds",
   "apollo_people_searches",
   "apollo_people_enrichments",
   "apollo_search_cursors",
@@ -147,6 +148,18 @@ describe.skipIf(!DB_URL)("transfer-brand on a real database", () => {
       });
     }
 
+    for (const [label, brands, camp] of [
+      ["A", [A], "camp-a"],
+      ["A_by_campaign", null, "camp-a2"],
+      ["B", [B], "camp-b"],
+      ["unattributed", null, null],
+    ] as const) {
+      await ins("cost_holds", label, {
+        cost_id: `cost-${label}`, run_id: `run-h-${label}`, cost_name: "treg-micro-usd", cost_source: "platform",
+        quantity: "10000", org_id: S, brand_ids: brands, campaign_id: camp,
+      });
+    }
+
     const aud = (l: string) => ids[`apollo_audiences:${l}`];
     const cur = (l: string) => ids[`apollo_search_cursors:${l}`];
     await ins("quickenrich_searches", "A_by_cursor", { org_id: S, cursor_id: cur("A"), campaign_id: "x1", request_body: {} });
@@ -163,6 +176,7 @@ describe.skipIf(!DB_URL)("transfer-brand on a real database", () => {
     apollo_phone_reveals: ["A", "A_by_campaign"],
     email_findings: ["A", "A_by_campaign"],
     reveal_skips: ["A", "A_by_campaign"],
+    cost_holds: ["A", "A_by_campaign"],
     apollo_people_searches: ["A"],
     apollo_people_enrichments: ["A", "A2"],
     apollo_search_cursors: ["A"],
