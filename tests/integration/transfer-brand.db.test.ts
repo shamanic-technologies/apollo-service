@@ -31,6 +31,7 @@ const TABLES = [
   "reveal_skips",
   "cost_holds",
   "apollo_people_searches",
+  "apollo_signal_serves",
   "apollo_people_enrichments",
   "apollo_search_cursors",
   "apollo_audiences",
@@ -162,6 +163,17 @@ describe.skipIf(!DB_URL)("transfer-brand on a real database", () => {
 
     const aud = (l: string) => ids[`apollo_audiences:${l}`];
     const cur = (l: string) => ids[`apollo_search_cursors:${l}`];
+    for (const [label, org, brands, camp] of [
+      ["A", S, [A], "camp-a"],
+      ["B", S, [B], "camp-b"],
+      ["AB", S, [A, B], "camp-ab"],
+      ["A_other_org", O, [A], "camp-o"],
+    ] as const) {
+      await ins("apollo_signal_serves", label, {
+        org_id: org, brand_ids: brands, campaign_id: camp, cursor_id: cur(label), apollo_person_id: `sp-${label}`,
+        signal: { type: "hiring", window_days: 30, as_of: "2026-09-29" },
+      });
+    }
     await ins("quickenrich_searches", "A_by_cursor", { org_id: S, cursor_id: cur("A"), campaign_id: "x1", request_body: {} });
     await ins("quickenrich_searches", "A_by_audience", { org_id: S, apollo_audience_id: aud("A"), campaign_id: "x2", request_body: {} });
     await ins("quickenrich_searches", "A_by_campaign", { org_id: S, campaign_id: "camp-a2", request_body: {} });
@@ -177,6 +189,7 @@ describe.skipIf(!DB_URL)("transfer-brand on a real database", () => {
     email_findings: ["A", "A_by_campaign"],
     reveal_skips: ["A", "A_by_campaign"],
     cost_holds: ["A", "A_by_campaign"],
+    apollo_signal_serves: ["A"],
     apollo_people_searches: ["A"],
     apollo_people_enrichments: ["A", "A2"],
     apollo_search_cursors: ["A"],
@@ -216,7 +229,7 @@ describe.skipIf(!DB_URL)("transfer-brand on a real database", () => {
 
   it("leaves nothing of the brand under the source org except co-branded rows", async () => {
     await post({ sourceBrandId: A, sourceOrgId: S, targetOrgId: T });
-    for (const table of ["apollo_people_searches", "apollo_people_enrichments", "apollo_search_cursors", "apollo_phone_reveals", "email_findings", "reveal_skips"]) {
+    for (const table of ["apollo_people_searches", "apollo_people_enrichments", "apollo_search_cursors", "apollo_phone_reveals", "email_findings", "reveal_skips", "apollo_signal_serves"]) {
       const [r] = await q`SELECT count(*)::int n FROM ${q(table)} WHERE org_id = ${S} AND brand_ids = ARRAY[${A}]::text[]`;
       expect({ table, n: r.n }).toEqual({ table, n: 0 });
     }
@@ -228,7 +241,7 @@ describe.skipIf(!DB_URL)("transfer-brand on a real database", () => {
   it("rewrites the brand id to targetBrandId, idempotently", async () => {
     const res = await post({ sourceBrandId: A, sourceOrgId: S, targetOrgId: T, targetBrandId: NEW_A });
     expect(res.status).toBe(200);
-    for (const table of ["apollo_people_searches", "apollo_people_enrichments", "apollo_search_cursors", "apollo_phone_reveals", "email_findings", "reveal_skips"]) {
+    for (const table of ["apollo_people_searches", "apollo_people_enrichments", "apollo_search_cursors", "apollo_phone_reveals", "email_findings", "reveal_skips", "apollo_signal_serves"]) {
       const rows = await q`SELECT brand_ids FROM ${q(table)} WHERE org_id = ${T} AND cardinality(brand_ids) > 0`;
       expect(rows.length).toBeGreaterThan(0);
       for (const r of rows) expect({ table, b: r.brand_ids }).toEqual({ table, b: [NEW_A] });

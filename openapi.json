@@ -969,6 +969,9 @@
               "type": "string",
               "minLength": 1
             }
+          },
+          "buying_signal": {
+            "$ref": "#/components/schemas/BuyingSignalFilter"
           }
         },
         "additionalProperties": false,
@@ -1007,6 +1010,54 @@
           "min": "2025-07-25",
           "max": "2025-09-25"
         }
+      },
+      "BuyingSignalFilter": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "hiring",
+              "job_change",
+              "funding"
+            ],
+            "description": "hiring = the employer posted a job in the window (Apollo organization_job_posted_at_range, optionally narrowed by job_titles); job_change = the person started their current title in the window (Apollo person_days_in_current_title_range); funding = the employer's latest funding round falls in the window (Apollo latest_funding_date_range)."
+          },
+          "window_days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 365,
+            "description": "Recency window in days, counted back from the day the audience is served (rolling).",
+            "example": 30
+          },
+          "job_titles": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "hiring only: roles the employer is hiring for (Apollo q_organization_job_titles). Omit for any role.",
+            "example": [
+              "head of sales"
+            ]
+          },
+          "as_of": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "Set by apollo-service on a served cohort (the day it was materialized). Callers omit it."
+          },
+          "since": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "Set by apollo-service on a follow-up cohort: only signals after the previous cohort's day. Callers omit it."
+          }
+        },
+        "required": [
+          "type",
+          "window_days"
+        ],
+        "additionalProperties": false,
+        "description": "Distribute-owned relative buying-signal criterion (not an Apollo field). apollo-service turns it into Apollo's date filters for the current window at every call, so the audience fills continuously. Must not be combined with the Apollo field it drives."
       },
       "SearchNextResponse": {
         "type": "object",
@@ -2211,6 +2262,9 @@
               "type": "string",
               "minLength": 1
             }
+          },
+          "buying_signal": {
+            "$ref": "#/components/schemas/BuyingSignalFilter"
           }
         },
         "additionalProperties": false,
@@ -2232,6 +2286,48 @@
                 "nullable": true
               }
             ]
+          },
+          "buyingSignal": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "hiring",
+                  "job_change",
+                  "funding"
+                ]
+              },
+              "occurredOn": {
+                "type": "string",
+                "description": "Day the signal happened (YYYY-MM-DD), as Apollo recorded it.",
+                "example": "2026-09-21"
+              },
+              "fact": {
+                "type": "string",
+                "description": "One English sentence stating the signal, for the email writer to reference.",
+                "example": "Acme Clinics posted a job for Office Manager (Austin, United States) on September 21, 2026"
+              },
+              "source": {
+                "type": "string",
+                "description": "apollo:job_postings (hiring) or apollo:enrichment (funding, job_change).",
+                "example": "apollo:job_postings"
+              },
+              "sourceUrl": {
+                "type": "string",
+                "nullable": true,
+                "description": "The posting or news link when Apollo gives one."
+              }
+            },
+            "required": [
+              "type",
+              "occurredOn",
+              "fact",
+              "source",
+              "sourceUrl"
+            ],
+            "description": "The buying signal this person's audience matched (hiring / job_change / funding), with its date and a one-line fact. Present on Apollo reveals; null when the person was not served by a buying-signal audience or Apollo holds no dated evidence in the window (never invented). Hiring evidence is Apollo's job postings for the employer: 1 apollo-credit per company per 7 days, billed to this org (0 when Apollo has no postings)."
           },
           "cached": {
             "type": "boolean",
@@ -4333,6 +4429,220 @@
           "count"
         ]
       },
+      "SignalCoverageResponse": {
+        "type": "object",
+        "properties": {
+          "measuredOn": {
+            "type": "string",
+            "description": "UTC day the counts were taken (YYYY-MM-DD)."
+          },
+          "baseCount": {
+            "type": "integer",
+            "description": "Verified-email people matching the ICP with no signal."
+          },
+          "signals": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "hiring",
+                    "job_change",
+                    "funding"
+                  ]
+                },
+                "windowDays": {
+                  "type": "integer"
+                },
+                "jobTitles": {
+                  "type": "array",
+                  "nullable": true,
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "count": {
+                  "type": "integer",
+                  "description": "Verified-email people matching ICP + signal in the window."
+                }
+              },
+              "required": [
+                "type",
+                "windowDays",
+                "jobTitles",
+                "count"
+              ]
+            }
+          }
+        },
+        "required": [
+          "measuredOn",
+          "baseCount",
+          "signals"
+        ]
+      },
+      "SignalCoverageRequest": {
+        "type": "object",
+        "properties": {
+          "apolloAudienceId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The ICP: an existing apollo audience of this org whose filters are kept as-is. Exactly one of apolloAudienceId / filters."
+          },
+          "filters": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SearchFiltersRuntime"
+              },
+              {
+                "description": "The ICP as Apollo filters, when there is no audience yet. Exactly one of apolloAudienceId / filters."
+              }
+            ]
+          },
+          "windowDays": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 365
+            },
+            "minItems": 1,
+            "maxItems": 4,
+            "description": "Windows to count, in days. Default [30, 90]. The 30-day count is the signal's monthly volume.",
+            "example": [
+              30,
+              90
+            ]
+          },
+          "jobTitles": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Roles for the hiring signal. Omit to count employers hiring for any role.",
+            "example": [
+              "office manager"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreateSignalAudienceResponse": {
+        "type": "object",
+        "properties": {
+          "apolloAudienceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "filters": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            },
+            "description": "ICP filters plus the relative buying_signal. Store and forward verbatim to /search/next; the window keeps rolling."
+          },
+          "count": {
+            "type": "integer",
+            "description": "Size estimate: verified-email people matching ICP + signal in the current window. Free."
+          },
+          "window": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ]
+          }
+        },
+        "required": [
+          "apolloAudienceId",
+          "name",
+          "description",
+          "filters",
+          "count",
+          "window"
+        ]
+      },
+      "CreateSignalAudienceRequest": {
+        "type": "object",
+        "properties": {
+          "apolloAudienceId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The ICP: an existing apollo audience of this org whose filters are kept as-is. Exactly one of apolloAudienceId / filters."
+          },
+          "filters": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SearchFiltersRuntime"
+              },
+              {
+                "description": "The ICP as Apollo filters, when there is no audience yet. Exactly one of apolloAudienceId / filters."
+              }
+            ]
+          },
+          "brandId": {
+            "type": "string",
+            "description": "Brand the audience belongs to. Defaults to the base audience's brand."
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Audience name (English). Defaults to the base name plus the signal."
+          },
+          "signal": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "hiring",
+                  "job_change",
+                  "funding"
+                ]
+              },
+              "windowDays": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 365
+              },
+              "jobTitles": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "required": [
+              "type",
+              "windowDays"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "signal"
+        ],
+        "additionalProperties": false
+      },
       "AudiencePreviewResponse": {
         "type": "object",
         "properties": {
@@ -6367,6 +6677,184 @@
           },
           "500": {
             "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/audiences/signal-coverage": {
+      "post": {
+        "summary": "Measure how many people a buying signal yields for an ICP (free)",
+        "description": "Counts, for one ICP, the verified-email people matching each buying signal (hiring, job_change, funding) over each window. Free Apollo teaser counts, nothing is persisted or billed. Use it before creating a signal audience.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-run-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignalCoverageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Counts per signal and window",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignalCoverageResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Base audience not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/audiences/signal": {
+      "post": {
+        "summary": "Create an audience = ICP + one buying signal + a recency window",
+        "description": "Persists an apollo audience whose filters are the ICP plus a RELATIVE buying_signal, and returns its size estimate (free count). Served through /search/next like any audience: each day's serve walks a cohort of the signals in the current window, then only the new ones. Leads revealed through /enrich carry `buyingSignal` (type, date, one-line fact).",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-run-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSignalAudienceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The persisted signal audience and its size",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateSignalAudienceResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Base audience not found",
             "content": {
               "application/json": {
                 "schema": {

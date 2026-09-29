@@ -4,6 +4,8 @@ import { db } from "../db/index.js";
 import { apolloPeopleSearches, apolloPeopleEnrichments, apolloSearchCursors } from "../db/schema.js";
 import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
 import { gateReveal, recordRevealSkip, rememberTeaserEmployers } from "../lib/reveal-domain-gate.js";
+import { readSignalSpec, signalConflicts, BuyingSignalConflictError } from "../lib/buying-signal-spec.js";
+import { buyingSignalForEnrich, recordSignalServes, resolveSignalCohort, BuyingSignalInsufficientCreditError, type EnrichedPersonLike } from "../lib/buying-signals.js";
 import { searchPeople, enrichPerson, ApolloPerson, buildWaterfallWebhookUrl, withVerifiedEmailOnly, isBilledApolloPerson, BILLED_NO_EMAIL_CACHE_DAYS } from "../lib/apollo-client.js";
 import { providerErrorFields } from "../lib/provider-error.js";
 import { advisoryXactLock, enrichLockKey } from "../lib/advisory-lock.js";
@@ -105,6 +107,9 @@ router.post("/search/dry-run", serviceAuth, async (req: AuthenticatedRequest, re
     res.json({ totalEntries, validationErrors: [] });
   } catch (error) {
     console.error("[Apollo Service][POST /search/dry-run] ERROR:", error);
+    if (error instanceof BuyingSignalConflictError) {
+      return res.status(400).json({ type: "validation", error: error.message, fields: error.fields });
+    }
     res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
   }
 });
@@ -205,8 +210,15 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
     // Every reveal carries the verifier's verdict (additive). The person always
     // comes back — `emailVerification.deliverable` says whether to send.
     const verifyCtx = { identity, tracking, runId, source: "enrich" };
-    const reply = async (body: { enrichmentId: string | null; person: { email?: string | null } | null; cached: boolean }) =>
-      res.json({ ...body, emailVerification: await verificationFor(body.person?.email, verifyCtx) });
+    // Every revealed person also carries the buying signal its audience matched
+    // (additive, null when the person was not served by a signal cohort).
+    const reply = async (body: { enrichmentId: string | null; person: (EnrichedPersonLike & { email?: string | null }) | null; cached: boolean }) => {
+      const emailVerification = await verificationFor(body.person?.email, verifyCtx);
+      const buyingSignal = body.person
+        ? await buyingSignalForEnrich({ apolloPersonId: parsed.data!.apolloPersonId, person: body.person, ctx: { identity, runId, alertIdentity: toCreditAlertIdentity(req) } })
+        : null;
+      return res.json({ ...body, emailVerification, buyingSignal });
+    };
 
     const parsed = EnrichRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -438,6 +450,12 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
     if (error instanceof EmailVerificationError) {
       return res.status(502).json({ type: "email_verification", source: "email-verification", error: error.message });
     }
+    if (error instanceof BuyingSignalInsufficientCreditError) {
+      return res.status(402).json({ type: "credit_insufficient", source: "buying-signal", error: error.message, balance_cents: error.balanceCents, required_cents: error.requiredCents });
+    }
+    if (error instanceof BuyingSignalConflictError) {
+      return res.status(400).json({ type: "validation", error: error.message, fields: error.fields });
+    }
     res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
   }
 });
@@ -487,6 +505,10 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
       return res.status(400).json({ type: "validation", error: "Invalid request", details: parsed.error.flatten() });
     }
     const { searchParams } = parsed.data;
+    const conflicts = searchParams ? signalConflicts(searchParams as Record<string, unknown>) : [];
+    if (conflicts.length > 0) {
+      return res.status(400).json({ type: "validation", error: new BuyingSignalConflictError(conflicts).message, fields: conflicts });
+    }
 
     traceEvent(runId, { service: "apollo-service", event: "search-next-start", detail: `campaignId=${campaignId}, hasSearchParams=${!!searchParams}` }, req.headers).catch(() => {});
 
@@ -521,7 +543,11 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     let cursorTotalEntries = 0;
 
     if (searchParams) {
-      const params = searchParams as Record<string, unknown>;
+      // A buying-signal audience walks a rolling cohort pinned to a day, so a
+      // stream of new signals keeps filling it (src/lib/buying-signals.ts).
+      const params = readSignalSpec(searchParams as Record<string, unknown>)
+        ? await resolveSignalCohort(req.orgId!, campaignId, searchParams as Record<string, unknown>, new Date())
+        : (searchParams as Record<string, unknown>);
       const matched = await findCursorForParams(req.orgId!, campaignId, params);
 
       if (matched) {
@@ -675,6 +701,18 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     const people = result.people ?? [];
     // Remember each teaser's employer so /enrich can judge its mail domain before paying.
     await rememberTeaserEmployers(people);
+    // And, for a buying-signal cohort, which signal served them, so /enrich can attach its evidence.
+    const cohortSignal = readSignalSpec(cursorSearchParams);
+    if (cohortSignal && cursorId) {
+      await recordSignalServes({
+        orgId: req.orgId!,
+        brandIds,
+        campaignId,
+        cursorId,
+        spec: cohortSignal,
+        apolloPersonIds: people.map((p: ApolloPerson) => p.id),
+      });
+    }
 
     if (people.length < 1) {
       console.warn(`[Apollo Service][POST /search/next] ⚠ Apollo returned 0 people page=${currentPage} campaignId=${campaignId} runId=${runId} (cursor stays open — totalPages drives exhaustion)`);
@@ -747,6 +785,9 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     await failOpenRun(openRun, "search/next");
     if (req.runId) {
       traceEvent(req.runId, { service: "apollo-service", event: "search-next-error", detail: error instanceof Error ? error.message : "Unknown error", level: "error" }, req.headers).catch(() => {});
+    }
+    if (error instanceof BuyingSignalConflictError) {
+      return res.status(400).json({ type: "validation", error: error.message, fields: error.fields });
     }
     res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
   }

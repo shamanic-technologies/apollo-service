@@ -627,6 +627,40 @@ export async function getOrganizationById(
   return body.organization ?? null;
 }
 
+/** One job posting as Apollo's organization job-postings endpoint returns it. */
+export interface ApolloJobPosting {
+  id?: string | null;
+  title?: string | null;
+  url?: string | null;
+  city?: string | null;
+  state?: string | null;
+  country?: string | null;
+  posted_at?: string | null;
+  last_seen_at?: string | null;
+}
+
+export interface ApolloJobPostingsResponse {
+  organization_job_postings?: ApolloJobPosting[];
+  pagination?: { total_entries?: number };
+}
+
+/**
+ * Every job posting Apollo holds for one organization (one call returns them
+ * all: per_page is 10,000). Measured 2026-09-29 via credit_usage_stats: 1 lead
+ * credit per call that returns postings, 0 when the list is empty.
+ */
+export async function getOrganizationJobPostings(
+  apiKey: string,
+  organizationId: string,
+  alertIdentity?: CreditAlertIdentity
+): Promise<ApolloJobPostingsResponse> {
+  const url = `${APOLLO_API_BASE}/organizations/${encodeURIComponent(organizationId)}/job_postings`;
+  const response = await sendApolloRequest("organizations/{id}/job_postings", "Apollo job postings fetch failed", alertIdentity, () =>
+    fetchWithTimeout(url, { method: "GET", headers: { "X-Api-Key": apiKey } }),
+  );
+  return (await response.json()) as ApolloJobPostingsResponse;
+}
+
 /**
  * Enrich a single person using Apollo API
  */
