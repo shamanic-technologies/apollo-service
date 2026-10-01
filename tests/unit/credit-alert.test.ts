@@ -11,6 +11,7 @@ import {
 import { ApolloCreditsExhaustedError } from "../../src/lib/provider-error.js";
 import {
   reportApolloCreditsExhausted,
+  reportProviderCreditsExhausted,
   toCreditAlertIdentity,
   PROVIDER_CREDITS_EXHAUSTED_EVENT,
 } from "../../src/lib/credit-alert.js";
@@ -301,6 +302,19 @@ describe("Apollo credit-exhaustion staff alert", () => {
     expect(init.headers["x-run-id"]).toBe("run-1");
     expect(init.headers["x-brand-id"]).toBe("brand-1");
     expect(init.headers["x-campaign-id"]).toBe("campaign-1");
+  });
+
+  it("the same staff email names Apify when BounceVerify is out of usage", async () => {
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ results: [] }) });
+
+    reportProviderCreditsExhausted("apify", IDENTITY, { operation: "bounceverify", reason: "usage limit reached", upstreamStatus: 403, upstreamBody: "Monthly usage hard limit exceeded" });
+    await flushAlert();
+
+    const body = JSON.parse(alertCalls(fetchMock)[0][1].body);
+    expect(body.eventType).toBe("provider_credits_exhausted");
+    expect(body.metadata.provider).toBe("apify");
+    expect(body.metadata.detail).toContain("HTTP 403");
+    expect(body.metadata.detail).toContain("Monthly usage hard limit exceeded");
   });
 
   it("toCreditAlertIdentity returns undefined without an org", () => {

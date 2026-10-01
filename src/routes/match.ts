@@ -308,7 +308,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
       traceEvent(req.runId, { service: "apollo-service", event: "match-error", detail: error instanceof Error ? error.message : "Unknown error", level: "error" }, req.headers).catch(() => {});
     }
     if (error instanceof EmailVerificationError) {
-      return res.status(502).json({ type: "email_verification", source: "email-verification", error: error.message });
+      return res.status(502).json({ type: "email_verification", source: "email-verification", error: error.message, ...providerErrorFields(error) });
     }
     res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
   }

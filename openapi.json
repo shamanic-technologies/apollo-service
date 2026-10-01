@@ -189,9 +189,10 @@
           "provider": {
             "type": "string",
             "enum": [
-              "apollo"
+              "apollo",
+              "apify"
             ],
-            "description": "Upstream provider that could not serve the request"
+            "description": "Upstream provider that could not serve the request: apollo (lead credits) or apify (BounceVerify email verification, monthly usage limit)"
           },
           "code": {
             "type": "string",
