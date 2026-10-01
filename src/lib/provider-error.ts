@@ -36,12 +36,15 @@
  * belongs to the callers. This module only states the truth.
  */
 
+/** Paid providers whose exhaustion this service detects. */
+export type CreditProvider = "apollo" | "apify";
+
 /** Stable code: the provider cannot serve us because its credits are exhausted. */
 export const PROVIDER_CREDITS_EXHAUSTED = "provider_credits_exhausted" as const;
 
 export interface ProviderErrorDetail {
   /** Which upstream provider could not serve the request. */
-  provider: "apollo";
+  provider: CreditProvider;
   /** Stable machine-readable state. Switch on this, never on `message`. */
   code: typeof PROVIDER_CREDITS_EXHAUSTED;
   /**
@@ -55,6 +58,20 @@ export interface ProviderErrorDetail {
 
 const CREDITS_EXHAUSTED_MESSAGE =
   "Apollo cannot serve requests: its lead credits are exhausted. Retrying will keep failing until the Apollo plan is topped up.";
+
+/**
+ * Apify (BounceVerify email verification) is out of usage. Every reveal needs a
+ * verdict, so nothing is served until the Apify plan's limit is raised.
+ */
+export function apifyCreditsExhausted(): ProviderErrorDetail {
+  return {
+    provider: "apify",
+    code: PROVIDER_CREDITS_EXHAUSTED,
+    retryable: false,
+    message:
+      "Apify cannot verify emails: the account's monthly usage limit is reached. Retrying will keep failing until the Apify limit is raised.",
+  };
+}
 
 /**
  * Thrown by the Apollo client when a rejected Apollo response means the account
@@ -93,6 +110,12 @@ export function providerErrorFields(
 ): { providerError?: ProviderErrorDetail } {
   if (error instanceof ApolloCreditsExhaustedError) {
     return { providerError: error.providerError };
+  }
+  // Any other error that states a provider is dry carries the detail itself
+  // (EmailVerificationError when Apify is out of usage).
+  const carried = (error as { providerError?: ProviderErrorDetail } | null)?.providerError;
+  if (error instanceof Error && carried?.code === PROVIDER_CREDITS_EXHAUSTED) {
+    return { providerError: carried };
   }
   return {};
 }
