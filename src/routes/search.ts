@@ -448,7 +448,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       traceEvent(req.runId, { service: "apollo-service", event: "enrich-error", detail: error instanceof Error ? error.message : "Unknown error", level: "error" }, req.headers).catch(() => {});
     }
     if (error instanceof EmailVerificationError) {
-      return res.status(502).json({ type: "email_verification", source: "email-verification", error: error.message });
+      return res.status(502).json({ type: "email_verification", source: "email-verification", error: error.message, ...providerErrorFields(error) });
     }
     if (error instanceof BuyingSignalInsufficientCreditError) {
       return res.status(402).json({ type: "credit_insufficient", source: "buying-signal", error: error.message, balance_cents: error.balanceCents, required_cents: error.requiredCents });

@@ -32,6 +32,8 @@ import { emailVerifications, type EmailVerification } from "../db/schema.js";
 import { decryptKey, type TrackingContext } from "./keys-client.js";
 import { createRun, updateRun, addCosts, updateCostStatus, type IdentityHeaders } from "./runs-client.js";
 import { authorizeCredit } from "./billing-client.js";
+import { apifyCreditsExhausted, type ProviderErrorDetail } from "./provider-error.js";
+import { reportProviderCreditsExhausted } from "./credit-alert.js";
 
 export const VERIFY_EMAIL_COST_NAME = "apify-bounceverify-email";
 export const VERIFIER = "bounceverify";
@@ -51,10 +53,25 @@ export type EmailVerdict = "valid" | "invalid" | "catch_all" | "risky" | "unknow
 export const DELIVERABLE_VERDICTS: ReadonlySet<EmailVerdict> = new Set<EmailVerdict>(["valid"]);
 
 export class EmailVerificationError extends Error {
-  constructor(message: string) {
+  /** Set when the verifier itself is out of credits (callers read it via providerErrorFields). */
+  readonly providerError?: ProviderErrorDetail;
+  constructor(message: string, providerError?: ProviderErrorDetail) {
     super(`email verification failed: ${message}`);
     this.name = "EmailVerificationError";
+    if (providerError) this.providerError = providerError;
   }
+}
+
+/**
+ * Apify out of usage, read from the rejected response. Measured in prod
+ * 2026-09-29: 403 `{"error":{"type":"platform-feature-disabled","message":
+ * "Monthly usage hard limit exceeded"}}` for 20 hours, 4,801 failed
+ * verifications, nobody told. 402 is Apify's "not enough usage to run a paid
+ * actor". Narrow on purpose: an outage (502) or a bad token is not exhaustion.
+ */
+export function looksLikeApifyCreditExhaustion(status: number | null, body: string): boolean {
+  if (status === 402) return true;
+  return /usage hard limit|not-enough-usage|usage limit exceeded/i.test(body);
 }
 
 /** What every reveal response carries, additive, beside `person`. */
@@ -247,6 +264,15 @@ export async function verifyRevealedEmail(rawEmail: string, ctx: VerificationCon
       })
       .returning();
 
+    if (call.error && looksLikeApifyCreditExhaustion(call.httpStatus, call.error)) {
+      reportProviderCreditsExhausted("apify", { ...identity, runId: ctx.runId }, {
+        operation: "bounceverify",
+        reason: "Apify refused the email-verification actor: the account's usage limit is reached",
+        upstreamStatus: call.httpStatus ?? undefined,
+        upstreamBody: call.error,
+      });
+      throw new EmailVerificationError(call.error, apifyCreditsExhausted());
+    }
     if (call.error || verdict === null) throw new EmailVerificationError(call.error ?? "no verdict");
 
     if (billed) {
@@ -305,6 +331,7 @@ export async function verifyEmailBatch(rawEmails: string[], ctx: VerificationCon
 
   const results = new Array<EmailVerificationResult | undefined>(emails.length);
   const failures: string[] = [];
+  let providerError: ProviderErrorDetail | undefined;
   let next = 0;
   const worker = async () => {
     while (next < emails.length) {
@@ -313,13 +340,14 @@ export async function verifyEmailBatch(rawEmails: string[], ctx: VerificationCon
         results[i] = await verifyRevealedEmail(emails[i], ctx);
       } catch (err) {
         failures.push(`${emails[i]}: ${err instanceof Error ? err.message : String(err)}`);
+        if (err instanceof EmailVerificationError && err.providerError) providerError = err.providerError;
       }
     }
   };
   await Promise.all(Array.from({ length: Math.min(VERIFY_BATCH_CONCURRENCY, emails.length) }, worker));
 
   if (failures.length > 0) {
-    throw new EmailVerificationError(`${failures.length} of ${emails.length} address(es) could not be verified — ${failures.slice(0, 5).join("; ")}`);
+    throw new EmailVerificationError(`${failures.length} of ${emails.length} address(es) could not be verified — ${failures.slice(0, 5).join("; ")}`, providerError);
   }
   return results as EmailVerificationResult[];
 }

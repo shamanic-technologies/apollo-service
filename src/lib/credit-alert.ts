@@ -26,6 +26,7 @@
  */
 
 import { fetchWithRetry } from "./fetch-retry.js";
+import type { CreditProvider } from "./provider-error.js";
 
 /**
  * Event type accepted by transactional-email-service's staff-notification path
@@ -78,14 +79,14 @@ export function toCreditAlertIdentity(req: {
 }
 
 export interface CreditAlertDetail {
-  /** Which Apollo call hit the wall, e.g. "people/match". */
+  /** Which provider call hit the wall, e.g. "people/match". */
   operation: string;
-  /** Why we concluded Apollo is out of credits, in plain English. */
+  /** Why we concluded the provider is out of credits, in plain English. */
   reason: string;
-  /** Apollo's HTTP status, when the signal was a rejected request. */
-  apolloStatus?: number;
-  /** Apollo's raw response body, truncated. Absent when the signal was the sentinel email. */
-  apolloBody?: string;
+  /** The provider's HTTP status, when the signal was a rejected request. */
+  upstreamStatus?: number;
+  /** The provider's raw response body, truncated. Absent when the signal was Apollo's sentinel email. */
+  upstreamBody?: string;
 }
 
 /**
@@ -96,8 +97,8 @@ export interface CreditAlertDetail {
  */
 function buildDetail(detail: CreditAlertDetail): string {
   const parts = [`operation: ${detail.operation}`];
-  if (detail.apolloStatus !== undefined) parts.push(`HTTP ${detail.apolloStatus}`);
-  if (detail.apolloBody) parts.push(detail.apolloBody.slice(0, MAX_BODY_CHARS));
+  if (detail.upstreamStatus !== undefined) parts.push(`HTTP ${detail.upstreamStatus}`);
+  if (detail.upstreamBody) parts.push(detail.upstreamBody.slice(0, MAX_BODY_CHARS));
   return parts.join("\n");
 }
 
@@ -123,8 +124,17 @@ function buildHeaders(identity: CreditAlertIdentity): Record<string, string> {
   return headers;
 }
 
-/** Send the staff alert. Throws on any failure — the caller decides what that costs. */
+/** Send the Apollo staff alert. Throws on any failure — the caller decides what that costs. */
 export async function sendApolloCreditsExhaustedAlert(
+  identity: CreditAlertIdentity,
+  detail: CreditAlertDetail,
+): Promise<void> {
+  return sendProviderCreditsExhaustedAlert("apollo", identity, detail);
+}
+
+/** Send the staff alert for any paid provider. Throws on any failure. */
+export async function sendProviderCreditsExhaustedAlert(
+  provider: CreditProvider,
   identity: CreditAlertIdentity,
   detail: CreditAlertDetail,
 ): Promise<void> {
@@ -142,7 +152,7 @@ export async function sendApolloCreditsExhaustedAlert(
       // otherwise — a staff alert with blanks where the facts belong is not
       // actionable). `orgId` is filled in from x-org-id, so we do not send it.
       metadata: {
-        provider: "apollo",
+        provider,
         reason: detail.reason,
         detail: buildDetail(detail),
       },
@@ -172,18 +182,27 @@ export function reportApolloCreditsExhausted(
   identity: CreditAlertIdentity | undefined,
   detail: CreditAlertDetail,
 ): void {
+  reportProviderCreditsExhausted("apollo", identity, detail);
+}
+
+/** Same as reportApolloCreditsExhausted, for any paid provider (Apify: BounceVerify). */
+export function reportProviderCreditsExhausted(
+  provider: CreditProvider,
+  identity: CreditAlertIdentity | undefined,
+  detail: CreditAlertDetail,
+): void {
   if (!identity?.orgId) {
     console.warn(
-      `[apollo-service][credit-alert] Apollo credits look exhausted (${detail.operation}: ${detail.reason}) but the caller carried no org — no staff alert sent`,
+      `[apollo-service][credit-alert] ${provider} credits look exhausted (${detail.operation}: ${detail.reason}) but the caller carried no org — no staff alert sent`,
     );
     return;
   }
 
   console.warn(
-    `[apollo-service][credit-alert] Apollo credits look exhausted (${detail.operation}: ${detail.reason}) orgId=${identity.orgId} — alerting staff`,
+    `[apollo-service][credit-alert] ${provider} credits look exhausted (${detail.operation}: ${detail.reason}) orgId=${identity.orgId} — alerting staff`,
   );
 
-  void sendApolloCreditsExhaustedAlert(identity, detail).catch((err) => {
+  void sendProviderCreditsExhaustedAlert(provider, identity, detail).catch((err) => {
     console.error("[apollo-service][credit-alert] Failed to send staff alert:", err);
   });
 }

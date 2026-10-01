@@ -490,8 +490,8 @@ function reportIfCreditDenied(
     reason: statusIsTheSignal
       ? `Apollo rejected the request with HTTP ${status}`
       : `Apollo rejected the request with HTTP ${status} and an out-of-credits message`,
-    apolloStatus: status,
-    apolloBody: body,
+    upstreamStatus: status,
+    upstreamBody: body,
   });
 }
 

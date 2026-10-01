@@ -480,6 +480,13 @@ pre-serve verification moved here from human-service. `/enrich`, `/match` and
   CALLER's org. ALL OR NOTHING: one address that cannot be verified 502s the
   whole call, so a caller never holds a partial answer to send half of. Bronze
   `source` = `verify:<caller label>`.
+- **Apify out of usage raises the SAME staff email as Apollo** (`provider: "apify"`)
+  and the 502 carries `providerError` (provider `apify`). Apify answers 403
+  `platform-feature-disabled` "Monthly usage hard limit exceeded" (or 402):
+  2026-09-29 it lasted 20 hours, 4,801 verifications failed and nobody was told.
+  `looksLikeApifyCreditExhaustion` stays narrow (an outage 502 is not
+  exhaustion). Dedup is transactional-email-service's, per org per day per
+  EVENT TYPE, so an Apollo alert the same day for the same org hides the Apify one.
 - Callers of `/match` today: human-service AND journalists-service — both now
   receive the verdict and its cost. Do not make it opt-in per caller; the
   owner's rule is that no revealed email leaves unverified.

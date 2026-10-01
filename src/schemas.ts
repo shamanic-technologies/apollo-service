@@ -109,7 +109,7 @@ const VALID_EMAIL_STATUSES = [
  */
 export const ProviderErrorSchema = z
   .object({
-    provider: z.literal("apollo").describe("Upstream provider that could not serve the request"),
+    provider: z.enum(["apollo", "apify"]).describe("Upstream provider that could not serve the request: apollo (lead credits) or apify (BounceVerify email verification, monthly usage limit)"),
     code: z
       .literal("provider_credits_exhausted")
       .describe("Stable machine-readable state: the provider is out of credits"),
