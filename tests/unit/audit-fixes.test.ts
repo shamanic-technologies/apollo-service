@@ -65,7 +65,8 @@ describe("T1 — RunsServiceError", () => {
       });
     }));
 
-    const { createRun, RunsServiceError } = await import("../../src/lib/runs-client.js");
+    const { createRun, RunsServiceError, RUNS_RETRY_DELAYS_MS } = await import("../../src/lib/runs-client.js");
+    RUNS_RETRY_DELAYS_MS.fill(1); // the timeout is still thrown, after the retries
 
     await expect(
       createRun({ orgId: "o", serviceName: "apollo-service", taskName: "t" })

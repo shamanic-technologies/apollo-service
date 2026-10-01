@@ -487,6 +487,14 @@ pre-serve verification moved here from human-service. `/enrich`, `/match` and
   `looksLikeApifyCreditExhaustion` stays narrow (an outage 502 is not
   exhaustion). Dedup is transactional-email-service's, per org per day per
   EVENT TYPE, so an Apollo alert the same day for the same org hides the Apify one.
+- **A runs-service stall is retried, not surfaced (2026-10-01).** After the
+  Apify cap (09-29 13:00 → 09-30 08:50) the residual 502s were runs-service
+  10s timeouts while its pool saturated under box load. `runsRequest` retries
+  timeout / network / 5xx / 429 (`RUNS_RETRY_DELAYS_MS` 500ms, 2s); safe
+  because `createRun` and every `addCosts` item carry a generated
+  `idempotencyKey` (runs-service replays the original row) and PATCH is
+  absolute. A 4xx is never retried. Apify's own gateway 502/503/504 is retried
+  once (`APIFY_GATEWAY_RETRY_DELAY_MS`).
 - Callers of `/match` today: human-service AND journalists-service — both now
   receive the verdict and its cost. Do not make it opt-in per caller; the
   owner's rule is that no revealed email leaves unverified.
