@@ -148,7 +148,19 @@ interface ActorCall {
   durationMs: number;
 }
 
+/** Apify's own gateway answering 502/503/504 (an HTML error page, the actor
+ * never ran) is retried once after this pause before the call counts as failed. */
+export const APIFY_GATEWAY_RETRY_DELAY_MS = 1_000;
+
 async function callActor(apifyToken: string, email: string): Promise<ActorCall> {
+  const first = await callActorOnce(apifyToken, email);
+  if (first.httpStatus === null || ![502, 503, 504].includes(first.httpStatus)) return first;
+  console.warn(`[Apollo Service] verify_email.apify_gateway_retry status=${first.httpStatus}`);
+  await new Promise((resolve) => setTimeout(resolve, APIFY_GATEWAY_RETRY_DELAY_MS));
+  return callActorOnce(apifyToken, email);
+}
+
+async function callActorOnce(apifyToken: string, email: string): Promise<ActorCall> {
   const started = Date.now();
   let res: Response;
   try {

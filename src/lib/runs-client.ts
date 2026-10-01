@@ -3,11 +3,26 @@
  * Centralized run tracking and cost management
  */
 
+import { randomUUID } from "node:crypto";
 import { recordOpenedHolds, recordSettledHold } from "./cost-hold-ledger.js";
 
 const RUNS_SERVICE_URL = process.env.RUNS_SERVICE_URL || "https://runs.mcpfactory.org";
 const RUNS_SERVICE_API_KEY = process.env.RUNS_SERVICE_API_KEY || "";
 const RUNS_SERVICE_TIMEOUT_MS = Number(process.env.RUNS_SERVICE_TIMEOUT_MS) || 10_000;
+
+/**
+ * Waits before each RETRY of a runs-service call that timed out, could not
+ * connect, or answered 5xx/429. runs-service stalls for seconds at a time when
+ * its connection pool saturates under box load ("health probe exceeded 2000ms —
+ * connection pool is saturated"), and a single 10s timeout used to fail the
+ * whole request: every BounceVerify verification behind it 502'd and the
+ * transactional mailing-list release skipped the address (2026-10-01).
+ *
+ * Retrying is write-safe because every write is idempotent on the runs-service
+ * side: run creation and cost items carry an `idempotencyKey` (a replay returns
+ * the original row, never a duplicate), and PATCH sets an absolute status.
+ */
+export const RUNS_RETRY_DELAYS_MS = [500, 2_000];
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -100,6 +115,8 @@ export interface CostItem {
   costSource: "platform" | "org";
   quantity: number;
   status?: "provisioned" | "actual" | "cancelled";
+  /** runs-service per-run dedup key; generated when absent. */
+  idempotencyKey?: string;
 }
 
 export interface ListRunsParams {
@@ -154,6 +171,26 @@ async function runsRequest<T>(
   if (identity?.featureSlug) headers["x-feature-slug"] = identity.featureSlug;
   if (identity?.workflowSlug) headers["x-workflow-slug"] = identity.workflowSlug;
 
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await runsAttempt<T>(path, method, headers, body);
+    } catch (err) {
+      const retryable =
+        err instanceof RunsServiceError &&
+        (err.kind !== "http" || (err.status !== undefined && (err.status >= 500 || err.status === 429)));
+      if (!retryable || attempt >= RUNS_RETRY_DELAYS_MS.length) throw err;
+      console.warn(`[Apollo Service] runs-service retry ${attempt + 1}/${RUNS_RETRY_DELAYS_MS.length}: ${(err as Error).message}`);
+      await new Promise((resolve) => setTimeout(resolve, RUNS_RETRY_DELAYS_MS[attempt]));
+    }
+  }
+}
+
+async function runsAttempt<T>(
+  path: string,
+  method: string,
+  headers: Record<string, string>,
+  body: unknown
+): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), RUNS_SERVICE_TIMEOUT_MS);
 
@@ -222,6 +259,9 @@ export async function createRun(params: CreateRunParams): Promise<Run> {
       serviceName: params.serviceName,
       taskName: params.taskName,
       workflowSlug: params.workflowSlug,
+      // One key per logical create: a retry after a lost answer returns the
+      // run already created instead of opening a second one.
+      idempotencyKey: `apollo-service:run:${randomUUID()}`,
     },
   });
 }
@@ -254,7 +294,9 @@ export async function addCosts(
   const result = await runsRequest<{ costs: RunCost[] }>(`/v1/runs/${runId}/costs`, {
     method: "POST",
     identity: { ...identity, runId },
-    body: { items },
+    // Per-item key so a retry after a lost answer replays the rows already
+    // written instead of declaring the cost twice.
+    body: { items: items.map((i) => ({ ...i, idempotencyKey: i.idempotencyKey ?? `apollo-service:cost:${randomUUID()}` })) },
   });
   if (items.some((i) => i.status === "provisioned")) {
     const opened = (result.costs ?? []).filter((c) => c.status === "provisioned");
