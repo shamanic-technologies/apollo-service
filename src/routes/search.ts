@@ -4,7 +4,9 @@ import { db } from "../db/index.js";
 import { apolloPeopleSearches, apolloPeopleEnrichments, apolloSearchCursors } from "../db/schema.js";
 import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
 import { gateReveal, recordRevealSkip, rememberTeaserEmployers } from "../lib/reveal-domain-gate.js";
-import { readSignalSpec, signalConflicts, BuyingSignalConflictError } from "../lib/buying-signal-spec.js";
+import { readSignalSpec, signalConflicts, BuyingSignalConflictError, SignalNotApolloSearchableError } from "../lib/buying-signal-spec.js";
+import { serveLinkedinEngagers, filtersBesideEngagement, findServed, loadProfile, evidenceFor, LinkedinEngagementInsufficientCreditError } from "../lib/linkedin-engagement.js";
+import { parseLinkedinPersonId, linkedinEngagerToPerson, domainOf } from "../lib/linkedin-engagement-spec.js";
 import { buyingSignalForEnrich, recordSignalServes, resolveSignalCohort, BuyingSignalInsufficientCreditError, type EnrichedPersonLike } from "../lib/buying-signals.js";
 import { searchPeople, enrichPerson, ApolloPerson, buildWaterfallWebhookUrl, withVerifiedEmailOnly, isBilledApolloPerson, BILLED_NO_EMAIL_CACHE_DAYS } from "../lib/apollo-client.js";
 import { providerErrorFields } from "../lib/provider-error.js";
@@ -19,7 +21,7 @@ import { buildFiltersPrompt, computeFiltersPromptVersion, APOLLO_UNDOCUMENTED_FI
 import { traceEvent } from "../lib/trace-event.js";
 import { verificationFor, EmailVerificationError } from "../lib/email-verification.js";
 import { toCreditAlertIdentity } from "../lib/credit-alert.js";
-import { planQuickenrich, parseQuickenrichPersonId, quickenrichToPerson } from "../lib/quickenrich.js";
+import { planQuickenrich, parseQuickenrichPersonId, quickenrichToPerson, canonicalLinkedinUrl } from "../lib/quickenrich.js";
 import { findQuickenrichAudience, serveQuickenrichPage, loadQuickenrichPerson } from "../lib/quickenrich-serve.js";
 import { executeEmailFind } from "../lib/email-find-run.js";
 // Waterfall disabled 2026-05-28 — see src/lib/waterfall.ts header for revive.
@@ -109,6 +111,9 @@ router.post("/search/dry-run", serviceAuth, async (req: AuthenticatedRequest, re
     console.error("[Apollo Service][POST /search/dry-run] ERROR:", error);
     if (error instanceof BuyingSignalConflictError) {
       return res.status(400).json({ type: "validation", error: error.message, fields: error.fields });
+    }
+    if (error instanceof SignalNotApolloSearchableError) {
+      return res.status(400).json({ totalEntries: 0, validationErrors: [error.message] });
     }
     res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
   }
@@ -227,6 +232,47 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
     const { apolloPersonId } = parsed.data;
 
     traceEvent(runId, { service: "apollo-service", event: "enrich-start", detail: `apolloPersonId=${apolloPersonId}` }, req.headers).catch(() => {});
+
+    // A `li:<profileId>` person is a competitor-post engager served by a
+    // linkedin_engagement audience: its public profile, name and employer are
+    // in silver, so the email is found with treg and verified like every reveal.
+    const linkedinProfileId = parseLinkedinPersonId(apolloPersonId);
+    if (linkedinProfileId) {
+      const serve = await findServed(req.orgId!, linkedinProfileId);
+      const profile = serve ? await loadProfile(linkedinProfileId) : null;
+      if (!serve || !profile) {
+        return res.status(404).json({ type: "not_found", error: `LinkedIn engager ${apolloPersonId} was never served to this org by /search/next` });
+      }
+      const found = await executeEmailFind(
+        { orgId: req.orgId!, userId: req.userId, runId, brandIds, campaignId, audienceId, featureSlug, workflowSlug, headers: req.headers, callerPath: "/enrich" },
+        "treg",
+        undefined,
+        {
+          linkedinUrl: profile.linkedinUrl ?? undefined,
+          firstName: profile.firstName ?? undefined,
+          lastName: profile.lastName ?? undefined,
+          domain: domainOf(profile.companyWebsite) ?? undefined,
+        }
+      );
+      if (found.status !== 200 && found.status !== 202) {
+        return res.status(found.status).json(found.body);
+      }
+      const finding = found.body as { findingId: string; status: string; email: string | null; mailboxStatus: string | null; reused: boolean; emailVerification: unknown };
+      // Only a found address is served; not_found and a still-running treg child
+      // come back as the person with no email, like a reveal that yields none.
+      const email = finding.status === "found" ? finding.email : null;
+      const buyingSignal = await evidenceFor(linkedinProfileId, serve.signal as never, serve.servedAt);
+      traceEvent(runId, { service: "apollo-service", event: "enrich-done", detail: `source=linkedin_engagement, findingId=${finding.findingId}, status=${finding.status}, reused=${finding.reused}` }, req.headers).catch(() => {});
+      return res.json({
+        enrichmentId: null,
+        person: linkedinEngagerToPerson(profile, canonicalLinkedinUrl, { email, emailStatus: email ? finding.mailboxStatus : null }),
+        cached: finding.reused,
+        emailVerification: email ? finding.emailVerification : null,
+        buyingSignal,
+        source: "linkedin_engagement",
+        findingId: finding.findingId,
+      });
+    }
 
     // A `qe:<emp_id>` person came from the QuickEnrich serve path: its identity
     // (full name, LinkedIn, company domain) is already known, so the email is
@@ -453,6 +499,9 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
     if (error instanceof BuyingSignalInsufficientCreditError) {
       return res.status(402).json({ type: "credit_insufficient", source: "buying-signal", error: error.message, balance_cents: error.balanceCents, required_cents: error.requiredCents });
     }
+    if (error instanceof LinkedinEngagementInsufficientCreditError) {
+      return res.status(402).json({ type: "credit_insufficient", source: "linkedin-engagement", error: error.message, balance_cents: error.balanceCents, required_cents: error.requiredCents });
+    }
     if (error instanceof BuyingSignalConflictError) {
       return res.status(400).json({ type: "validation", error: error.message, fields: error.fields });
     }
@@ -509,6 +558,13 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     if (conflicts.length > 0) {
       return res.status(400).json({ type: "validation", error: new BuyingSignalConflictError(conflicts).message, fields: conflicts });
     }
+    const requestedSignal = searchParams ? readSignalSpec(searchParams as Record<string, unknown>) : null;
+    if (requestedSignal?.type === "linkedin_engagement") {
+      const beside = filtersBesideEngagement(searchParams as Record<string, unknown>);
+      if (beside.length > 0) {
+        return res.status(400).json({ type: "validation", error: `Apollo filters cannot be combined with the linkedin_engagement signal (its people are LinkedIn engagers, not an Apollo search): ${beside.join(", ")}`, fields: beside });
+      }
+    }
 
     traceEvent(runId, { service: "apollo-service", event: "search-next-start", detail: `campaignId=${campaignId}, hasSearchParams=${!!searchParams}` }, req.headers).catch(() => {});
 
@@ -545,7 +601,8 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     if (searchParams) {
       // A buying-signal audience walks a rolling cohort pinned to a day, so a
       // stream of new signals keeps filling it (src/lib/buying-signals.ts).
-      const params = readSignalSpec(searchParams as Record<string, unknown>)
+      // linkedin_engagement is not a cohort walk: it keeps its own per-audience serve record.
+      const params = requestedSignal && requestedSignal.type !== "linkedin_engagement"
         ? await resolveSignalCohort(req.orgId!, campaignId, searchParams as Record<string, unknown>, new Date())
         : (searchParams as Record<string, unknown>);
       const matched = await findCursorForParams(req.orgId!, campaignId, params);
@@ -620,6 +677,31 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
       currentPage = resume.currentPage;
       isExhausted = resume.exhausted;
       cursorTotalEntries = resume.totalEntries;
+    }
+
+    // A linkedin_engagement audience is served from competitor post engagers,
+    // never from Apollo (src/lib/linkedin-engagement.ts). Its own serve record
+    // decides exhaustion, so the cursor's flag only mirrors it.
+    const engagementSignal = readSignalSpec(cursorSearchParams);
+    if (engagementSignal?.type === "linkedin_engagement" && cursorId) {
+      const served = await serveLinkedinEngagers({
+        ctx: { identity, userId: req.userId!, runId, tracking, callerPath: "/search/next" },
+        campaignId,
+        spec: engagementSignal,
+      });
+      await db.update(apolloSearchCursors).set({ exhausted: served.done, totalEntries: served.poolSize, updatedAt: new Date() }).where(eq(apolloSearchCursors.id, cursorId));
+      traceEvent(runId, { service: "apollo-service", event: "linkedin-engagement-page", detail: `served=${served.people.length}, considered=${served.considered}, excluded=${served.excluded}, unresolvable=${served.unresolvable}, pool=${served.poolSize}, calls=${served.calls}, chargedMicro=${served.chargedMicro}, done=${served.done}` }, req.headers).catch(() => {});
+      await updateRun(searchRun.id, "completed", identity);
+      openRun = null;
+      return res.json({
+        people: served.people,
+        done: served.done,
+        totalEntries: served.poolSize,
+        page: 1,
+        totalPages: 1,
+        hasMore: !served.done,
+        source: "linkedin_engagement",
+      });
     }
 
     // QuickEnrich first, for an audience switched to it: a FREE search whose
@@ -785,6 +867,9 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     await failOpenRun(openRun, "search/next");
     if (req.runId) {
       traceEvent(req.runId, { service: "apollo-service", event: "search-next-error", detail: error instanceof Error ? error.message : "Unknown error", level: "error" }, req.headers).catch(() => {});
+    }
+    if (error instanceof LinkedinEngagementInsufficientCreditError) {
+      return res.status(402).json({ type: "credit_insufficient", source: "linkedin-engagement", error: error.message, balance_cents: error.balanceCents, required_cents: error.requiredCents });
     }
     if (error instanceof BuyingSignalConflictError) {
       return res.status(400).json({ type: "validation", error: error.message, fields: error.fields });

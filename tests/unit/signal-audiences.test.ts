@@ -135,4 +135,28 @@ describe("POST /audiences/signal", () => {
     expect(res.body.fields).toEqual(["latest_funding_date_range"]);
     expect(state.inserted).toHaveLength(0);
   });
+
+  it("linkedin_engagement: persists the criterion with no Apollo call; size null until the first serve", async () => {
+    const res = await request(await app())
+      .post("/audiences/signal")
+      .set(H)
+      .send({ filters: {}, signal: { type: "linkedin_engagement", windowDays: 30, competitorPages: ["https://www.linkedin.com/company/Lemlist"] } })
+      .expect(200);
+    expect(res.body.filters).toEqual({ buying_signal: { type: "linkedin_engagement", window_days: 30, competitor_pages: ["https://www.linkedin.com/company/lemlist/"] } });
+    expect(res.body.count).toBeNull();
+    expect(res.body.name).toBe("Engaged with competitor posts (lemlist, last 30 days)");
+    expect(mockSearchPeople).not.toHaveBeenCalled();
+    expect(state.inserted[0]).toMatchObject({ filters: res.body.filters });
+  });
+
+  it("linkedin_engagement: no pages, a non-company URL, or Apollo filters beside it are named 400s", async () => {
+    const a = await app();
+    const none = await request(a).post("/audiences/signal").set(H).send({ filters: {}, signal: { type: "linkedin_engagement", windowDays: 30 } }).expect(400);
+    expect(none.body.fields).toEqual(["signal.competitorPages"]);
+    await request(a).post("/audiences/signal").set(H).send({ filters: {}, signal: { type: "linkedin_engagement", windowDays: 30, competitorPages: ["https://lemlist.com"] } }).expect(400);
+    const beside = await request(a).post("/audiences/signal").set(H).send({ filters: ICP, signal: { type: "linkedin_engagement", windowDays: 30, competitorPages: ["https://www.linkedin.com/company/lemlist/"] } }).expect(400);
+    expect(beside.body.fields).toEqual(["person_titles", "person_locations", "organization_num_employees_ranges"]);
+    await request(a).post("/audiences/signal").set(H).send({ filters: ICP, signal: { type: "funding", windowDays: 30, competitorPages: ["https://www.linkedin.com/company/lemlist/"] } }).expect(400);
+    expect(state.inserted).toHaveLength(0);
+  });
 });

@@ -152,6 +152,12 @@ export const TABLE_MOVES: TableMove[] = [
     where: (ids) => sql`org_id = ${ids.sourceOrgId} AND ${soloBrand("brand_ids", ids.sourceBrandId)}`,
   },
   {
+    // Which competitor-post engagers a linkedin_engagement audience considered for the brand.
+    tableName: "linkedin_engagement_serves",
+    brandColumn: "brand_ids",
+    where: (ids) => sql`org_id = ${ids.sourceOrgId} AND ${soloBrand("brand_ids", ids.sourceBrandId)}`,
+  },
+  {
     tableName: "apollo_people_enrichments",
     brandColumn: "brand_ids",
     where: (ids) => sql`org_id = ${ids.sourceOrgId} AND ${soloBrand("brand_ids", ids.sourceBrandId)}`,
