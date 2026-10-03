@@ -86,7 +86,7 @@ export const ENGAGEMENT_PAGE_SIZE = 100;
  * a fuller page means fewer round trips). Resolved PROFILE_CONCURRENCY at a time.
  */
 export const MAX_PROFILE_LOOKUPS_PER_CALL = 20;
-export const PROFILE_CONCURRENCY = 10;
+export const PROFILE_CONCURRENCY = 5;
 /** Posts whose engagement is read at once (each holds a DB transaction: the pool is 10). */
 export const HARVEST_CONCURRENCY = 3;
 /**
@@ -99,6 +99,12 @@ export const PROFILE_ROUTE_EXCLUDE = "anyapi";
 /** Harvest stops starting new calls past this; the next serve resumes (done stays false). */
 export const HARVEST_BUDGET_MS = 25_000;
 const CALL_TIMEOUT_MS = 60_000;
+/**
+ * A profile lookup answers in ~2s; the slow ones are treg walking past a
+ * rate-limited child (up to ~28s). Past this the lookup is a transient failure
+ * for THAT engager, not for the page.
+ */
+export const PROFILE_CALL_TIMEOUT_MS = 30_000;
 
 /** Run `fn` over `items`, at most `limit` at once; stops starting new ones after a failure and rethrows the first. */
 export async function mapPool<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
@@ -118,6 +124,18 @@ export async function mapPool<T, R>(items: T[], limit: number, fn: (item: T, ind
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
   return results;
+}
+
+/**
+ * A failure that says nothing about the engager (timeout, network, rate limit,
+ * provider 5xx): the person is released for a later serve, never recorded as
+ * unreadable. 10 concurrent lookups drew fetchinio 429s on 2026-10-03.
+ */
+export class LinkedinTregTransientError extends Error {
+  constructor(message: string) {
+    super(`linkedin engagement: ${message}`);
+    this.name = "LinkedinTregTransientError";
+  }
 }
 
 export class LinkedinEngagementInsufficientCreditError extends Error {
@@ -195,6 +213,17 @@ export function isRoutedMiss(answer: TregAnswer): boolean {
 }
 
 /**
+ * A child that ERRORED (429, 5xx, timeout) never answered for this person, so a
+ * route_failed carrying one is not "nobody has this" even when the others
+ * missed: fetchinio, the only child that reads opaque reactor URLs, was
+ * rate-limited and the rest missed (2026-10-03).
+ */
+export function routeHadChildError(answer: TregAnswer): boolean {
+  const detail = (answer.body as { detail?: { tried?: Array<{ outcome?: unknown }> } } | null)?.detail;
+  return Array.isArray(detail?.tried) && detail!.tried!.some((t) => t?.outcome === "error");
+}
+
+/**
  * One child run per request, created on the first paid call. Every call:
  * provision its ceiling, authorize it (platform key), call, write bronze,
  * post the real charge, cancel the hold.
@@ -252,7 +281,7 @@ export class EngagementMeter {
     });
   }
 
-  async call(endpoint: string, req: { method: "GET" | "POST"; body?: Record<string, unknown>; query?: Record<string, string>; maxMicro: number; routed: boolean; exclude?: string }): Promise<TregAnswer> {
+  async call(endpoint: string, req: { method: "GET" | "POST"; body?: Record<string, unknown>; query?: Record<string, string>; maxMicro: number; routed: boolean; exclude?: string; timeoutMs?: number }): Promise<TregAnswer> {
     const { identity } = this.ctx;
     const keys = await this.resolveKeys();
     const runId = await this.ensureRun();
@@ -295,11 +324,11 @@ export class EngagementMeter {
     try {
       let response: Response;
       try {
-        response = await fetch(url, { method: req.method, headers, body: req.body ? JSON.stringify(req.body) : undefined, signal: AbortSignal.timeout(CALL_TIMEOUT_MS) });
+        response = await fetch(url, { method: req.method, headers, body: req.body ? JSON.stringify(req.body) : undefined, signal: AbortSignal.timeout(req.timeoutMs ?? CALL_TIMEOUT_MS) });
       } catch (err) {
         // The call may have reached treg and been billed: the hold stays for the reconciler.
         error = err instanceof Error ? err.message : String(err);
-        throw new LinkedinTregError(`${endpoint} call failed: ${error}`);
+        throw new LinkedinTregTransientError(`${endpoint} call failed: ${error}`);
       }
       status = response.status;
       responseHeaders = headersToObject(response.headers);
@@ -555,14 +584,18 @@ async function resolveProfile(meter: EngagementMeter, profileId: string, now: Da
   const candidatesUrls = urls.map((u) => u.url!).filter(Boolean);
   const url = candidatesUrls.find((u) => isPublicProfileUrl(u)) ?? candidatesUrls[0] ?? `https://www.linkedin.com/in/${profileId}`;
 
-  const answer = await meter.call(PROFILE_ENDPOINT, { method: "POST", body: { linkedin_url: url }, maxMicro: PROFILE_MAX_MICRO, routed: true, exclude: PROFILE_ROUTE_EXCLUDE });
+  const answer = await meter.call(PROFILE_ENDPOINT, { method: "POST", body: { linkedin_url: url }, maxMicro: PROFILE_MAX_MICRO, routed: true, exclude: PROFILE_ROUTE_EXCLUDE, timeoutMs: PROFILE_CALL_TIMEOUT_MS });
   let profile: ResolvedProfile | null = null;
   let raw: unknown = null;
   if (answer.status === 200) {
     const output = (answer.body?.output ?? null) as Record<string, unknown> | null;
     raw = answer.body?.raw ?? null;
     profile = toResolvedProfile(profileId, output, raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null);
-  } else if (!isRoutedMiss(answer)) {
+  } else if (isRoutedMiss(answer) && !routeHadChildError(answer)) {
+    // every child answered and none has this person: a real not_found
+  } else if (answer.status === 429 || answer.status >= 500) {
+    throw new LinkedinTregTransientError(`${PROFILE_ENDPOINT} HTTP ${answer.status}: ${JSON.stringify(answer.body).slice(0, 400)}`);
+  } else {
     throw failure(PROFILE_ENDPOINT, answer);
   }
   const { profileId: _id, ...facts } = profile ?? { profileId };
@@ -586,6 +619,8 @@ export interface EngagementServeResult {
   considered: number;
   excluded: number;
   unresolvable: number;
+  /** Lookups that failed transiently: released, retried by a later serve. */
+  deferred: number;
   calls: number;
   chargedMicro: number;
 }
@@ -612,7 +647,7 @@ export async function serveLinkedinEngagers(args: {
   const pages = competitorPagesOf(args.spec);
   const audienceKey = audienceKeyOf(identity.audienceId, args.campaignId);
   const meter = new EngagementMeter(args.ctx);
-  const result: EngagementServeResult = { people: [], done: false, poolSize: 0, considered: 0, excluded: 0, unresolvable: 0, calls: 0, chargedMicro: 0 };
+  const result: EngagementServeResult = { people: [], done: false, poolSize: 0, considered: 0, excluded: 0, unresolvable: 0, deferred: 0, calls: 0, chargedMicro: 0 };
   let ok = false;
   try {
     const harvested = await harvest(meter, pages, args.spec, now, Date.now() + HARVEST_BUDGET_MS);
@@ -636,8 +671,19 @@ export async function serveLinkedinEngagers(args: {
     }
     result.considered = claims.length;
 
+    const transient: Error[] = [];
     const screened = await mapPool(claims, PROFILE_CONCURRENCY, async (claim) => {
-      const profile = await resolveProfile(meter, claim.profileId, now);
+      let profile: ResolvedProfile | null;
+      try {
+        profile = await resolveProfile(meter, claim.profileId, now);
+      } catch (err) {
+        if (!(err instanceof LinkedinTregTransientError)) throw err;
+        // Nothing learned about this person: release the claim so a later serve retries them.
+        await db.delete(linkedinEngagementServes).where(eq(linkedinEngagementServes.id, claim.id));
+        console.warn(`[Apollo Service][linkedin-engagement] deferred profile=${claim.profileId} audience=${audienceKey}: ${err.message}`);
+        transient.push(err);
+        return { verdict: "deferred", profile: null };
+      }
       const verdict = !profile || !isPublicProfileUrl(profile.linkedinUrl) ? "unresolvable" : prospectRejection(profile, pages) ? "excluded" : "served";
       if (verdict !== "served") {
         await db
@@ -650,6 +696,7 @@ export async function serveLinkedinEngagers(args: {
 
     const failed = screened.find((r) => r?.status === "rejected") as PromiseRejectedResult | undefined;
     if (failed) {
+      // "deferred" claims are already gone.
       const release = claims.filter((_, i) => screened[i]?.status !== "fulfilled" || (screened[i] as PromiseFulfilledResult<{ verdict: string }>).value.verdict === "served");
       if (release.length > 0) await db.delete(linkedinEngagementServes).where(inArray(linkedinEngagementServes.id, release.map((c) => c.id)));
       throw failed.reason;
@@ -662,8 +709,11 @@ export async function serveLinkedinEngagers(args: {
         servedIds.push(claims[i].id);
         result.people.push(linkedinEngagerToPerson(profile!, canonicalLinkedinUrl));
       } else if (verdict === "excluded") result.excluded++;
+      else if (verdict === "deferred") result.deferred++;
       else result.unresolvable++;
     });
+    // A page that could serve nobody BECAUSE lookups failed is a failure, not an empty page.
+    if (result.people.length === 0 && transient.length > 0) throw transient[0];
     if (servedIds.length > 0) {
       await db.update(linkedinEngagementServes).set({ status: "served", reason: null, servedAt: new Date() }).where(inArray(linkedinEngagementServes.id, servedIds));
     }
