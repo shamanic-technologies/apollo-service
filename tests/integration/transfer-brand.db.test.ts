@@ -32,6 +32,7 @@ const TABLES = [
   "cost_holds",
   "apollo_people_searches",
   "apollo_signal_serves",
+  "linkedin_engagement_serves",
   "apollo_people_enrichments",
   "apollo_search_cursors",
   "apollo_audiences",
@@ -174,6 +175,17 @@ describe.skipIf(!DB_URL)("transfer-brand on a real database", () => {
         signal: { type: "hiring", window_days: 30, as_of: "2026-09-29" },
       });
     }
+    for (const [label, org, brands, camp] of [
+      ["A", S, [A], "camp-a"],
+      ["B", S, [B], "camp-b"],
+      ["AB", S, [A, B], "camp-ab"],
+      ["A_other_org", O, [A], "camp-o"],
+    ] as const) {
+      await ins("linkedin_engagement_serves", label, {
+        org_id: org, brand_ids: brands, campaign_id: camp, audience_key: `campaign:${camp}`, profile_id: `li-${label}`, status: "served",
+        signal: { type: "linkedin_engagement", window_days: 30, competitor_pages: ["https://www.linkedin.com/company/lemlist/"] },
+      });
+    }
     await ins("quickenrich_searches", "A_by_cursor", { org_id: S, cursor_id: cur("A"), campaign_id: "x1", request_body: {} });
     await ins("quickenrich_searches", "A_by_audience", { org_id: S, apollo_audience_id: aud("A"), campaign_id: "x2", request_body: {} });
     await ins("quickenrich_searches", "A_by_campaign", { org_id: S, campaign_id: "camp-a2", request_body: {} });
@@ -190,6 +202,7 @@ describe.skipIf(!DB_URL)("transfer-brand on a real database", () => {
     reveal_skips: ["A", "A_by_campaign"],
     cost_holds: ["A", "A_by_campaign"],
     apollo_signal_serves: ["A"],
+    linkedin_engagement_serves: ["A"],
     apollo_people_searches: ["A"],
     apollo_people_enrichments: ["A", "A2"],
     apollo_search_cursors: ["A"],

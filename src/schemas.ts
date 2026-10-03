@@ -567,18 +567,30 @@ const LegacySearchFilterAliasesSchema = z.object({
 // filters once and forwards them verbatim, and the window keeps rolling. Kept
 // OUT of ApolloNativeSearchFiltersSchema so the refine loop and
 // /search/filters-prompt never offer it — a signal audience is a staff choice.
-export const BUYING_SIGNAL_TYPES = ["hiring", "job_change", "funding"] as const;
+export const APOLLO_BUYING_SIGNAL_TYPES = ["hiring", "job_change", "funding"] as const;
+// linkedin_engagement is served from competitor LinkedIn post engagement, not
+// from Apollo (src/lib/linkedin-engagement.ts).
+export const BUYING_SIGNAL_TYPES = [...APOLLO_BUYING_SIGNAL_TYPES, "linkedin_engagement"] as const;
+const LINKEDIN_COMPANY_PAGE_RE = /^(?:https?:\/\/)?(?:[a-z]{2,3}\.)?linkedin\.com\/(company|showcase)\/[^/?#\s]+\/?(?:[?#].*)?$/i;
+const CompetitorPagesSchema = z
+  .array(z.string().regex(LINKEDIN_COMPANY_PAGE_RE, "must be a LinkedIn company page URL (https://www.linkedin.com/company/<slug>/)"))
+  .min(1)
+  .max(3);
 const IsoDaySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD");
 
 export const BuyingSignalFilterSchema = z
   .object({
     type: z.enum(BUYING_SIGNAL_TYPES).openapi({
       description:
-        "hiring = the employer posted a job in the window (Apollo organization_job_posted_at_range, optionally narrowed by job_titles); job_change = the person started their current title in the window (Apollo person_days_in_current_title_range); funding = the employer's latest funding round falls in the window (Apollo latest_funding_date_range).",
+        "hiring = the employer posted a job in the window (Apollo organization_job_posted_at_range, optionally narrowed by job_titles); job_change = the person started their current title in the window (Apollo person_days_in_current_title_range); funding = the employer's latest funding round falls in the window (Apollo latest_funding_date_range); linkedin_engagement = the person reacted to or commented on a post of one of competitor_pages published in the window (NOT an Apollo search: served from LinkedIn engagement, each person's email found and verified on /enrich).",
     }),
     window_days: z.number().int().min(1).max(365).openapi({
-      description: "Recency window in days, counted back from the day the audience is served (rolling).",
+      description: "Recency window in days, counted back from the day the audience is served (rolling). linkedin_engagement: the age of the competitor posts whose engagers are served.",
       example: 30,
+    }),
+    competitor_pages: CompetitorPagesSchema.optional().openapi({
+      description: "linkedin_engagement only (required there): 1-3 competitor LinkedIn company page URLs whose post engagers are the audience.",
+      example: ["https://www.linkedin.com/company/lemlist/"],
     }),
     job_titles: z.array(z.string().min(1)).optional().openapi({
       description: "hiring only: roles the employer is hiring for (Apollo q_organization_job_titles). Omit for any role.",
@@ -595,6 +607,12 @@ export const BuyingSignalFilterSchema = z
   .superRefine((v, ctx) => {
     if (v.job_titles && v.type !== "hiring") {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["job_titles"], message: "job_titles is only valid for type=hiring" });
+    }
+    if (v.type === "linkedin_engagement" && !v.competitor_pages) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["competitor_pages"], message: "competitor_pages (1-3 LinkedIn company page URLs) is required for type=linkedin_engagement" });
+    }
+    if (v.competitor_pages && v.type !== "linkedin_engagement") {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["competitor_pages"], message: "competitor_pages is only valid for type=linkedin_engagement" });
     }
   })
   .openapi("BuyingSignalFilter");
@@ -721,8 +739,8 @@ const SearchNextResponseSchema = z
     page: z.number().openapi({ description: "The page number just fetched (1-based)." }),
     totalPages: z.number().openapi({ description: "Total pages for this filter set's pool, clamped to Apollo's reachable window (500). exhaustion happens when the next page would exceed this." }),
     hasMore: z.boolean().openapi({ description: "Convenience inverse of done — true when more pages remain to fetch for this filter set." }),
-    source: z.literal("quickenrich").optional().openapi({
-      description: "Present only when this page came from the FREE QuickEnrich search (the audience is switched to quickenrich). Those people carry an id `qe:<emp_id>`, their full name, LinkedIn URL and company domain; POST /enrich with that id finds the email with treg and verifies it. Absent = the Apollo walk, unchanged.",
+    source: z.enum(["quickenrich", "linkedin_engagement"]).optional().openapi({
+      description: "quickenrich: this page came from the FREE QuickEnrich search (the audience is switched to quickenrich); those people carry an id `qe:<emp_id>`, their full name, LinkedIn URL and company domain. linkedin_engagement: the filters carry a linkedin_engagement buying_signal; up to 5 engagers of the competitor pages per call, each with an id `li:<profileId>`, full name, title, headline, employer and LinkedIn URL, never the same person twice for the audience (x-audience-id, else the campaign), competitor employees excluded; done=true only once nobody is left. For both, POST /enrich with that id finds the email with treg and verifies it. Absent = the Apollo walk, unchanged.",
     }),
   })
   .openapi("SearchNextResponse", {
@@ -791,12 +809,24 @@ export const EmailVerificationSchema = EmailVerificationObjectSchema
 export const BuyingSignalEvidenceSchema = z
   .object({
     type: z.enum(BUYING_SIGNAL_TYPES),
+    engagement: z
+      .object({
+        competitorPage: z.string(),
+        postUrl: z.string().nullable(),
+        postPublishedOn: z.string().nullable().openapi({ description: "Approximate (LinkedIn gives a relative age)." }),
+        kind: z.enum(["reaction", "comment"]),
+        reactionType: z.string().nullable(),
+        commentText: z.string().nullable(),
+        commentedAt: z.string().nullable(),
+      })
+      .optional()
+      .openapi({ description: "linkedin_engagement only: which competitor post, reaction or comment, and when. A reaction carries no date of its own: occurredOn is then the post's (approximate) publication day." }),
     occurredOn: z.string().openapi({ description: "Day the signal happened (YYYY-MM-DD), as Apollo recorded it.", example: "2026-09-21" }),
     fact: z.string().openapi({
       description: "One English sentence stating the signal, for the email writer to reference.",
       example: "Acme Clinics posted a job for Office Manager (Austin, United States) on September 21, 2026",
     }),
-    source: z.string().openapi({ description: "apollo:job_postings (hiring) or apollo:enrichment (funding, job_change).", example: "apollo:job_postings" }),
+    source: z.string().openapi({ description: "apollo:job_postings (hiring), apollo:enrichment (funding, job_change) or linkedin:company/<slug> (linkedin_engagement).", example: "apollo:job_postings" }),
     sourceUrl: z.string().nullable().openapi({ description: "The posting or news link when Apollo gives one." }),
   })
   .openapi("BuyingSignalEvidence");
@@ -1636,7 +1666,7 @@ const SignalCoverageResponseSchema = z
     baseCount: z.number().int().openapi({ description: "Verified-email people matching the ICP with no signal." }),
     signals: z.array(
       z.object({
-        type: z.enum(BUYING_SIGNAL_TYPES),
+        type: z.enum(APOLLO_BUYING_SIGNAL_TYPES),
         windowDays: z.number().int(),
         jobTitles: z.array(z.string()).nullable(),
         count: z.number().int().openapi({ description: "Verified-email people matching ICP + signal in the window." }),
@@ -1655,6 +1685,9 @@ export const CreateSignalAudienceRequestSchema = SignalBaseSchema.extend({
       type: z.enum(BUYING_SIGNAL_TYPES),
       windowDays: z.number().int().min(1).max(365),
       jobTitles: z.array(z.string().min(1)).optional(),
+      competitorPages: CompetitorPagesSchema.optional().openapi({
+        description: "linkedin_engagement only (required there): 1-3 competitor LinkedIn company page URLs. The base must then be inline `filters: {}`: Apollo filters cannot be enforced on LinkedIn engagers.",
+      }),
     })
     .strict(),
 })
@@ -1668,7 +1701,7 @@ const CreateSignalAudienceResponseSchema = z
     name: z.string(),
     description: z.string(),
     filters: z.record(z.string(), z.unknown()).openapi({ description: "ICP filters plus the relative buying_signal. Store and forward verbatim to /search/next; the window keeps rolling." }),
-    count: z.number().int().openapi({ description: "Size estimate: verified-email people matching ICP + signal in the current window. Free." }),
+    count: z.number().int().nullable().openapi({ description: "Size estimate: verified-email people matching ICP + signal in the current window. Free. null for linkedin_engagement (its pool is only known once the competitor posts are read, a paid step done on the first serve)." }),
     window: z.object({ from: z.string(), to: z.string() }),
   })
   .openapi("CreateSignalAudienceResponse");
