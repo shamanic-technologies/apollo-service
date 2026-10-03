@@ -413,6 +413,12 @@ window. `src/lib/linkedin-engagement-spec.ts` (pure) + `src/lib/linkedin-engagem
 - **`/enrich li:<id>`** = treg find on public URL + names + company domain, then the
   verifier (same as `qe:`), plus `buyingSignal` with an additive `engagement` block
   (page, post, reaction/comment, dates). 404 if never served to this org.
+- **Speed (2026-10-03, one serve took 90s then >300s):** profile lookups send
+  `X-Treg-Route-Exclude: anyapi` (anyapi missed 62/62 and cost 8-10s per lookup;
+  fetchinio answers in ~2s, same price); one `/search/next` claims up to 20
+  engagers, resolves them 10 at a time and returns EVERY prospect (human-service
+  buffers the page); harvest reads 3 posts at once. A failed lookup fails the
+  call and RELEASES every claim not handed back (resolved prospects included).
 - **Money:** every treg call = PROVISION ceiling → AUTHORIZE → call → `actual`
   = `X-Treg-Cost-Micro` → cancel hold, cost name `treg-micro-usd`, child run
   `linkedin-engagement`, org-billed. Silver global: posts re-listed / engagement

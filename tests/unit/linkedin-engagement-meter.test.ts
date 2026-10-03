@@ -124,4 +124,60 @@ describe("EngagementMeter", () => {
     expect(mockUpdateCostStatus).not.toHaveBeenCalled();
     expect(bronze[0]).toMatchObject({ httpStatus: 200, chargedMicro: null });
   });
+
+  it("profile lookups skip anyapi (0 of 62 hits, +8-10s each in prod)", async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(answer(200, { output: {} }, "1500")));
+    const { EngagementMeter, PROFILE_ENDPOINT, PROFILE_ROUTE_EXCLUDE } = await import("../../src/lib/linkedin-engagement.js");
+    const meter = new EngagementMeter(ctx);
+    await meter.call(PROFILE_ENDPOINT, { method: "POST", body: { linkedin_url: "x" }, maxMicro: 5000, routed: true, exclude: PROFILE_ROUTE_EXCLUDE });
+    expect(fetchMock.mock.calls[0][1].headers).toMatchObject({ "X-Treg-Route-Exclude": "anyapi", "X-Treg-Route-Max-Cost": "0.005000" });
+  });
+
+  it("concurrent calls share ONE child run and every call is still metered", async () => {
+    let resolveRun: (v: { id: string }) => void = () => {};
+    mockCreateRun.mockImplementation(() => new Promise((r) => (resolveRun = r)));
+    fetchMock.mockImplementation(() => Promise.resolve(answer(200, { output: {} }, "1500")));
+    const { EngagementMeter, PROFILE_ENDPOINT } = await import("../../src/lib/linkedin-engagement.js");
+    const meter = new EngagementMeter(ctx);
+    const all = Promise.all([1, 2, 3, 4].map(() => meter.call(PROFILE_ENDPOINT, { method: "POST", body: {}, maxMicro: 5000, routed: true })));
+    await new Promise((r) => setTimeout(r, 0));
+    resolveRun({ id: "run-li" });
+    await all;
+    expect(mockCreateRun).toHaveBeenCalledTimes(1);
+    expect(meter.calls).toBe(4);
+    expect(meter.chargedMicro).toBe(6000);
+    expect(mockAuthorize).toHaveBeenCalledTimes(4);
+    expect(order.filter((o) => o === "actual")).toHaveLength(4);
+    expect(order.filter((o) => o === "cancel-hold")).toHaveLength(4);
+  });
+});
+
+describe("mapPool", () => {
+  it("never runs more than the limit at once and keeps input order", async () => {
+    const { mapPool } = await import("../../src/lib/linkedin-engagement.js");
+    let running = 0;
+    let peak = 0;
+    const res = await mapPool([30, 10, 20, 5, 15], 2, async (ms) => {
+      running++;
+      peak = Math.max(peak, running);
+      await new Promise((r) => setTimeout(r, ms));
+      running--;
+      return ms * 2;
+    });
+    expect(peak).toBe(2);
+    expect(res.map((r) => (r as PromiseFulfilledResult<number>).value)).toEqual([60, 20, 40, 10, 30]);
+  });
+
+  it("stops starting new work after a failure and reports it", async () => {
+    const { mapPool } = await import("../../src/lib/linkedin-engagement.js");
+    const started: number[] = [];
+    const res = await mapPool([1, 2, 3, 4], 1, async (n) => {
+      started.push(n);
+      if (n === 2) throw new Error("boom");
+      return n;
+    });
+    expect(started).toEqual([1, 2]);
+    expect(res[1]).toMatchObject({ status: "rejected" });
+    expect(res[2]).toBeUndefined();
+  });
 });
