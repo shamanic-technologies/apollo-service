@@ -385,13 +385,18 @@ function tregChargedMicro(exchange: VendorExchange): number | null {
  * "route_failed", tried: [...]}}` with at least one `miss` and nothing charged
  * (seen live 2026-10-03 on LinkedIn-only finds: quickenrich + aiark "miss",
  * tomba "error" 403, the rest skipped above the ceiling). An error-only route
- * (no child answered) is still a failure.
+ * (no child answered), or one where a child was rate-limited / 5xx / timed
+ * out, is still a failure.
  */
 export function isTregRoutedMiss(status: number | null, body: unknown): boolean {
   if (status !== 502 || !body || typeof body !== "object") return false;
-  const detail = (body as { detail?: unknown }).detail as { error?: unknown; tried?: Array<{ outcome?: unknown; charged_micro?: unknown }> } | undefined;
+  const detail = (body as { detail?: unknown }).detail as { error?: unknown; tried?: Array<{ outcome?: unknown; status?: unknown; charged_micro?: unknown }> } | undefined;
   if (!detail || detail.error !== "route_failed" || !Array.isArray(detail.tried)) return false;
-  return detail.tried.some((t) => t?.outcome === "miss") && detail.tried.every((t) => !t?.charged_micro);
+  // A child that was throttled, down or timed out never answered for this
+  // person: the route is inconclusive and retried, never settled as not_found.
+  // A persistent 4xx (tomba's 403 on every LinkedIn find) does not block it.
+  const transient = detail.tried.some((t) => t?.outcome === "error" && (typeof t.status !== "number" || t.status === 429 || t.status >= 500));
+  return !transient && detail.tried.some((t) => t?.outcome === "miss") && detail.tried.every((t) => !t?.charged_micro);
 }
 
 /**
