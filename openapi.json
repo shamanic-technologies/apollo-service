@@ -1020,16 +1020,30 @@
             "enum": [
               "hiring",
               "job_change",
-              "funding"
+              "funding",
+              "linkedin_engagement"
             ],
-            "description": "hiring = the employer posted a job in the window (Apollo organization_job_posted_at_range, optionally narrowed by job_titles); job_change = the person started their current title in the window (Apollo person_days_in_current_title_range); funding = the employer's latest funding round falls in the window (Apollo latest_funding_date_range)."
+            "description": "hiring = the employer posted a job in the window (Apollo organization_job_posted_at_range, optionally narrowed by job_titles); job_change = the person started their current title in the window (Apollo person_days_in_current_title_range); funding = the employer's latest funding round falls in the window (Apollo latest_funding_date_range); linkedin_engagement = the person reacted to or commented on a post of one of competitor_pages published in the window (NOT an Apollo search: served from LinkedIn engagement, each person's email found and verified on /enrich)."
           },
           "window_days": {
             "type": "integer",
             "minimum": 1,
             "maximum": 365,
-            "description": "Recency window in days, counted back from the day the audience is served (rolling).",
+            "description": "Recency window in days, counted back from the day the audience is served (rolling). linkedin_engagement: the age of the competitor posts whose engagers are served.",
             "example": 30
+          },
+          "competitor_pages": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^(?:https?:\\/\\/)?(?:[a-z]{2,3}\\.)?linkedin\\.com\\/(company|showcase)\\/[^/?#\\s]+\\/?(?:[?#].*)?$/i"
+            },
+            "minItems": 1,
+            "maxItems": 3,
+            "description": "linkedin_engagement only (required there): 1-3 competitor LinkedIn company page URLs whose post engagers are the audience.",
+            "example": [
+              "https://www.linkedin.com/company/lemlist/"
+            ]
           },
           "job_titles": {
             "type": "array",
@@ -1093,9 +1107,10 @@
           "source": {
             "type": "string",
             "enum": [
-              "quickenrich"
+              "quickenrich",
+              "linkedin_engagement"
             ],
-            "description": "Present only when this page came from the FREE QuickEnrich search (the audience is switched to quickenrich). Those people carry an id `qe:<emp_id>`, their full name, LinkedIn URL and company domain; POST /enrich with that id finds the email with treg and verifies it. Absent = the Apollo walk, unchanged."
+            "description": "quickenrich: this page came from the FREE QuickEnrich search (the audience is switched to quickenrich); those people carry an id `qe:<emp_id>`, their full name, LinkedIn URL and company domain. linkedin_engagement: the filters carry a linkedin_engagement buying_signal; up to 5 engagers of the competitor pages per call, each with an id `li:<profileId>`, full name, title, headline, employer and LinkedIn URL, never the same person twice for the audience (x-audience-id, else the campaign), competitor employees excluded; done=true only once nobody is left. For both, POST /enrich with that id finds the email with treg and verifies it. Absent = the Apollo walk, unchanged."
           }
         },
         "required": [
@@ -2297,8 +2312,55 @@
                 "enum": [
                   "hiring",
                   "job_change",
-                  "funding"
+                  "funding",
+                  "linkedin_engagement"
                 ]
+              },
+              "engagement": {
+                "type": "object",
+                "properties": {
+                  "competitorPage": {
+                    "type": "string"
+                  },
+                  "postUrl": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "postPublishedOn": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Approximate (LinkedIn gives a relative age)."
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "reaction",
+                      "comment"
+                    ]
+                  },
+                  "reactionType": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "commentText": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "commentedAt": {
+                    "type": "string",
+                    "nullable": true
+                  }
+                },
+                "required": [
+                  "competitorPage",
+                  "postUrl",
+                  "postPublishedOn",
+                  "kind",
+                  "reactionType",
+                  "commentText",
+                  "commentedAt"
+                ],
+                "description": "linkedin_engagement only: which competitor post, reaction or comment, and when. A reaction carries no date of its own: occurredOn is then the post's (approximate) publication day."
               },
               "occurredOn": {
                 "type": "string",
@@ -2312,7 +2374,7 @@
               },
               "source": {
                 "type": "string",
-                "description": "apollo:job_postings (hiring) or apollo:enrichment (funding, job_change).",
+                "description": "apollo:job_postings (hiring), apollo:enrichment (funding, job_change) or linkedin:company/<slug> (linkedin_engagement).",
                 "example": "apollo:job_postings"
               },
               "sourceUrl": {
@@ -4563,7 +4625,8 @@
           },
           "count": {
             "type": "integer",
-            "description": "Size estimate: verified-email people matching ICP + signal in the current window. Free."
+            "nullable": true,
+            "description": "Size estimate: verified-email people matching ICP + signal in the current window. Free. null for linkedin_engagement (its pool is only known once the competitor posts are read, a paid step done on the first serve)."
           },
           "window": {
             "type": "object",
@@ -4626,7 +4689,8 @@
                 "enum": [
                   "hiring",
                   "job_change",
-                  "funding"
+                  "funding",
+                  "linkedin_engagement"
                 ]
               },
               "windowDays": {
@@ -4640,6 +4704,16 @@
                   "type": "string",
                   "minLength": 1
                 }
+              },
+              "competitorPages": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^(?:https?:\\/\\/)?(?:[a-z]{2,3}\\.)?linkedin\\.com\\/(company|showcase)\\/[^/?#\\s]+\\/?(?:[?#].*)?$/i"
+                },
+                "minItems": 1,
+                "maxItems": 3,
+                "description": "linkedin_engagement only (required there): 1-3 competitor LinkedIn company page URLs. The base must then be inline `filters: {}`: Apollo filters cannot be enforced on LinkedIn engagers."
               }
             },
             "required": [

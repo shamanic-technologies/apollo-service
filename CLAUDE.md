@@ -389,6 +389,39 @@ other. `src/lib/buying-signal-spec.ts` (pure) + `src/lib/buying-signals.ts`.
   returned `apolloAudienceId` + `filters` with human-service `POST /orgs/audiences`
   (send the filters too, or serve 422s).
 
+## Fourth buying signal: `linkedin_engagement` (competitor post engagers) — NOT an Apollo search
+
+`buying_signal: {type: "linkedin_engagement", window_days, competitor_pages: [1-3 LinkedIn company page URLs]}`.
+People who reacted to / commented on a competitor page's posts published in the
+window. `src/lib/linkedin-engagement-spec.ts` (pure) + `src/lib/linkedin-engagement.ts`.
+
+- **Served on `/search/next`, never on Apollo.** Up to 5 teasers per call, id
+  `li:<profileId>`, `source:"linkedin_engagement"`, name/title/headline/employer
+  from the RESOLVED profile. Never twice per audience: `linkedin_engagement_serves`
+  unique (org, audience_key, profile), claimed BEFORE any spend on the person
+  (audience_key = `audience:<x-audience-id>`, else `campaign:<id>`). `done` only
+  once silver is current and nobody is left. `toApolloSearchParams` throws
+  `SignalNotApolloSearchableError` (400) for it: no dry-run/preview/count. Apollo
+  filters beside it are a named 400 (cannot be enforced on LinkedIn people).
+- **Wire facts (live 2026-10-03):** company posts = ~10 latest, no paging, DATE
+  APPROXIMATE (relative age); Fetchin engagement = 100 reactions + 100 comments per
+  call, a reaction has NO date (evidence dates it by the post, says "around"); a
+  reactor's URL is the opaque `in/ACoAA…` form NO email finder resolves, and the
+  headline missed lemlist staff. So every candidate's profile is resolved
+  (`treg.linkedin.user.profile`, ~$0.0015, cached 30 days, misses free): public
+  slug, CURRENT employer slug (employee filter), company website (find domain).
+- **`/enrich li:<id>`** = treg find on public URL + names + company domain, then the
+  verifier (same as `qe:`), plus `buyingSignal` with an additive `engagement` block
+  (page, post, reaction/comment, dates). 404 if never served to this org.
+- **Money:** every treg call = PROVISION ceiling → AUTHORIZE → call → `actual`
+  = `X-Treg-Cost-Micro` → cancel hold, cost name `treg-micro-usd`, child run
+  `linkedin-engagement`, org-billed. Silver global: posts re-listed / engagement
+  re-read at most once a day per page/post, whoever pays.
+- **A treg routed 502 `route_failed` where children MISSED (nothing charged) is a
+  not_found**, not a failure (`isTregRoutedMiss`, also used by the email find).
+- Consumers (human-service, lead-service) enumerate signal types strictly: no
+  audience may carry this kind until they accept it.
+
 ## Phone reveal is OPT-IN, ASYNCHRONOUS, and lives on its own route
 
 Apollo does not return phone numbers by default and never has — that is why

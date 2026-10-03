@@ -381,6 +381,20 @@ function tregChargedMicro(exchange: VendorExchange): number | null {
 }
 
 /**
+ * A routed treg call where every child MISSED: HTTP 502 `{detail: {error:
+ * "route_failed", tried: [...]}}` with at least one `miss` and nothing charged
+ * (seen live 2026-10-03 on LinkedIn-only finds: quickenrich + aiark "miss",
+ * tomba "error" 403, the rest skipped above the ceiling). An error-only route
+ * (no child answered) is still a failure.
+ */
+export function isTregRoutedMiss(status: number | null, body: unknown): boolean {
+  if (status !== 502 || !body || typeof body !== "object") return false;
+  const detail = (body as { detail?: unknown }).detail as { error?: unknown; tried?: Array<{ outcome?: unknown; charged_micro?: unknown }> } | undefined;
+  if (!detail || detail.error !== "route_failed" || !Array.isArray(detail.tried)) return false;
+  return detail.tried.some((t) => t?.outcome === "miss") && detail.tried.every((t) => !t?.charged_micro);
+}
+
+/**
  * `token` is a treg IDENTITY token (team-scoped login), so every call also
  * names the team: `X-Treg-Org` (key-service provider `treg-org`).
  */
@@ -409,6 +423,12 @@ export async function findWithTreg(token: string, org: string, person: FindPerso
     // The request may have reached treg and been billed before the answer was
     // lost; keep the hold. The same Idempotency-Key makes a retry a free replay.
     throw new EmailFinderVendorError("treg", `treg email find failed: ${networkError?.message ?? "no response"}`, exchange, true);
+  }
+  if (isTregRoutedMiss(response.status, exchange.responseBody)) {
+    // Every child that could take this identity answered "no such email": a
+    // real not_found (nothing billed), not a vendor failure to retry forever.
+    const underlying = str(exchange.responseHeaders?.["x-treg-served-by"]);
+    return { outcome: "not_found", email: null, vendorMailboxStatus: null, mailboxStatus: null, underlyingProvider: underlying, chargedQuantity: 0, rejectedEmail: null, rejectionReason: null, exchange };
   }
   if (response.status !== 200 && response.status !== 202) {
     // treg relays a provider's 4xx/5xx unchanged and charges nothing for it.

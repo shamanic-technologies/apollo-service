@@ -663,3 +663,121 @@ export type NewApolloPhoneReveal = typeof apolloPhoneReveals.$inferInsert;
 export type EmailFinderCall = typeof emailFinderCalls.$inferSelect;
 export type EmailFinding = typeof emailFindings.$inferSelect;
 export type EmailVerification = typeof emailVerifications.$inferSelect;
+
+// ─── linkedin_engagement buying signal (src/lib/linkedin-engagement.ts) ─────
+// Bronze: every treg call the signal makes (company posts, post engagement,
+// member profile), verbatim with its charge. Global facts about LinkedIn, no
+// org: the payer is the run (`run_id`) the cost was declared on.
+export const linkedinTregCalls = pgTable(
+  "linkedin_treg_calls",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    endpoint: text("endpoint").notNull(),
+    request: jsonb("request").notNull(),
+    runId: text("run_id"),
+    httpStatus: integer("http_status"),
+    responseHeaders: jsonb("response_headers"),
+    responseBody: jsonb("response_body"),
+    chargedMicro: integer("charged_micro"),
+    error: text("error"),
+    durationMs: integer("duration_ms"),
+    calledAt: timestamp("called_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("idx_linkedin_treg_calls_endpoint").on(table.endpoint, table.calledAt)]
+);
+
+// Silver: a competitor company page and when its recent posts were last listed.
+export const linkedinCompanyPages = pgTable("linkedin_company_pages", {
+  slug: text("slug").primaryKey(),
+  url: text("url").notNull(),
+  postsFetchedAt: timestamp("posts_fetched_at", { withTimezone: true }),
+  postsCount: integer("posts_count"),
+});
+
+// Silver: one post of a company page. `published_at` is APPROXIMATE (LinkedIn
+// gives a relative age). `engagement_fetched_at` = engagers last read.
+export const linkedinCompanyPosts = pgTable(
+  "linkedin_company_posts",
+  {
+    postId: text("post_id").primaryKey(),
+    pageSlug: text("page_slug").notNull(),
+    postUrl: text("post_url"),
+    text: text("text"),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+    engagementFetchedAt: timestamp("engagement_fetched_at", { withTimezone: true }),
+    reactionsSeen: integer("reactions_seen"),
+    commentsSeen: integer("comments_seen"),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("idx_linkedin_posts_page").on(table.pageSlug, table.publishedAt)]
+);
+
+// Silver: one person's engagement with one post (a reaction type, or a comment).
+export const linkedinPostEngagements = pgTable(
+  "linkedin_post_engagements",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    postId: text("post_id").notNull(),
+    pageSlug: text("page_slug").notNull(),
+    profileId: text("profile_id").notNull(),
+    kind: text("kind").notNull(),
+    ref: text("ref").notNull(),
+    actorName: text("actor_name"),
+    actorHeadline: text("actor_headline"),
+    actorProfileUrl: text("actor_profile_url"),
+    reactionType: text("reaction_type"),
+    commentText: text("comment_text"),
+    commentedAt: timestamp("commented_at", { withTimezone: true }),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("idx_linkedin_engagements_unique").on(table.postId, table.profileId, table.kind, table.ref),
+    index("idx_linkedin_engagements_page_profile").on(table.pageSlug, table.profileId),
+  ]
+);
+
+// Silver: a member profile resolved from its id (public slug, current
+// employer, company website). `status` not_found = no provider could read it.
+export const linkedinProfiles = pgTable("linkedin_profiles", {
+  profileId: text("profile_id").primaryKey(),
+  status: text("status").notNull(),
+  publicIdentifier: text("public_identifier"),
+  linkedinUrl: text("linkedin_url"),
+  firstName: text("first_name"),
+  lastName: text("last_name"),
+  headline: text("headline"),
+  jobTitle: text("job_title"),
+  companyName: text("company_name"),
+  companySlug: text("company_slug"),
+  companyLinkedinUrl: text("company_linkedin_url"),
+  companyWebsite: text("company_website"),
+  country: text("country"),
+  location: text("location"),
+  raw: jsonb("raw"),
+  fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Gold, org data: every engager an audience has considered, ONCE per
+// (org, audience, person) — the unique index is the atomic never-twice
+// guarantee. status served | excluded (competitor employee) | unresolvable.
+export const linkedinEngagementServes = pgTable(
+  "linkedin_engagement_serves",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id").notNull(),
+    brandIds: text("brand_ids").array().notNull(),
+    campaignId: text("campaign_id").notNull(),
+    audienceKey: text("audience_key").notNull(),
+    profileId: text("profile_id").notNull(),
+    status: text("status").notNull(),
+    reason: text("reason"),
+    signal: jsonb("signal").notNull(),
+    servedAt: timestamp("served_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("idx_linkedin_serves_org_audience_profile").on(table.orgId, table.audienceKey, table.profileId),
+    index("idx_linkedin_serves_org_profile").on(table.orgId, table.profileId),
+  ]
+);

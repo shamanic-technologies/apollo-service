@@ -5,12 +5,20 @@
  */
 import type { ApolloSearchParams } from "./apollo-client.js";
 
-export type BuyingSignalType = "hiring" | "job_change" | "funding";
+/** The three signals Apollo People Search expresses natively. */
+export type ApolloBuyingSignalType = "hiring" | "job_change" | "funding";
+/**
+ * linkedin_engagement is NOT an Apollo search: its people are the engagers of
+ * competitor LinkedIn company pages (src/lib/linkedin-engagement.ts).
+ */
+export type BuyingSignalType = ApolloBuyingSignalType | "linkedin_engagement";
 
 export interface BuyingSignalSpec {
   type: BuyingSignalType;
   window_days: number;
   job_titles?: string[];
+  /** linkedin_engagement only: 1-3 competitor LinkedIn company page URLs. */
+  competitor_pages?: string[];
   as_of?: string;
   since?: string;
 }
@@ -29,7 +37,21 @@ const SIGNAL_APOLLO_FIELDS: Record<BuyingSignalType, string[]> = {
   hiring: ["organization_job_posted_at_range", "organizationJobPostedAtRange"],
   job_change: ["person_days_in_current_title_range", "personDaysInCurrentTitleRange"],
   funding: ["latest_funding_date_range", "latestFundingDateRange"],
+  linkedin_engagement: [],
 };
+
+/**
+ * A linkedin_engagement audience has no Apollo query: its people come from
+ * competitor post engagement, never from People Search. Any Apollo count,
+ * dry-run or preview of it is refused by name instead of silently counting
+ * the ICP without the signal.
+ */
+export class SignalNotApolloSearchableError extends Error {
+  constructor(public readonly signalType: BuyingSignalType) {
+    super(`buying_signal type ${signalType} is not an Apollo People Search filter: it is served from LinkedIn post engagement through /search/next, not counted or previewed on Apollo`);
+    this.name = "SignalNotApolloSearchableError";
+  }
+}
 
 export class BuyingSignalConflictError extends Error {
   constructor(public readonly fields: string[]) {
@@ -101,6 +123,8 @@ export function materializeBuyingSignal(spec: BuyingSignalSpec, now: Date): Part
       };
     case "funding":
       return { latest_funding_date_range: { min: from, max: to } };
+    case "linkedin_engagement":
+      throw new SignalNotApolloSearchableError(spec.type);
     case "job_change": {
       // Apollo counts days in title back from TODAY, not from the cohort day.
       const today = utcDay(now);

@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { eq, and, inArray, gt } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloAudiences } from "../db/schema.js";
@@ -30,8 +30,10 @@ import { toCreditAlertIdentity } from "../lib/credit-alert.js";
 import { SuggestFromSegmentRequestSchema, ApolloNativeSearchFiltersSchema, AudienceCompaniesQuerySchema } from "../schemas.js";
 import { providerErrorFields } from "../lib/provider-error.js";
 import { planQuickenrich } from "../lib/quickenrich.js";
-import { ServeSourceRequestSchema, SignalCoverageRequestSchema, CreateSignalAudienceRequestSchema, SearchFiltersSchema, BUYING_SIGNAL_TYPES } from "../schemas.js";
-import { signalConflicts, signalWindow, utcDay, type BuyingSignalSpec, type BuyingSignalType } from "../lib/buying-signal-spec.js";
+import { ServeSourceRequestSchema, SignalCoverageRequestSchema, CreateSignalAudienceRequestSchema, SearchFiltersSchema, APOLLO_BUYING_SIGNAL_TYPES } from "../schemas.js";
+import { signalConflicts, signalWindow, utcDay, SignalNotApolloSearchableError, type BuyingSignalSpec, type BuyingSignalType } from "../lib/buying-signal-spec.js";
+import { filtersBesideEngagement } from "../lib/linkedin-engagement.js";
+import { parseCompetitorPage } from "../lib/linkedin-engagement-spec.js";
 
 const router = Router();
 
@@ -141,6 +143,7 @@ router.post("/audiences/suggest-from-segment", serviceAuth, async (req: Authenti
     });
   } catch (error) {
     console.error("[Apollo Service][POST /audiences/suggest-from-segment] ERROR:", error);
+    if (error instanceof SignalNotApolloSearchableError) return res.status(400).json({ type: "validation", error: error.message });
     res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
   }
 });
@@ -172,6 +175,7 @@ router.get("/audiences/:apolloAudienceId", orgAuth, async (req: AuthenticatedReq
     });
   } catch (error) {
     console.error("[Apollo Service][GET /audiences/:id] ERROR:", error);
+    if (error instanceof SignalNotApolloSearchableError) return res.status(400).json({ type: "validation", error: error.message });
     res.status(500).json({ type: "internal", error: "Internal server error" });
   }
 });
@@ -219,6 +223,7 @@ router.patch("/audiences/:apolloAudienceId/serve-source", orgAuth, async (req: A
     res.json({ apolloAudienceId: row.id, ...serveSourceFields(serveSource, filters) });
   } catch (error) {
     console.error("[Apollo Service][PATCH /audiences/:id/serve-source] ERROR:", error);
+    if (error instanceof SignalNotApolloSearchableError) return res.status(400).json({ type: "validation", error: error.message });
     res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error" });
   }
 });
@@ -258,6 +263,7 @@ router.get("/audiences/:apolloAudienceId/preview", serviceAuth, async (req: Auth
     res.json({ apolloAudienceId: row.id, ...preview });
   } catch (error) {
     console.error("[Apollo Service][GET /audiences/:id/preview] ERROR:", error);
+    if (error instanceof SignalNotApolloSearchableError) return res.status(400).json({ type: "validation", error: error.message });
     res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
   }
 });
@@ -454,6 +460,7 @@ router.get("/audiences/:apolloAudienceId/companies", serviceAuth, async (req: Au
     });
   } catch (error) {
     console.error("[Apollo Service][GET /audiences/:id/companies] ERROR:", error);
+    if (error instanceof SignalNotApolloSearchableError) return res.status(400).json({ type: "validation", error: error.message });
     res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
   }
 });
@@ -494,6 +501,7 @@ router.post("/audiences/:apolloAudienceId/dry-run", serviceAuth, async (req: Aut
     res.json({ count });
   } catch (error) {
     console.error("[Apollo Service][POST /audiences/:id/dry-run] ERROR:", error);
+    if (error instanceof SignalNotApolloSearchableError) return res.status(400).json({ type: "validation", error: error.message });
     res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
   }
 });
@@ -504,6 +512,7 @@ const SIGNAL_LABELS: Record<BuyingSignalType, string> = {
   hiring: "Hiring",
   job_change: "New in role",
   funding: "Recently funded",
+  linkedin_engagement: "Engaged with competitor posts",
 };
 
 function signalLabel(spec: BuyingSignalSpec): string {
@@ -582,7 +591,7 @@ router.post("/audiences/signal-coverage", serviceAuth, async (req: Authenticated
     const windows = parsed.data.windowDays ?? [30, 90];
     const jobTitles = parsed.data.jobTitles?.length ? parsed.data.jobTitles : undefined;
 
-    const specs: BuyingSignalSpec[] = BUYING_SIGNAL_TYPES.flatMap((type) =>
+    const specs: BuyingSignalSpec[] = APOLLO_BUYING_SIGNAL_TYPES.flatMap((type) =>
       windows.map((window_days) => ({ type, window_days, ...(type === "hiring" && jobTitles ? { job_titles: jobTitles } : {}) })),
     );
     for (const spec of specs) {
@@ -601,6 +610,7 @@ router.post("/audiences/signal-coverage", serviceAuth, async (req: Authenticated
     res.json({ measuredOn: utcDay(new Date()), baseCount, signals });
   } catch (error) {
     console.error("[Apollo Service][POST /audiences/signal-coverage] ERROR:", error);
+    if (error instanceof SignalNotApolloSearchableError) return res.status(400).json({ type: "validation", error: error.message });
     res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
   }
 });
@@ -620,9 +630,15 @@ router.post("/audiences/signal", serviceAuth, async (req: AuthenticatedRequest, 
     const base = await loadSignalBase(req.orgId!, parsed.data);
     if (!base) return res.status(404).json({ type: "not_found", error: "Audience not found" });
 
-    const { type, windowDays, jobTitles } = parsed.data.signal;
+    const { type, windowDays, jobTitles, competitorPages } = parsed.data.signal;
     if (jobTitles?.length && type !== "hiring") {
       return res.status(400).json({ type: "validation", error: "jobTitles is only valid for the hiring signal" });
+    }
+    if (type === "linkedin_engagement") {
+      return await createLinkedinEngagementAudience(req, res, { base, windowDays, competitorPages, name: parsed.data.name, brandId: parsed.data.brandId });
+    }
+    if (competitorPages) {
+      return res.status(400).json({ type: "validation", error: "competitorPages is only valid for the linkedin_engagement signal" });
     }
     const spec: BuyingSignalSpec = { type, window_days: windowDays, ...(jobTitles?.length ? { job_titles: jobTitles } : {}) };
     const icp = { ...base.filters };
@@ -662,8 +678,51 @@ router.post("/audiences/signal", serviceAuth, async (req: AuthenticatedRequest, 
     res.json({ apolloAudienceId: row.id, name, description, filters, count, window });
   } catch (error) {
     console.error("[Apollo Service][POST /audiences/signal] ERROR:", error);
+    if (error instanceof SignalNotApolloSearchableError) return res.status(400).json({ type: "validation", error: error.message });
     res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
   }
 });
+
+/**
+ * POST /audiences/signal for linkedin_engagement: persists the criterion only.
+ * No Apollo count exists for it (its people are competitor post engagers) and
+ * reading the posts is a paid step, so the size is null until the first serve.
+ */
+async function createLinkedinEngagementAudience(
+  req: AuthenticatedRequest,
+  res: Response,
+  args: {
+    base: { filters: Record<string, unknown>; name: string | null; brandId: string | null };
+    windowDays: number;
+    competitorPages: string[] | undefined;
+    name: string | undefined;
+    brandId: string | undefined;
+  },
+) {
+  if (!args.competitorPages?.length) {
+    return res.status(400).json({ type: "validation", error: "competitorPages (1-3 LinkedIn company page URLs) is required for the linkedin_engagement signal", fields: ["signal.competitorPages"] });
+  }
+  const beside = filtersBesideEngagement(args.base.filters);
+  if (beside.length > 0) {
+    return res.status(400).json({ type: "validation", error: `Apollo filters cannot be combined with the linkedin_engagement signal (its people are LinkedIn engagers, not an Apollo search): ${beside.join(", ")}`, fields: beside });
+  }
+  const pages = args.competitorPages.map((u) => parseCompetitorPage(u)!);
+  const spec: BuyingSignalSpec = { type: "linkedin_engagement", window_days: args.windowDays, competitor_pages: pages.map((p) => p.url) };
+  const filters = { buying_signal: spec };
+  const checked = SearchFiltersSchema.safeParse(filters);
+  if (!checked.success) {
+    return res.status(400).json({ type: "validation", error: "Invalid filters", details: checked.error.flatten() });
+  }
+  const now = new Date();
+  const label = `${SIGNAL_LABELS.linkedin_engagement} (${pages.map((p) => p.slug).join(", ")}, last ${args.windowDays} days)`;
+  const name = args.name ?? label;
+  const description = `People who reacted to or commented on a LinkedIn post published in the last ${args.windowDays} days by ${pages.map((p) => p.slug).join(", ")}. Their own employees are excluded. Each person's work email is found and verified before it is used.`;
+  const brandId = args.brandId ?? args.base.brandId ?? req.brandIds?.[0] ?? null;
+  const [row] = await db
+    .insert(apolloAudiences)
+    .values({ orgId: req.orgId!, userId: req.userId ?? null, brandId, name, description, filters, count: 0, countRefreshedAt: now })
+    .returning();
+  res.json({ apolloAudienceId: row.id, name, description, filters, count: null, window: signalWindow(spec, now) });
+}
 
 export default router;
