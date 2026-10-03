@@ -416,9 +416,15 @@ window. `src/lib/linkedin-engagement-spec.ts` (pure) + `src/lib/linkedin-engagem
 - **Speed (2026-10-03, one serve took 90s then >300s):** profile lookups send
   `X-Treg-Route-Exclude: anyapi` (anyapi missed 62/62 and cost 8-10s per lookup;
   fetchinio answers in ~2s, same price); one `/search/next` claims up to 20
-  engagers, resolves them 10 at a time and returns EVERY prospect (human-service
-  buffers the page); harvest reads 3 posts at once. A failed lookup fails the
-  call and RELEASES every claim not handed back (resolved prospects included).
+  engagers, resolves them 5 at a time (10 drew fetchinio 429s) and returns EVERY
+  prospect (human-service buffers the page); harvest reads 3 posts at once.
+- **A TRANSIENT lookup failure defers that one engager, never the page**: timeout
+  (30s), network, 429/5xx, or a `route_failed` where any child `outcome:"error"`
+  (a rate-limited fetchinio is NOT "nobody has this"). Its claim is released,
+  nothing is cached, a later serve retries it. Only a page that serves nobody
+  BECAUSE of transient failures throws. A non-transient failure fails the call
+  and releases every claim not handed back. Migration 0034 released the 7
+  engagers the first version wrongly stored as unreadable.
 - **Money:** every treg call = PROVISION ceiling → AUTHORIZE → call → `actual`
   = `X-Treg-Cost-Micro` → cancel hold, cost name `treg-micro-usd`, child run
   `linkedin-engagement`, org-billed. Silver global: posts re-listed / engagement

@@ -50,6 +50,8 @@ const PROFILES: Record<string, unknown> = {
 
 const calls: string[] = [];
 let failProfileUrl: string | null = null;
+let failWith: "hard" | "rate_limited" | "timeout" = "hard";
+const RATE_LIMITED = { detail: { error: "route_failed", tried: [{ status: 429, outcome: "error", provider: "fetchinio", charged_micro: 0 }, { status: 404, outcome: "miss", provider: "scrapecreators", charged_micro: 0 }] } };
 function reply(status: number, body: unknown, cost: string) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "x-treg-cost-micro": cost } });
 }
@@ -88,7 +90,11 @@ describe.skipIf(!DB_URL)("linkedin_engagement serve loop on a real database", ()
       if (url.includes("treg.linkedin.user.profile")) {
         const u = JSON.parse(init.body!).linkedin_url as string;
         calls.push(`profile:${u}`);
-        if (u === failProfileUrl) return reply(500, { detail: "upstream exploded" }, "0");
+        if (u === failProfileUrl) {
+          if (failWith === "rate_limited") return reply(502, RATE_LIMITED, "0");
+          if (failWith === "timeout") throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+          return reply(400, { detail: "bad request" }, "0");
+        }
         const raw = PROFILES[u];
         return raw ? reply(200, { output: {}, raw }, "1500") : reply(502, { detail: { error: "route_failed", tried: [{ outcome: "miss", charged_micro: 0 }] } }, "0");
       }
@@ -142,7 +148,8 @@ describe.skipIf(!DB_URL)("linkedin_engagement serve loop on a real database", ()
   it("a failed lookup fails the call and releases every claim it cannot hand back; the retry re-buys nothing", async () => {
     await q`DELETE FROM linkedin_profiles`;
     failProfileUrl = "https://www.linkedin.com/in/ana-lima";
-    await expect(mod.serveLinkedinEngagers({ ctx: ctx("aud-3"), campaignId: "c3", spec, now: NOW })).rejects.toThrow(/HTTP 500/);
+    failWith = "hard";
+    await expect(mod.serveLinkedinEngagers({ ctx: ctx("aud-3"), campaignId: "c3", spec, now: NOW })).rejects.toThrow(/HTTP 400/);
     // Peter resolved fine but was never returned: his claim is released, so is Ana's.
     const rows = await q`SELECT profile_id, status FROM linkedin_engagement_serves WHERE audience_key = 'audience:aud-3' ORDER BY profile_id`;
     expect(rows.map((r: { status: string }) => r.status).sort()).toEqual(["excluded", "unresolvable"]);
@@ -153,5 +160,36 @@ describe.skipIf(!DB_URL)("linkedin_engagement serve loop on a real database", ()
     const retry = await mod.serveLinkedinEngagers({ ctx: ctx("aud-3"), campaignId: "c3", spec, now: NOW });
     expect(retry.people.map((p: { name: string }) => p.name).sort()).toEqual(["Ana Lima", "Peter Cools"]);
     expect(calls).toEqual(["profile:https://www.linkedin.com/in/ana-lima"]); // Peter came from silver
+  });
+
+  for (const kind of ["rate_limited", "timeout"] as const) {
+    it(`a ${kind} lookup defers THAT engager only: the page serves the others, the person is retried later, never marked unreadable`, async () => {
+      const aud = `aud-${kind}`;
+      await q`DELETE FROM linkedin_profiles`;
+      failProfileUrl = "https://www.linkedin.com/in/ana-lima";
+      failWith = kind;
+      const page = await mod.serveLinkedinEngagers({ ctx: ctx(aud), campaignId: "c4", spec, now: NOW });
+      expect(page.people.map((p: { name: string }) => p.name)).toEqual(["Peter Cools"]);
+      expect(page).toMatchObject({ deferred: 1, done: false });
+      const ana = await q`SELECT 1 FROM linkedin_engagement_serves WHERE audience_key = ${"audience:" + aud} AND profile_id LIKE '%prospect2%'`;
+      expect(ana).toHaveLength(0);
+      const cached = await q`SELECT 1 FROM linkedin_profiles WHERE profile_id LIKE '%prospect2%'`;
+      expect(cached).toHaveLength(0);
+
+      failProfileUrl = null;
+      const next = await mod.serveLinkedinEngagers({ ctx: ctx(aud), campaignId: "c4", spec, now: NOW });
+      expect(next.people.map((p: { name: string }) => p.name)).toEqual(["Ana Lima"]);
+    });
+  }
+
+  it("a page whose only prospect failed transiently fails loud instead of answering empty", async () => {
+    await q`DELETE FROM linkedin_profiles`;
+    await q`DELETE FROM linkedin_engagement_serves WHERE audience_key = 'audience:aud-5'`;
+    // Peter is already served to aud-5, so Ana is the only prospect left.
+    await q`INSERT INTO linkedin_engagement_serves (org_id, brand_ids, campaign_id, audience_key, profile_id, status, signal) VALUES ('11111111-1111-4111-8111-111111111111', ARRAY['b1'], 'c5', 'audience:aud-5', 'ACoAAAprospect1xxxxxxxxxxxxxxxxxxxxx', 'served', ${JSON.stringify(spec)}::jsonb)`;
+    failProfileUrl = "https://www.linkedin.com/in/ana-lima";
+    failWith = "rate_limited";
+    await expect(mod.serveLinkedinEngagers({ ctx: ctx("aud-5"), campaignId: "c5", spec, now: NOW })).rejects.toThrow(/HTTP 502/);
+    failProfileUrl = null;
   });
 });
