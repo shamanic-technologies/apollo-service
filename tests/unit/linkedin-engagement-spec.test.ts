@@ -189,6 +189,11 @@ describe("treg routed miss", () => {
     expect(isTregRoutedMiss(500, body([{ outcome: "miss" }]))).toBe(false);
     expect(isTregRoutedMiss(502, { error: "upstream" })).toBe(false);
   });
+  it("a child that was rate-limited, 5xx or timed out makes the route inconclusive, even beside misses", () => {
+    expect(isTregRoutedMiss(502, body([{ outcome: "error", status: 429, charged_micro: 0 }, { outcome: "miss", status: 404, charged_micro: 0 }]))).toBe(false);
+    expect(isTregRoutedMiss(502, body([{ outcome: "error", status: 503, charged_micro: 0 }, { outcome: "miss", status: 200, charged_micro: 0 }]))).toBe(false);
+    expect(isTregRoutedMiss(502, body([{ outcome: "error", status: null, charged_micro: 0 }, { outcome: "miss", status: 200, charged_micro: 0 }]))).toBe(false);
+  });
 });
 
 describe("treg email find: an all-miss route is not_found, not a failure", () => {
