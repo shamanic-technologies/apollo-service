@@ -80,12 +80,45 @@ export const PROFILE_CACHE_MS = 30 * 86_400_000;
 /** 100 reactions + 100 comments per page; 5 pages = up to 500 of each per post per day. */
 export const MAX_ENGAGEMENT_PAGES_PER_POST = 5;
 export const ENGAGEMENT_PAGE_SIZE = 100;
-/** People returned per /search/next call, and profile lookups spent to find them. */
-export const SERVE_BATCH = 5;
-export const MAX_PROFILE_LOOKUPS_PER_CALL = 12;
+/**
+ * Engagers claimed and resolved per /search/next call; every one that passes
+ * comes back (the consumer buffers a page and screens it teaser by teaser, so
+ * a fuller page means fewer round trips). Resolved PROFILE_CONCURRENCY at a time.
+ */
+export const MAX_PROFILE_LOOKUPS_PER_CALL = 20;
+export const PROFILE_CONCURRENCY = 10;
+/** Posts whose engagement is read at once (each holds a DB transaction: the pool is 10). */
+export const HARVEST_CONCURRENCY = 3;
+/**
+ * treg routes a profile lookup cheapest first and tried anyapi before
+ * fetchinio on every call: anyapi missed 62 of 62 in prod (2026-10-03) and the
+ * miss cost 8-10s, so a lookup took ~10s instead of ~2s for the same answer
+ * and the same price. Re-measure before removing (a 2-call A/B is enough).
+ */
+export const PROFILE_ROUTE_EXCLUDE = "anyapi";
 /** Harvest stops starting new calls past this; the next serve resumes (done stays false). */
 export const HARVEST_BUDGET_MS = 25_000;
 const CALL_TIMEOUT_MS = 60_000;
+
+/** Run `fn` over `items`, at most `limit` at once; stops starting new ones after a failure and rethrows the first. */
+export async function mapPool<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
+  const results: PromiseSettledResult<R>[] = new Array(items.length);
+  let next = 0;
+  let failed = false;
+  const worker = async () => {
+    while (!failed && next < items.length) {
+      const i = next++;
+      try {
+        results[i] = { status: "fulfilled", value: await fn(items[i], i) };
+      } catch (reason) {
+        results[i] = { status: "rejected", reason };
+        failed = true;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
 
 export class LinkedinEngagementInsufficientCreditError extends Error {
   constructor(public readonly balanceCents: number, public readonly requiredCents: number) {
@@ -167,27 +200,45 @@ export function isRoutedMiss(answer: TregAnswer): boolean {
  * post the real charge, cancel the hold.
  */
 export class EngagementMeter {
-  private run: { id: string } | null = null;
-  private keys: { token: string; org: string; keySource: "org" | "platform" } | null = null;
+  // Promises, not values: calls run concurrently and must share ONE run and one key read.
+  private run: Promise<{ id: string }> | null = null;
+  private keys: Promise<{ token: string; org: string; keySource: "org" | "platform" }> | null = null;
   calls = 0;
   chargedMicro = 0;
 
   constructor(private readonly ctx: EngagementContext) {}
 
-  private async resolveKeys() {
-    if (this.keys) return this.keys;
+  private resolveKeys() {
+    if (!this.keys) {
+      this.keys = this.readKeys();
+      this.keys.catch(() => {
+        this.keys = null;
+      });
+    }
+    return this.keys;
+  }
+
+  private async readKeys() {
     const caller = { callerMethod: "POST", callerPath: this.ctx.callerPath };
     const { key: token, keySource } = await decryptKey(this.ctx.identity.orgId, this.ctx.userId, "treg", caller, this.ctx.tracking);
     assertKeySource(keySource);
     const { key: org } = await decryptKey(this.ctx.identity.orgId, this.ctx.userId, "treg-org", caller, this.ctx.tracking);
-    this.keys = { token, org, keySource };
-    return this.keys;
+    return { token, org, keySource };
   }
 
   private async ensureRun(): Promise<string> {
-    if (this.run) return this.run.id;
+    if (!this.run) {
+      this.run = this.createChildRun();
+      this.run.catch(() => {
+        this.run = null;
+      });
+    }
+    return (await this.run).id;
+  }
+
+  private createChildRun() {
     const { identity } = this.ctx;
-    this.run = await createRun({
+    return createRun({
       orgId: identity.orgId,
       userId: identity.userId,
       brandIds: identity.brandIds,
@@ -199,10 +250,9 @@ export class EngagementMeter {
       taskName: "linkedin-engagement",
       parentRunId: this.ctx.runId,
     });
-    return this.run.id;
   }
 
-  async call(endpoint: string, req: { method: "GET" | "POST"; body?: Record<string, unknown>; query?: Record<string, string>; maxMicro: number; routed: boolean }): Promise<TregAnswer> {
+  async call(endpoint: string, req: { method: "GET" | "POST"; body?: Record<string, unknown>; query?: Record<string, string>; maxMicro: number; routed: boolean; exclude?: string }): Promise<TregAnswer> {
     const { identity } = this.ctx;
     const keys = await this.resolveKeys();
     const runId = await this.ensureRun();
@@ -234,6 +284,7 @@ export class EngagementMeter {
     };
     if (req.body) headers["Content-Type"] = "application/json";
     if (req.routed) headers["X-Treg-Route-Max-Cost"] = (req.maxMicro / 1_000_000).toFixed(6);
+    if (req.routed && req.exclude) headers["X-Treg-Route-Exclude"] = req.exclude;
 
     const started = Date.now();
     let status: number | null = null;
@@ -289,7 +340,7 @@ export class EngagementMeter {
   }
 
   async finish(status: "completed" | "failed"): Promise<void> {
-    if (this.run) await updateRun(this.run.id, status, this.ctx.identity);
+    if (this.run) await updateRun((await this.run).id, status, this.ctx.identity);
   }
 }
 
@@ -390,10 +441,8 @@ function windowStart(spec: BuyingSignalSpec, now: Date): Date {
  * it before the budget (false = the next serve continues).
  */
 export async function harvest(meter: EngagementMeter, pages: CompetitorPage[], spec: BuyingSignalSpec, now: Date, deadline: number): Promise<boolean> {
-  for (const page of pages) {
-    if (Date.now() > deadline) return false;
-    await ensurePosts(meter, page, now);
-  }
+  if (Date.now() > deadline) return false;
+  await Promise.all(pages.map((page) => ensurePosts(meter, page, now)));
   const stale = new Date(now.getTime() - ENGAGEMENT_REFRESH_MS);
   const due = await db
     .select({ postId: linkedinCompanyPosts.postId, pageSlug: linkedinCompanyPosts.pageSlug })
@@ -406,11 +455,17 @@ export async function harvest(meter: EngagementMeter, pages: CompetitorPage[], s
       ),
     )
     .orderBy(desc(linkedinCompanyPosts.publishedAt));
-  for (const post of due) {
-    if (Date.now() > deadline) return false;
+  let complete = true;
+  const read = await mapPool(due, HARVEST_CONCURRENCY, async (post) => {
+    if (Date.now() > deadline) {
+      complete = false;
+      return;
+    }
     await ensureEngagement(meter, post.postId, post.pageSlug, now);
-  }
-  return true;
+  });
+  const failed = read.find((r) => r?.status === "rejected") as PromiseRejectedResult | undefined;
+  if (failed) throw failed.reason;
+  return complete;
 }
 
 // ─── Serve ───────────────────────────────────────────────────────────────────
@@ -500,7 +555,7 @@ async function resolveProfile(meter: EngagementMeter, profileId: string, now: Da
   const candidatesUrls = urls.map((u) => u.url!).filter(Boolean);
   const url = candidatesUrls.find((u) => isPublicProfileUrl(u)) ?? candidatesUrls[0] ?? `https://www.linkedin.com/in/${profileId}`;
 
-  const answer = await meter.call(PROFILE_ENDPOINT, { method: "POST", body: { linkedin_url: url }, maxMicro: PROFILE_MAX_MICRO, routed: true });
+  const answer = await meter.call(PROFILE_ENDPOINT, { method: "POST", body: { linkedin_url: url }, maxMicro: PROFILE_MAX_MICRO, routed: true, exclude: PROFILE_ROUTE_EXCLUDE });
   let profile: ResolvedProfile | null = null;
   let raw: unknown = null;
   if (answer.status === 200) {
@@ -537,10 +592,14 @@ export interface EngagementServeResult {
 
 /**
  * One serve for a linkedin_engagement audience: harvest what is due, then
- * claim, resolve and screen engagers until SERVE_BATCH prospects are found or
- * the per-call lookup budget is spent. Each engager is claimed for the
- * audience BEFORE any spend on them (the unique row), so two concurrent serves
- * never pay for, or return, the same person.
+ * claim up to MAX_PROFILE_LOOKUPS_PER_CALL engagers and resolve and screen them
+ * PROFILE_CONCURRENCY at a time; every prospect among them comes back. Each
+ * engager is claimed for the audience BEFORE any spend on them (the unique
+ * row), so two concurrent serves never pay for, or return, the same person.
+ * When any lookup fails the call fails, and every claim this call cannot hand
+ * back (the failed, the never started, AND the prospects already resolved) is
+ * released: nobody is marked served without being returned, and the profiles
+ * already bought sit in silver, so the retry pays nothing again for them.
  */
 export async function serveLinkedinEngagers(args: {
   ctx: EngagementContext;
@@ -558,8 +617,8 @@ export async function serveLinkedinEngagers(args: {
   try {
     const harvested = await harvest(meter, pages, args.spec, now, Date.now() + HARVEST_BUDGET_MS);
     const queue = await candidates(identity.orgId, audienceKey, pages, args.spec, now, MAX_PROFILE_LOOKUPS_PER_CALL);
+    const claims: Array<{ id: string; profileId: string }> = [];
     for (const c of queue) {
-      if (result.people.length >= SERVE_BATCH) break;
       const [claim] = await db
         .insert(linkedinEngagementServes)
         .values({
@@ -573,25 +632,42 @@ export async function serveLinkedinEngagers(args: {
         })
         .onConflictDoNothing()
         .returning({ id: linkedinEngagementServes.id });
-      if (!claim) continue; // a concurrent serve took this person
-      result.considered++;
-      let profile: ResolvedProfile | null;
-      try {
-        profile = await resolveProfile(meter, c.profileId, now);
-      } catch (err) {
-        // Not decided: release the claim so a later serve can try again.
-        await db.delete(linkedinEngagementServes).where(eq(linkedinEngagementServes.id, claim.id));
-        throw err;
-      }
-      const verdict = !profile || !isPublicProfileUrl(profile.linkedinUrl) ? "unresolvable" : prospectRejection(profile, pages) ? "excluded" : "served";
-      await db
-        .update(linkedinEngagementServes)
-        .set({ status: verdict, reason: verdict === "excluded" ? "competitor_employee" : verdict === "unresolvable" ? "profile_not_readable" : null, servedAt: new Date() })
-        .where(eq(linkedinEngagementServes.id, claim.id));
-      if (verdict === "served") result.people.push(linkedinEngagerToPerson(profile!, canonicalLinkedinUrl));
-      else if (verdict === "excluded") result.excluded++;
-      else result.unresolvable++;
+      if (claim) claims.push({ id: claim.id, profileId: c.profileId }); // else a concurrent serve took this person
     }
+    result.considered = claims.length;
+
+    const screened = await mapPool(claims, PROFILE_CONCURRENCY, async (claim) => {
+      const profile = await resolveProfile(meter, claim.profileId, now);
+      const verdict = !profile || !isPublicProfileUrl(profile.linkedinUrl) ? "unresolvable" : prospectRejection(profile, pages) ? "excluded" : "served";
+      if (verdict !== "served") {
+        await db
+          .update(linkedinEngagementServes)
+          .set({ status: verdict, reason: verdict === "excluded" ? "competitor_employee" : "profile_not_readable", servedAt: new Date() })
+          .where(eq(linkedinEngagementServes.id, claim.id));
+      }
+      return { verdict, profile };
+    });
+
+    const failed = screened.find((r) => r?.status === "rejected") as PromiseRejectedResult | undefined;
+    if (failed) {
+      const release = claims.filter((_, i) => screened[i]?.status !== "fulfilled" || (screened[i] as PromiseFulfilledResult<{ verdict: string }>).value.verdict === "served");
+      if (release.length > 0) await db.delete(linkedinEngagementServes).where(inArray(linkedinEngagementServes.id, release.map((c) => c.id)));
+      throw failed.reason;
+    }
+
+    const servedIds: string[] = [];
+    screened.forEach((r, i) => {
+      const { verdict, profile } = (r as PromiseFulfilledResult<{ verdict: string; profile: ResolvedProfile | null }>).value;
+      if (verdict === "served") {
+        servedIds.push(claims[i].id);
+        result.people.push(linkedinEngagerToPerson(profile!, canonicalLinkedinUrl));
+      } else if (verdict === "excluded") result.excluded++;
+      else result.unresolvable++;
+    });
+    if (servedIds.length > 0) {
+      await db.update(linkedinEngagementServes).set({ status: "served", reason: null, servedAt: new Date() }).where(inArray(linkedinEngagementServes.id, servedIds));
+    }
+
     const left = await candidates(identity.orgId, audienceKey, pages, args.spec, now, 1);
     result.done = harvested && left.length === 0 && result.people.length === 0;
     result.poolSize = await poolSize(pages, args.spec, now);
