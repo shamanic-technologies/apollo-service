@@ -22,11 +22,12 @@
  * three). None resolves the showcase page `showcase/eimmigration`: scrapecreators
  * says "Company not found", tikhub returns null, harvestapi "No valid target".
  *
- * The treg rule: a provider that is GONE (treg's own 404 "no tool"), rate
- * limited (429), broken (5xx) or slow (timeout) says nothing about the page, so
- * the next provider is asked. A provider that ANSWERED that the page does not
- * exist is believed and never re-asked elsewhere (that would pay twice for the
- * same 4xx).
+ * A provider that is GONE (treg's own 404 "no tool"), rate limited (429),
+ * broken (5xx) or slow (timeout) says nothing about the page, so the next
+ * provider is asked. "Page not found" passes to the next provider too: it is a
+ * fact about that provider's coverage, not about the page (scrapecreators did
+ * not know oxblue-corporation, tikhub listed 50 of its posts). A page is dead
+ * only when every provider says so. Any other 4xx fails loud.
  */
 import type { WirePost } from "./linkedin-engagement-spec.js";
 import type { CompetitorPage } from "./linkedin-engagement-spec.js";
