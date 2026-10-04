@@ -410,6 +410,17 @@ window. `src/lib/linkedin-engagement-spec.ts` (pure) + `src/lib/linkedin-engagem
   headline missed lemlist staff. So every candidate's profile is resolved
   (`treg.linkedin.user.profile`, ~$0.0015, cached 30 days, misses free): public
   slug, CURRENT employer slug (employee filter), company website (find domain).
+- **Company posts come from a PROVIDER CHAIN, never one routed id (2026-10-04).**
+  treg withdrew `treg.linkedin.company.posts` at 00:33 UTC (`404 "no tool … in this
+  org"`) and every serve failed for 5h while its children kept working. Now
+  `POSTS_PROVIDERS` (`src/lib/linkedin-company-posts.ts`) calls the children
+  directly: scrapecreators ($0.00188) → tikhub ($0.001/success, exact dates) →
+  harvestapi ($0.004). treg rule: withdrawn tool / 429 / 5xx / timeout → next
+  provider; a provider ANSWERING "page not found" is believed, never re-asked.
+  A dead page (`linkedin_company_pages.posts_status = not_found`, re-checked after
+  24h) is SKIPPED with a loud log + warn trace, the other pages served; every page
+  dead = 422 `competitor_pages_unreadable` (all providers down = 502, retryable).
+  No provider resolves `showcase/eimmigration` (all three probed).
 - **`/enrich li:<id>`** = treg find on public URL + names + company domain, then the
   verifier (same as `qe:`), plus `buyingSignal` with an additive `engagement` block
   (page, post, reaction/comment, dates). 404 if never served to this org.

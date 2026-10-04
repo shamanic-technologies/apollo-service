@@ -253,6 +253,13 @@
       "when": 1780444800000,
       "tag": "0035_company_firmographics",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1780531200000,
+      "tag": "0036_linkedin_page_status",
+      "breakpoints": true
     }
   ]
 }

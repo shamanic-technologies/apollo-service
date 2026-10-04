@@ -20,14 +20,26 @@ vi.mock("../../src/lib/keys-client.js", () => ({ decryptKey: vi.fn(async () => (
 const NOW = new Date();
 const daysAgo = (n: number) => new Date(NOW.getTime() - n * 86_400_000).toISOString();
 
+// scrapecreators' native body (called directly since treg withdrew the routed id).
 const POSTS = {
-  output: {
-    posts: [
-      { url: "https://www.linkedin.com/posts/lemlist_a-activity-111", id: "111", text: "recent", datePublished: daysAgo(3) },
-      { url: "https://www.linkedin.com/posts/lemlist_b-activity-222", id: "222", text: "old", datePublished: daysAgo(60) },
-    ],
-  },
+  success: true,
+  credits_charged: 1,
+  posts: [
+    { url: "https://www.linkedin.com/posts/lemlist_a-activity-111", id: "111", text: "recent", datePublished: daysAgo(3) },
+    { url: "https://www.linkedin.com/posts/lemlist_b-activity-222", id: "222", text: "old", datePublished: daysAgo(60) },
+  ],
 };
+// tikhub's native body for the same page (exact "YYYY-MM-DD HH:MM:SS" UTC dates).
+const TIKHUB_POSTS = {
+  code: 200,
+  data: { data: [{ urn: "111", url: "https://www.linkedin.com/posts/lemlist_a-activity-111", text: "recent", posted: daysAgo(3).slice(0, 19).replace("T", " ") }], paging: { count: 50, start: 0 } },
+};
+const NO_TOOL = { detail: "no tool 'scrapecreators.x.v1-linkedin-company-posts' in this org" };
+const SC_NOT_FOUND = { success: true, credits_charged: 0, error: "not_found", errorStatus: 404, message: "Company not found" };
+/** Per page slug: how scrapecreators answers (default: the posts). */
+let scrapecreators: Record<string, "posts" | "withdrawn" | "not_found" | "502"> = {};
+/** tikhub / harvestapi answering 503 (an outage). */
+let down = new Set<string>();
 const actor = (id: string, name: string, headline: string, url?: string) => ({ urn: `urn:li:fsd_profile:${id}`, name, headline, profileUrl: url ?? `https://www.linkedin.com/in/${id}`, profileId: id });
 const ENGAGEMENT_111 = {
   reactions: [
@@ -82,7 +94,27 @@ describe.skipIf(!DB_URL)("linkedin_engagement serve loop on a real database", ()
     }
     mod = await import("../../src/lib/linkedin-engagement.js");
     vi.stubGlobal("fetch", vi.fn(async (url: string, init: { body?: string }) => {
-      if (url.includes("treg.linkedin.company.posts")) { calls.push("posts"); return reply(200, POSTS, "1880"); }
+      if (url.includes("scrapecreators.x.v1-linkedin-company-posts")) {
+        const page = new URL(url).searchParams.get("url")!;
+        const slug = page.split("/").filter(Boolean).pop()!;
+        calls.push(`posts:scrapecreators:${slug}`);
+        const mode = scrapecreators[slug] ?? "posts";
+        if (mode === "withdrawn") return reply(404, NO_TOOL, "0");
+        if (mode === "not_found") return reply(404, SC_NOT_FOUND, "0");
+        if (mode === "502") return reply(502, { detail: "upstream" }, "0");
+        return reply(200, slug === "lemlist" ? POSTS : { success: true, posts: [] }, "1880");
+      }
+      if (url.includes("tikhub.x.linkedin-web-v2-get-company-posts")) {
+        const slug = new URL(url).searchParams.get("url")!.split("/").filter(Boolean).pop()!;
+        calls.push(`posts:tikhub:${slug}`);
+        if (down.has("tikhub")) return reply(503, { detail: "unavailable" }, "0");
+        return reply(200, slug === "lemlist" ? TIKHUB_POSTS : { code: 200, data: { data: null } }, "1000");
+      }
+      if (url.includes("harvestapi.linkedin.company.posts")) {
+        calls.push(`posts:harvestapi:${new URL(url).searchParams.get("companyUniversalName")}`);
+        if (down.has("harvestapi")) return reply(503, { detail: "unavailable" }, "0");
+        return reply(200, { elements: null, error: "No valid target provided", status: 400 }, "4000");
+      }
       if (url.includes("fetchinio.linkedin.post.engagement")) {
         calls.push(`engagement:${new URL(url).searchParams.get("postUrlOrUrn")}`);
         return reply(200, ENGAGEMENT_111, "3000");
@@ -109,6 +141,8 @@ describe.skipIf(!DB_URL)("linkedin_engagement serve loop on a real database", ()
 
   beforeEach(() => {
     calls.length = 0;
+    scrapecreators = {};
+    down = new Set();
   });
 
   it("serves the prospects of in-window posts, drops the employee and the unreadable, pays each fact once", async () => {
@@ -191,5 +225,70 @@ describe.skipIf(!DB_URL)("linkedin_engagement serve loop on a real database", ()
     failWith = "rate_limited";
     await expect(mod.serveLinkedinEngagers({ ctx: ctx("aud-5"), campaignId: "c5", spec, now: NOW })).rejects.toThrow(/HTTP 502/);
     failProfileUrl = null;
+  });
+
+  describe("posts providers (treg withdrew the routed treg.linkedin.company.posts on 2026-10-04)", () => {
+    const freshPages = async () => {
+      await q`DELETE FROM linkedin_company_pages`;
+    };
+
+    it("a withdrawn provider passes to the next one, and the serve still returns engagers", async () => {
+      await freshPages();
+      scrapecreators = { lemlist: "withdrawn" };
+      const res = await mod.serveLinkedinEngagers({ ctx: ctx("aud-withdrawn"), campaignId: "c6", spec, now: NOW });
+      expect(calls.filter((c) => c.startsWith("posts"))).toEqual(["posts:scrapecreators:lemlist", "posts:tikhub:lemlist"]);
+      expect(res.people.length).toBeGreaterThan(0);
+      expect(res.skippedPages).toEqual([]);
+      const [page] = await q`SELECT posts_status, posts_count FROM linkedin_company_pages WHERE slug = 'lemlist'`;
+      expect(page).toMatchObject({ posts_status: "ok", posts_count: 1 });
+    });
+
+    it("a 5xx provider passes to the next one too", async () => {
+      await freshPages();
+      scrapecreators = { lemlist: "502" };
+      await mod.serveLinkedinEngagers({ ctx: ctx("aud-5xx"), campaignId: "c7", spec, now: NOW });
+      expect(calls.filter((c) => c.startsWith("posts"))).toEqual(["posts:scrapecreators:lemlist", "posts:tikhub:lemlist"]);
+    });
+
+    const twoPages = { ...spec, competitor_pages: ["https://www.linkedin.com/company/lemlist/", "https://www.linkedin.com/showcase/eimmigration/"] };
+
+    it("a page no provider knows is skipped and remembered; the other page is served", async () => {
+      await freshPages();
+      scrapecreators = { eimmigration: "not_found" };
+      const res = await mod.serveLinkedinEngagers({ ctx: ctx("aud-dead-page"), campaignId: "c8", spec: twoPages, now: NOW });
+      expect(res.people.length).toBeGreaterThan(0);
+      expect(res.skippedPages).toEqual([expect.objectContaining({ page: "https://www.linkedin.com/showcase/eimmigration/", state: "not_found" })]);
+      // The provider ANSWERED that the page does not exist: never re-asked elsewhere.
+      expect(calls.filter((c) => c.includes("eimmigration"))).toEqual(["posts:scrapecreators:eimmigration"]);
+      const [page] = await q`SELECT posts_status FROM linkedin_company_pages WHERE slug = 'eimmigration'`;
+      expect(page.posts_status).toBe("not_found");
+
+      // The next serve skips it from silver, for free, and still says so.
+      calls.length = 0;
+      const next = await mod.serveLinkedinEngagers({ ctx: ctx("aud-dead-page"), campaignId: "c8", spec: twoPages, now: NOW });
+      expect(calls.filter((c) => c.startsWith("posts"))).toEqual([]);
+      expect(next.skippedPages).toEqual([expect.objectContaining({ state: "not_found" })]);
+    });
+
+    it("every page dead: a named, permanent failure", async () => {
+      await freshPages();
+      const dead = { ...spec, competitor_pages: ["https://www.linkedin.com/showcase/eimmigration/", "https://www.linkedin.com/company/gone-co/"] };
+      scrapecreators = { eimmigration: "not_found", "gone-co": "not_found" };
+      const err = await mod.serveLinkedinEngagers({ ctx: ctx("aud-all-dead"), campaignId: "c9", spec: dead, now: NOW }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(mod.LinkedinCompetitorPagesUnreadableError);
+      expect(err).toMatchObject({ permanent: true });
+      expect(err.pages.map((p: { page: string }) => p.page).sort()).toEqual(["https://www.linkedin.com/company/gone-co/", "https://www.linkedin.com/showcase/eimmigration/"]);
+    });
+
+    it("every provider down: a named, RETRYABLE failure, and nothing remembered about the page", async () => {
+      await freshPages();
+      scrapecreators = { lemlist: "withdrawn" };
+      down = new Set(["tikhub", "harvestapi"]);
+      const err = await mod.serveLinkedinEngagers({ ctx: ctx("aud-outage"), campaignId: "c10", spec, now: NOW }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(mod.LinkedinCompetitorPagesUnreadableError);
+      expect(err).toMatchObject({ permanent: false });
+      expect(calls.filter((c) => c.startsWith("posts"))).toEqual(["posts:scrapecreators:lemlist", "posts:tikhub:lemlist", "posts:harvestapi:lemlist"]);
+      expect(await q`SELECT 1 FROM linkedin_company_pages WHERE slug = 'lemlist'`).toHaveLength(0);
+    });
   });
 });

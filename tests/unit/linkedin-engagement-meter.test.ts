@@ -81,9 +81,9 @@ describe("EngagementMeter", () => {
   });
 
   it("provision → authorize → execute → actual (treg's own figure) → cancel hold, org-billed, bronze written", async () => {
-    const { EngagementMeter, POSTS_ENDPOINT, POSTS_MAX_MICRO } = await import("../../src/lib/linkedin-engagement.js");
+    const { EngagementMeter, PROFILE_ENDPOINT } = await import("../../src/lib/linkedin-engagement.js");
     const meter = new EngagementMeter(ctx);
-    const res = await meter.call(POSTS_ENDPOINT, { method: "POST", body: { linkedin_url: "https://www.linkedin.com/company/lemlist/" }, maxMicro: POSTS_MAX_MICRO, routed: true });
+    const res = await meter.call(PROFILE_ENDPOINT, { method: "POST", body: { linkedin_url: "https://www.linkedin.com/in/x" }, maxMicro: 5000, routed: true });
     expect(res).toMatchObject({ status: 200, chargedMicro: 1880 });
     expect(order).toEqual(["provision", "authorize", "execute", "actual", "cancel-hold"]);
     expect(mockCreateRun).toHaveBeenCalledWith(expect.objectContaining({ orgId: "org-1", campaignId: "camp-1", audienceId: "aud-1", taskName: "linkedin-engagement", parentRunId: "run-parent" }));
@@ -91,9 +91,9 @@ describe("EngagementMeter", () => {
     expect(mockAddCosts.mock.calls[1][1]).toEqual([{ costName: "treg-micro-usd", costSource: "platform", quantity: 1880 }]);
     expect(mockAuthorize).toHaveBeenCalledWith(expect.objectContaining({ orgId: "org-1", items: [{ costName: "treg-micro-usd", quantity: 5000 }] }));
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("https://treg.to/call/treg.linkedin.company.posts");
+    expect(url).toBe("https://treg.to/call/treg.linkedin.user.profile");
     expect(init.headers).toMatchObject({ "X-Treg-Token": "treg-token", "X-Treg-Org": "distribute-you", "X-Treg-Route-Max-Cost": "0.005000", "Cache-Control": "no-cache" });
-    expect(bronze[0]).toMatchObject({ endpoint: POSTS_ENDPOINT, runId: "run-li", httpStatus: 200, chargedMicro: 1880 });
+    expect(bronze[0]).toMatchObject({ endpoint: PROFILE_ENDPOINT, runId: "run-li", httpStatus: 200, chargedMicro: 1880 });
     expect(meter.chargedMicro).toBe(1880);
   });
 

@@ -5,7 +5,8 @@
  * evidence /enrich hands downstream. No database, no network.
  *
  * Wire facts, measured live 2026-10-03 through treg on lemlist's page:
- * - `treg.linkedin.company.posts` ({linkedin_url}) → `output.posts[]` of
+ * - company posts (then the routed `treg.linkedin.company.posts`, withdrawn
+ *   2026-10-04; now ./linkedin-company-posts.ts maps each provider to) `posts[]` of
  *   `{url, id, text, datePublished}`: about 10 most recent posts, no paging,
  *   `limit` ignored. `datePublished` is DERIVED from LinkedIn's relative age
  *   ("1w"): every post of a week shares one time of day, some are null. So a
