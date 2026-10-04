@@ -125,6 +125,15 @@ describe("EngagementMeter", () => {
     expect(bronze[0]).toMatchObject({ httpStatus: 200, chargedMicro: null });
   });
 
+  it("a NUL character in a relayed body is dropped before anything is stored (jsonb rejects it)", async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(new Response('{"raw":{"positions":[{"description":"Stajyerl\\u0000ik"}]},"output":{}}', { status: 200, headers: { "x-treg-cost-micro": "1500" } })));
+    const { EngagementMeter, PROFILE_ENDPOINT } = await import("../../src/lib/linkedin-engagement.js");
+    const meter = new EngagementMeter(ctx);
+    const res = await meter.call(PROFILE_ENDPOINT, { method: "POST", body: {}, maxMicro: 5000, routed: true });
+    expect(JSON.stringify(res.body)).toBe('{"raw":{"positions":[{"description":"Stajyerlik"}]},"output":{}}');
+    expect(JSON.stringify(bronze[0].responseBody)).not.toContain("\\u0000");
+  });
+
   it("profile lookups skip anyapi (0 of 62 hits, +8-10s each in prod)", async () => {
     fetchMock.mockImplementation(() => Promise.resolve(answer(200, { output: {} }, "1500")));
     const { EngagementMeter, PROFILE_ENDPOINT, PROFILE_ROUTE_EXCLUDE } = await import("../../src/lib/linkedin-engagement.js");

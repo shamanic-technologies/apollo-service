@@ -213,6 +213,21 @@ interface TregAnswer {
   chargedMicro: number;
 }
 
+/**
+ * Postgres jsonb and text reject the NUL character, and LinkedIn text carries
+ * it (a profile description "Stajyerl\u0000..." failed every serve of an
+ * audience, 2026-10-04). It means nothing, so it is dropped from every string
+ * a provider relays before anything is stored.
+ */
+export function stripNul<T>(value: T): T {
+  if (typeof value === "string") return value.replace(/\u0000/g, "") as T;
+  if (Array.isArray(value)) return value.map(stripNul) as T;
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([k, v]) => [stripNul(k), stripNul(v)])) as T;
+  }
+  return value;
+}
+
 function headersToObject(headers: Headers): Record<string, string> {
   const out: Record<string, string> = {};
   headers.forEach((v, k) => {
@@ -348,9 +363,9 @@ export class EngagementMeter {
       responseHeaders = headersToObject(response.headers);
       const text = await response.text();
       try {
-        body = text ? (JSON.parse(text) as Record<string, unknown>) : null;
+        body = text ? stripNul(JSON.parse(text) as Record<string, unknown>) : null;
       } catch {
-        body = { _raw: text.slice(0, 2000) };
+        body = { _raw: stripNul(text.slice(0, 2000)) };
       }
       const costHeader = responseHeaders["x-treg-cost-micro"];
       charged = costHeader === undefined || costHeader.trim() === "" ? null : Number(costHeader);
