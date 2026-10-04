@@ -227,7 +227,7 @@ describe("linkedin_engagement serve path", () => {
   it("serves engagers, never calls Apollo, and says source=linkedin_engagement", async () => {
     mockServeLinkedinEngagers.mockResolvedValue({
       people: [{ id: "li:ACoAAAoz5ykB", firstName: "Peter", lastName: "Cools", title: "Founder & CEO", organizationName: "Rodz" }],
-      done: false, poolSize: 42, considered: 3, excluded: 2, unresolvable: 0, calls: 4, chargedMicro: 9000,
+      done: false, poolSize: 42, considered: 3, excluded: 2, unresolvable: 0, skippedPages: [], calls: 4, chargedMicro: 9000,
     });
     const res = await post("/search/next", { searchParams: LI_PARAMS }).expect(200);
     expect(res.body).toMatchObject({ source: "linkedin_engagement", done: false, hasMore: true, totalEntries: 42 });
@@ -243,10 +243,21 @@ describe("linkedin_engagement serve path", () => {
   });
 
   it("nobody left: done=true with an empty page (a truthful exhaustion, not an empty success)", async () => {
-    mockServeLinkedinEngagers.mockResolvedValue({ people: [], done: true, poolSize: 42, considered: 0, excluded: 0, unresolvable: 0, calls: 0, chargedMicro: 0 });
+    mockServeLinkedinEngagers.mockResolvedValue({ people: [], done: true, poolSize: 42, considered: 0, excluded: 0, unresolvable: 0, skippedPages: [], calls: 0, chargedMicro: 0 });
     const res = await post("/search/next", { searchParams: LI_PARAMS }).expect(200);
     expect(res.body).toMatchObject({ people: [], done: true, hasMore: false });
     expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ exhausted: true }));
+  });
+
+  it("every competitor page dead: a named 422 listing each page (permanent); an outage on all of them: 502 retryable", async () => {
+    const { LinkedinCompetitorPagesUnreadableError } = await import("../../src/lib/linkedin-engagement.js");
+    const pages = [{ page: "https://www.linkedin.com/showcase/eimmigration/", reason: "Company not found" }];
+    mockServeLinkedinEngagers.mockRejectedValueOnce(new LinkedinCompetitorPagesUnreadableError(pages, true));
+    const dead = await post("/search/next", { searchParams: LI_PARAMS }).expect(422);
+    expect(dead.body).toMatchObject({ type: "competitor_pages_unreadable", source: "linkedin-engagement", pages, retryable: false });
+    mockServeLinkedinEngagers.mockRejectedValueOnce(new LinkedinCompetitorPagesUnreadableError(pages, false));
+    const outage = await post("/search/next", { searchParams: LI_PARAMS }).expect(502);
+    expect(outage.body).toMatchObject({ type: "competitor_pages_unreadable", retryable: true });
   });
 
   it("missing competitor_pages is a named 400", async () => {
