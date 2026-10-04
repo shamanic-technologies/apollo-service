@@ -1,6 +1,7 @@
 import { drizzle, PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres, { Sql } from "postgres";
 import * as schema from "./schema.js";
+import { installNulStripping } from "../lib/nul-strip.js";
 
 let sqlClient: Sql | null = null;
 let dbInstance: PostgresJsDatabase<typeof schema> | null = null;
@@ -21,6 +22,7 @@ export function getSql(): Sql {
       connect_timeout: 10,
       max: 10,
     });
+    installNulStripping(sqlClient);
   }
   return sqlClient;
 }
