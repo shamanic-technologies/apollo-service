@@ -70,3 +70,17 @@ export async function decryptKey(
   const data = await response.json();
   return { key: data.key, keySource: data.keySource };
 }
+
+/**
+ * The PLATFORM key for a provider, for an org-less caller (a platform job).
+ * Never an org key: there is no org to resolve a preference for.
+ */
+export async function decryptPlatformKey(provider: string, caller: CallerContext): Promise<string> {
+  const response = await fetch(`${KEY_SERVICE_URL}/keys/platform/${provider}/decrypt`, { headers: callerHeaders(caller) });
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to fetch platform ${provider} key: ${response.status} ${error}`);
+  }
+  const data = (await response.json()) as { key: string };
+  return data.key;
+}

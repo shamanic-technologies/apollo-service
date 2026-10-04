@@ -1374,6 +1374,71 @@ registry.registerPath({
   },
 });
 
+// ─── POST /internal/company-firmographics ────────────────────────────────
+
+export const CompanyFirmographicsRequestSchema = z
+  .object({
+    domain: z.string().min(3).max(253).describe("The company's website domain (a URL is accepted and reduced to its host, `www.` dropped)."),
+    email: z.string().email().optional().describe("The person's email, when known. Used only to read their role."),
+    firstName: z.string().min(1).max(100).optional(),
+    lastName: z.string().min(1).max(100).optional(),
+  })
+  .openapi("CompanyFirmographicsRequest");
+
+const FirmographicsRangeSchema = z
+  .object({
+    label: z.string().describe('Display label, e.g. "51-200" or "$10M-$50M".'),
+    min: z.number(),
+    max: z.number().nullable().describe("null for the open-ended top bucket."),
+  })
+  .openapi("FirmographicsRange");
+
+const CompanyFirmographicsResponseSchema = z
+  .object({
+    domain: z.string().describe("The normalized domain that was looked up."),
+    company: z
+      .object({
+        name: z.string().nullable(),
+        domain: z.string(),
+        countryCode: z.string().nullable().describe("ISO 3166-1 alpha-2 of the HQ country."),
+        countryName: z.string().nullable().describe("Apollo's English country name."),
+        industry: z.string().nullable(),
+        revenueRange: FirmographicsRangeSchema.nullable().describe("Annual revenue bucket (USD): <$1M, $1M-$10M, $10M-$50M, $50M-$100M, $100M-$500M, $500M-$1B, $1B+."),
+        employeeRange: FirmographicsRangeSchema.nullable().describe("Headcount bucket: 1-10, 11-50, 51-200, 201-500, 501-1,000, 1,001-5,000, 5,001-10,000, 10,001+."),
+        category: z.enum(["B2B SaaS", "B2B Agency", "B2C", "Other"]).nullable().describe("Business model, judged by Jev from Apollo's description/keywords/industry. null when there was nothing to judge or confidence < 0.5."),
+        categoryConfidence: z.number().nullable(),
+        apolloOrganizationId: z.string().nullable(),
+      })
+      .nullable()
+      .describe("null when the domain is a free-mail provider or Apollo knows no company for it (see noCompanyReason). Every field is independently nullable."),
+    noCompanyReason: z.enum(["personal_email_domain", "not_found"]).nullable(),
+    person: z
+      .object({ title: z.string().nullable(), seniority: z.string().nullable() })
+      .nullable()
+      .describe("The person's role, only when a person was given AND Apollo matched them. Never guessed."),
+    personMatched: z.boolean().nullable().describe("null when no person was given (email, or first+last name)."),
+    cached: z.object({ company: z.boolean().nullable(), person: z.boolean().nullable() }).describe("true = served from cache, nothing spent."),
+  })
+  .openapi("CompanyFirmographicsResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/company-firmographics",
+  summary: "Company firmographics for a domain (+ a person's role), org-less and platform-billed",
+  description:
+    "For platform jobs with no org (distribute.you visit recap). Given a company website domain and optionally the person's email and/or first+last name, answers HQ country, industry, revenue range, headcount range, business-model category (B2B SaaS | B2B Agency | B2C | Other), and the person's role when Apollo matches them. Free-mail domains (gmail.com, outlook.com, ...) answer company null / personal_email_domain without spending. Spend: Apollo organizations/enrich (1 apollo-credit when found, 0 when not) and people/match (1 apollo-credit when matched, 0 otherwise), declared as actual costs on an apollo-service platform run; the category is one Jev choice judgment billed by chat-service on its platform tier. Cached globally per domain and per person (90 days when found, 30 when not): a repeat call spends nothing. Requires x-api-key = APOLLO_SERVICE_API_KEY. No identity headers.",
+  request: {
+    headers: z.object({ "x-api-key": z.string() }),
+    body: { content: { "application/json": { schema: CompanyFirmographicsRequestSchema } }, required: true },
+  },
+  responses: {
+    200: { description: "Firmographics (fields null when unknown)", content: { "application/json": { schema: CompanyFirmographicsResponseSchema } } },
+    400: { description: "Validation error (bad body or not a domain)", content: { "application/json": { schema: ErrorResponseSchema } } },
+    401: { description: "Missing or invalid x-api-key", content: { "application/json": { schema: ErrorResponseSchema } } },
+    502: { description: "Apollo, key-service, runs-service (cost declaration) or chat-service failed. A paid lookup whose cost could not be declared is declared on the next call, never paid twice.", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
 // ─── POST /validate ──────────────────────────────────────────────────────────
 
 export const ValidateRequestSchema = z

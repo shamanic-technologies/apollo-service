@@ -572,6 +572,34 @@ A reveal is 11.8¢, a BounceVerify check 0.445¢ (0 on unknown).
   human-service already treats `person: null` as a no-email reveal.
 - The DELIVERABLE policy is unchanged: only `valid` is served.
 
+## Company firmographics by domain (`POST /internal/company-firmographics`) — ORG-LESS, platform-billed
+
+"Who is the company behind this website, and what does this person do there?"
+for a caller with NO org (distribute.you's per-visit Telegram recap, a platform
+job). `x-api-key` = `APOLLO_SERVICE_API_KEY`, no identity headers.
+`src/lib/company-firmographics.ts`. Body `{domain, email?, firstName?, lastName?}`.
+
+- **Spend measured 2026-10-04** (`credit_usage_stats` before/after):
+  `GET organizations/enrich?domain=` = 1 lead credit when found, 0 when Apollo
+  answers `{}`; `people/match` by email = 1 for a real match, 0 for an unknown
+  address (Apollo returns a synthetic person with `match_confidence: "none"` and
+  no title — that is "not matched", never a role). Category = one Jev `choice`
+  on chat-service `/internal/platform-judgments` (chat-service declares it);
+  below 0.5 confidence it is reported null.
+- **Org-less protocol** (no org balance, so no authorize/hold): platform run
+  opened BEFORE the Apollo call (runs-service down = 502, nothing spent),
+  `apollo-credit` posted as `actual` on `/v1/platform-runs/{id}/costs`, run
+  closed. The cache row is committed FIRST with `cost_declared_at` null; a
+  failed declaration 502s and the next call declares it under the SAME
+  idempotency key, never paying Apollo twice. Platform Apollo key via key-service
+  `GET /keys/platform/apollo/decrypt`.
+- **Cache** global (`company_domain_lookups`, `person_role_lookups`, no org_id,
+  not in transfer-brand): 90 days found / 30 days not found. Free-mail domains
+  (`PERSONAL_EMAIL_DOMAINS`) answer `company:null, noCompanyReason:
+  "personal_email_domain"` with no call at all.
+- Every field nullable; ranges are buckets (`revenueRange`, `employeeRange`),
+  country is ISO-2 from Apollo's English name (CLDR reverse map + aliases).
+
 ## Other email finders: treg.to and Explee (bronze / silver / exact cost)
 
 apollo-service holds our enrichment PROVIDERS, not only Apollo. `POST
