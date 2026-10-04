@@ -5,7 +5,7 @@ import { apolloPeopleSearches, apolloPeopleEnrichments, apolloSearchCursors } fr
 import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
 import { gateReveal, recordRevealSkip, rememberTeaserEmployers } from "../lib/reveal-domain-gate.js";
 import { readSignalSpec, signalConflicts, BuyingSignalConflictError, SignalNotApolloSearchableError } from "../lib/buying-signal-spec.js";
-import { serveLinkedinEngagers, filtersBesideEngagement, findServed, loadProfile, evidenceFor, LinkedinEngagementInsufficientCreditError } from "../lib/linkedin-engagement.js";
+import { serveLinkedinEngagers, filtersBesideEngagement, findServed, loadProfile, evidenceFor, LinkedinEngagementInsufficientCreditError, LinkedinCompetitorPagesUnreadableError } from "../lib/linkedin-engagement.js";
 import { parseLinkedinPersonId, linkedinEngagerToPerson, domainOf } from "../lib/linkedin-engagement-spec.js";
 import { buyingSignalForEnrich, recordSignalServes, resolveSignalCohort, BuyingSignalInsufficientCreditError, type EnrichedPersonLike } from "../lib/buying-signals.js";
 import { searchPeople, enrichPerson, ApolloPerson, buildWaterfallWebhookUrl, withVerifiedEmailOnly, isBilledApolloPerson, BILLED_NO_EMAIL_CACHE_DAYS } from "../lib/apollo-client.js";
@@ -690,7 +690,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
         spec: engagementSignal,
       });
       await db.update(apolloSearchCursors).set({ exhausted: served.done, totalEntries: served.poolSize, updatedAt: new Date() }).where(eq(apolloSearchCursors.id, cursorId));
-      traceEvent(runId, { service: "apollo-service", event: "linkedin-engagement-page", detail: `served=${served.people.length}, considered=${served.considered}, excluded=${served.excluded}, unresolvable=${served.unresolvable}, deferred=${served.deferred}, pool=${served.poolSize}, calls=${served.calls}, chargedMicro=${served.chargedMicro}, done=${served.done}` }, req.headers).catch(() => {});
+      traceEvent(runId, { service: "apollo-service", event: "linkedin-engagement-page", ...(served.skippedPages.length > 0 ? { level: "warn" as const } : {}), detail: `served=${served.people.length}, considered=${served.considered}, excluded=${served.excluded}, unresolvable=${served.unresolvable}, deferred=${served.deferred}, skippedPages=${JSON.stringify(served.skippedPages)}, pool=${served.poolSize}, calls=${served.calls}, chargedMicro=${served.chargedMicro}, done=${served.done}` }, req.headers).catch(() => {});
       await updateRun(searchRun.id, "completed", identity);
       openRun = null;
       return res.json({
@@ -870,6 +870,9 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     }
     if (error instanceof LinkedinEngagementInsufficientCreditError) {
       return res.status(402).json({ type: "credit_insufficient", source: "linkedin-engagement", error: error.message, balance_cents: error.balanceCents, required_cents: error.requiredCents });
+    }
+    if (error instanceof LinkedinCompetitorPagesUnreadableError) {
+      return res.status(error.permanent ? 422 : 502).json({ type: "competitor_pages_unreadable", source: "linkedin-engagement", error: error.message, pages: error.pages, retryable: !error.permanent });
     }
     if (error instanceof BuyingSignalConflictError) {
       return res.status(400).json({ type: "validation", error: error.message, fields: error.fields });

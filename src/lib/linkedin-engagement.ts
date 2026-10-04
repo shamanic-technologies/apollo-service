@@ -4,8 +4,11 @@
  * signal). Pure rules and the wire facts live in ./linkedin-engagement-spec.ts.
  *
  * Flow, all through treg (one token, one cost name):
- *   /search/next  harvest  → `treg.linkedin.company.posts` per competitor page
- *                            (re-listed at most once a day), then
+ *   /search/next  harvest  → each competitor page's posts from the first
+ *                            provider of POSTS_PROVIDERS that answers
+ *                            (./linkedin-company-posts.ts; re-listed at most
+ *                            once a day; a page no provider knows is skipped),
+ *                            then
  *                            `fetchinio.linkedin.post.engagement` per post in
  *                            the window (re-read at most once a day, paged)
  *                 serve    → each unconsidered engager is CLAIMED for the
@@ -63,14 +66,13 @@ import {
   type WireEngagement,
   type WirePost,
 } from "./linkedin-engagement-spec.js";
+import { POSTS_PROVIDERS, postsVerdict, type PostsProvider } from "./linkedin-company-posts.js";
 
 const TREG_BASE = "https://treg.to/call/";
-export const POSTS_ENDPOINT = "treg.linkedin.company.posts";
 export const ENGAGEMENT_ENDPOINT = "fetchinio.linkedin.post.engagement";
 export const PROFILE_ENDPOINT = "treg.linkedin.user.profile";
 
-/** Ceilings per call, micro-USD. Posts: scrapecreators $0.00188. Engagement: Fetchin $0.003 flat. Profile: $0.0012-0.004 children. */
-export const POSTS_MAX_MICRO = 5_000;
+/** Ceilings per call, micro-USD (posts: per provider, in POSTS_PROVIDERS). Engagement: Fetchin $0.003 flat. Profile: $0.0012-0.004 children. */
 export const ENGAGEMENT_MAX_MICRO = 3_000;
 export const PROFILE_MAX_MICRO = 5_000;
 
@@ -142,6 +144,18 @@ export class LinkedinEngagementInsufficientCreditError extends Error {
   constructor(public readonly balanceCents: number, public readonly requiredCents: number) {
     super("Insufficient credits to read LinkedIn engagement");
     this.name = "LinkedinEngagementInsufficientCreditError";
+  }
+}
+
+/**
+ * No competitor page of the signal could be read this serve. `permanent` when
+ * every page is one the providers say does not exist (the audience is
+ * misconfigured: 422); otherwise some page failed transiently (502, retry).
+ */
+export class LinkedinCompetitorPagesUnreadableError extends Error {
+  constructor(public readonly pages: Array<{ page: string; reason: string }>, public readonly permanent: boolean) {
+    super(`linkedin engagement: no competitor page could be read: ${pages.map((p) => `${p.page} (${p.reason})`).join("; ")}`);
+    this.name = "LinkedinCompetitorPagesUnreadableError";
   }
 }
 
@@ -379,25 +393,55 @@ function failure(endpoint: string, answer: TregAnswer): LinkedinTregError {
 
 // ─── Harvest (posts + engagement → silver) ───────────────────────────────────
 
-async function ensurePosts(meter: EngagementMeter, page: CompetitorPage, now: Date): Promise<void> {
-  await db.transaction(async (tx) => {
+/** A page's state after the posts step of one serve. */
+export type PageOutcome = { page: CompetitorPage; state: "readable" } | { page: CompetitorPage; state: "not_found" | "failed"; reason: string };
+
+/**
+ * Ask the providers in order until one answers about the page. A provider that
+ * is gone, throttled, broken or slow passes to the next; one that says the page
+ * does not exist ends the walk (never re-asked elsewhere).
+ */
+async function readPosts(meter: EngagementMeter, page: CompetitorPage, providers: PostsProvider[]): Promise<{ kind: "posts"; posts: WirePost[] } | { kind: "not_found"; reason: string } | { kind: "failed"; reason: string }> {
+  const skipped: string[] = [];
+  for (const provider of providers) {
+    let answer: TregAnswer;
+    try {
+      answer = await meter.call(provider.endpoint, { method: "GET", query: provider.query(page), maxMicro: provider.maxMicro, routed: false });
+    } catch (err) {
+      if (!(err instanceof LinkedinTregTransientError)) throw err;
+      skipped.push(err.message);
+      continue;
+    }
+    const verdict = postsVerdict(provider, answer.status, answer.body);
+    if (verdict.kind === "next") {
+      skipped.push(verdict.reason);
+      console.warn(`[Apollo Service][linkedin-engagement] posts provider skipped for ${page.url}: ${verdict.reason}`);
+      continue;
+    }
+    if (verdict.kind === "fail") throw new LinkedinTregError(verdict.reason);
+    return verdict;
+  }
+  return { kind: "failed", reason: `every posts provider failed: ${skipped.join(" | ")}` };
+}
+
+async function ensurePosts(meter: EngagementMeter, page: CompetitorPage, now: Date): Promise<PageOutcome> {
+  return db.transaction(async (tx) => {
     await advisoryXactLock(tx, `linkedin-page:${page.slug}`);
     const [row] = await tx.select().from(linkedinCompanyPages).where(eq(linkedinCompanyPages.slug, page.slug)).limit(1);
-    if (row?.postsFetchedAt && now.getTime() - row.postsFetchedAt.getTime() < POSTS_REFRESH_MS) return;
-
-    const answer = await meter.call(POSTS_ENDPOINT, { method: "POST", body: { linkedin_url: page.url }, maxMicro: POSTS_MAX_MICRO, routed: true });
-    let posts: WirePost[];
-    if (answer.status === 200) {
-      const output = (answer.body?.output ?? null) as { posts?: unknown } | null;
-      if (!output || !Array.isArray(output.posts)) throw new LinkedinTregError(`${POSTS_ENDPOINT}: unexpected body ${JSON.stringify(answer.body).slice(0, 300)}`);
-      posts = output.posts as WirePost[];
-    } else if (isRoutedMiss(answer)) {
-      posts = []; // the page has no readable posts: a real answer
-    } else {
-      throw failure(POSTS_ENDPOINT, answer);
+    if (row?.postsFetchedAt && now.getTime() - row.postsFetchedAt.getTime() < POSTS_REFRESH_MS) {
+      return row.postsStatus === "not_found" ? { page, state: "not_found", reason: row.postsError ?? "not found" } : { page, state: "readable" };
     }
 
-    for (const p of posts) {
+    const read = await readPosts(meter, page, POSTS_PROVIDERS);
+    if (read.kind === "failed") return { page, state: "failed", reason: read.reason };
+    if (read.kind === "not_found") {
+      // A permanent answer: remembered for the refresh period so no serve pays to re-learn it.
+      const set = { postsFetchedAt: now, postsCount: 0, postsStatus: "not_found", postsError: read.reason.slice(0, 1000) };
+      await tx.insert(linkedinCompanyPages).values({ slug: page.slug, url: page.url, ...set }).onConflictDoUpdate({ target: linkedinCompanyPages.slug, set });
+      return { page, state: "not_found", reason: read.reason };
+    }
+
+    for (const p of read.posts) {
       const postId = typeof p.id === "string" && /^\d+$/.test(p.id) ? p.id : null;
       if (!postId) continue;
       const published = p.datePublished ? new Date(p.datePublished) : null;
@@ -406,10 +450,9 @@ async function ensurePosts(meter: EngagementMeter, page: CompetitorPage, now: Da
         .values({ postId, pageSlug: page.slug, postUrl: p.url ?? null, text: p.text ?? null, publishedAt: published && !Number.isNaN(published.getTime()) ? published : null })
         .onConflictDoUpdate({ target: linkedinCompanyPosts.postId, set: { postUrl: sql`excluded.post_url`, text: sql`excluded.text`, lastSeenAt: now } });
     }
-    await tx
-      .insert(linkedinCompanyPages)
-      .values({ slug: page.slug, url: page.url, postsFetchedAt: now, postsCount: posts.length })
-      .onConflictDoUpdate({ target: linkedinCompanyPages.slug, set: { postsFetchedAt: now, postsCount: posts.length } });
+    const set = { postsFetchedAt: now, postsCount: read.posts.length, postsStatus: "ok", postsError: null };
+    await tx.insert(linkedinCompanyPages).values({ slug: page.slug, url: page.url, ...set }).onConflictDoUpdate({ target: linkedinCompanyPages.slug, set });
+    return { page, state: "readable" };
   });
 }
 
@@ -466,12 +509,24 @@ function windowStart(spec: BuyingSignalSpec, now: Date): Date {
 
 /**
  * Bring silver up to date for these pages: posts listed today, engagement of
- * every post in the window read today. Returns whether it got through all of
- * it before the budget (false = the next serve continues).
+ * every post in the window read today. `complete` says whether it got through
+ * all of it (false = the next serve continues). A page no provider knows, or
+ * one every provider failed on, is SKIPPED (logged, returned in `skipped`) and
+ * the others are served; only when no page at all is readable does it throw.
  */
-export async function harvest(meter: EngagementMeter, pages: CompetitorPage[], spec: BuyingSignalSpec, now: Date, deadline: number): Promise<boolean> {
-  if (Date.now() > deadline) return false;
-  await Promise.all(pages.map((page) => ensurePosts(meter, page, now)));
+export async function harvest(meter: EngagementMeter, pages: CompetitorPage[], spec: BuyingSignalSpec, now: Date, deadline: number): Promise<{ complete: boolean; skipped: Array<{ page: string; state: string; reason: string }> }> {
+  if (Date.now() > deadline) return { complete: false, skipped: [] };
+  const settled = await Promise.allSettled(pages.map((page) => ensurePosts(meter, page, now)));
+  const outcomes: PageOutcome[] = settled.map((r, i) => {
+    if (r.status === "fulfilled") return r.value;
+    if (r.reason instanceof LinkedinEngagementInsufficientCreditError) throw r.reason;
+    return { page: pages[i], state: "failed", reason: r.reason instanceof Error ? r.reason.message : String(r.reason) };
+  });
+  const skipped = outcomes.flatMap((o) => (o.state === "readable" ? [] : [{ page: o.page.url, state: o.state, reason: o.reason }]));
+  for (const s of skipped) console.warn(`[Apollo Service][linkedin-engagement] competitor page SKIPPED (${s.state}) ${s.page}: ${s.reason}`);
+  if (skipped.length === pages.length) {
+    throw new LinkedinCompetitorPagesUnreadableError(skipped.map((s) => ({ page: s.page, reason: s.reason })), skipped.every((s) => s.state === "not_found"));
+  }
   const stale = new Date(now.getTime() - ENGAGEMENT_REFRESH_MS);
   const due = await db
     .select({ postId: linkedinCompanyPosts.postId, pageSlug: linkedinCompanyPosts.pageSlug })
@@ -494,7 +549,8 @@ export async function harvest(meter: EngagementMeter, pages: CompetitorPage[], s
   });
   const failed = read.find((r) => r?.status === "rejected") as PromiseRejectedResult | undefined;
   if (failed) throw failed.reason;
-  return complete;
+  // A page that failed transiently may still hold engagers: not exhausted yet.
+  return { complete: complete && !skipped.some((s) => s.state === "failed"), skipped };
 }
 
 // ─── Serve ───────────────────────────────────────────────────────────────────
@@ -621,6 +677,8 @@ export interface EngagementServeResult {
   unresolvable: number;
   /** Lookups that failed transiently: released, retried by a later serve. */
   deferred: number;
+  /** Competitor pages not read this serve: `not_found` (no provider knows the page) or `failed` (every provider failed). */
+  skippedPages: Array<{ page: string; state: string; reason: string }>;
   calls: number;
   chargedMicro: number;
 }
@@ -647,10 +705,11 @@ export async function serveLinkedinEngagers(args: {
   const pages = competitorPagesOf(args.spec);
   const audienceKey = audienceKeyOf(identity.audienceId, args.campaignId);
   const meter = new EngagementMeter(args.ctx);
-  const result: EngagementServeResult = { people: [], done: false, poolSize: 0, considered: 0, excluded: 0, unresolvable: 0, deferred: 0, calls: 0, chargedMicro: 0 };
+  const result: EngagementServeResult = { people: [], done: false, poolSize: 0, considered: 0, excluded: 0, unresolvable: 0, deferred: 0, skippedPages: [], calls: 0, chargedMicro: 0 };
   let ok = false;
   try {
-    const harvested = await harvest(meter, pages, args.spec, now, Date.now() + HARVEST_BUDGET_MS);
+    const { complete: harvested, skipped } = await harvest(meter, pages, args.spec, now, Date.now() + HARVEST_BUDGET_MS);
+    result.skippedPages = skipped;
     const queue = await candidates(identity.orgId, audienceKey, pages, args.spec, now, MAX_PROFILE_LOOKUPS_PER_CALL);
     const claims: Array<{ id: string; profileId: string }> = [];
     for (const c of queue) {

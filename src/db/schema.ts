@@ -692,6 +692,9 @@ export const linkedinCompanyPages = pgTable("linkedin_company_pages", {
   url: text("url").notNull(),
   postsFetchedAt: timestamp("posts_fetched_at", { withTimezone: true }),
   postsCount: integer("posts_count"),
+  // "ok" | "not_found" (no posts provider knows the page; re-checked after the refresh period). null = ok (pre-0036 rows).
+  postsStatus: text("posts_status"),
+  postsError: text("posts_error"),
 });
 
 // Silver: one post of a company page. `published_at` is APPROXIMATE (LinkedIn
