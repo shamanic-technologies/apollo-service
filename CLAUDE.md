@@ -415,8 +415,9 @@ window. `src/lib/linkedin-engagement-spec.ts` (pure) + `src/lib/linkedin-engagem
   org"`) and every serve failed for 5h while its children kept working. Now
   `POSTS_PROVIDERS` (`src/lib/linkedin-company-posts.ts`) calls the children
   directly: scrapecreators ($0.00188) → tikhub ($0.001/success, exact dates) →
-  harvestapi ($0.004). treg rule: withdrawn tool / 429 / 5xx / timeout → next
-  provider; a provider ANSWERING "page not found" is believed, never re-asked.
+  harvestapi ($0.004). Withdrawn tool / 429 / 5xx / timeout / "page not found"
+  → next provider (coverage differs: scrapecreators did not know
+  oxblue-corporation, tikhub had 50 posts); dead = EVERY provider said not found.
   A dead page (`linkedin_company_pages.posts_status = not_found`, re-checked after
   24h) is SKIPPED with a loud log + warn trace, the other pages served; every page
   dead = 422 `competitor_pages_unreadable` (all providers down = 502, retryable).

@@ -250,6 +250,25 @@ describe.skipIf(!DB_URL)("linkedin_engagement serve loop on a real database", ()
       expect(calls.filter((c) => c.startsWith("posts"))).toEqual(["posts:scrapecreators:lemlist", "posts:tikhub:lemlist"]);
     });
 
+    it("one provider not knowing the page is NOT a dead page: the next provider's posts are served", async () => {
+      await freshPages();
+      scrapecreators = { lemlist: "not_found" };
+      const res = await mod.serveLinkedinEngagers({ ctx: ctx("aud-coverage"), campaignId: "c11", spec, now: NOW });
+      expect(calls.filter((c) => c.startsWith("posts"))).toEqual(["posts:scrapecreators:lemlist", "posts:tikhub:lemlist"]);
+      expect(res.people.length).toBeGreaterThan(0);
+      expect(res.skippedPages).toEqual([]);
+    });
+
+    it("not found on one provider + the others down: a retryable failure, the page is NOT remembered as dead", async () => {
+      await freshPages();
+      scrapecreators = { lemlist: "not_found" };
+      down = new Set(["tikhub", "harvestapi"]);
+      const err = await mod.serveLinkedinEngagers({ ctx: ctx("aud-mixed"), campaignId: "c12", spec, now: NOW }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(mod.LinkedinCompetitorPagesUnreadableError);
+      expect(err).toMatchObject({ permanent: false });
+      expect(await q`SELECT 1 FROM linkedin_company_pages WHERE slug = 'lemlist'`).toHaveLength(0);
+    });
+
     const twoPages = { ...spec, competitor_pages: ["https://www.linkedin.com/company/lemlist/", "https://www.linkedin.com/showcase/eimmigration/"] };
 
     it("a page no provider knows is skipped and remembered; the other page is served", async () => {
@@ -258,8 +277,8 @@ describe.skipIf(!DB_URL)("linkedin_engagement serve loop on a real database", ()
       const res = await mod.serveLinkedinEngagers({ ctx: ctx("aud-dead-page"), campaignId: "c8", spec: twoPages, now: NOW });
       expect(res.people.length).toBeGreaterThan(0);
       expect(res.skippedPages).toEqual([expect.objectContaining({ page: "https://www.linkedin.com/showcase/eimmigration/", state: "not_found" })]);
-      // The provider ANSWERED that the page does not exist: never re-asked elsewhere.
-      expect(calls.filter((c) => c.includes("eimmigration"))).toEqual(["posts:scrapecreators:eimmigration"]);
+      // Dead only once EVERY provider said it does not know the page.
+      expect(calls.filter((c) => c.includes("eimmigration"))).toEqual(["posts:scrapecreators:eimmigration", "posts:tikhub:eimmigration", "posts:harvestapi:eimmigration"]);
       const [page] = await q`SELECT posts_status FROM linkedin_company_pages WHERE slug = 'eimmigration'`;
       expect(page.posts_status).toBe("not_found");
 

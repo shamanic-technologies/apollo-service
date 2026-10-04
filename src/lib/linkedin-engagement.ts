@@ -412,12 +412,16 @@ function failure(endpoint: string, answer: TregAnswer): LinkedinTregError {
 export type PageOutcome = { page: CompetitorPage; state: "readable" } | { page: CompetitorPage; state: "not_found" | "failed"; reason: string };
 
 /**
- * Ask the providers in order until one answers about the page. A provider that
- * is gone, throttled, broken or slow passes to the next; one that says the page
- * does not exist ends the walk (never re-asked elsewhere).
+ * Ask the providers in order until one returns the page's posts. A provider
+ * that is gone, throttled, broken or slow passes to the next, and so does one
+ * that does not know the page: coverage differs per provider (scrapecreators
+ * said "Company not found" for oxblue-corporation while tikhub listed 50 of its
+ * posts, 2026-10-04). The page is not_found only when EVERY provider said so; a
+ * mix of not-found and failures is a failure (retried, never remembered).
  */
 async function readPosts(meter: EngagementMeter, page: CompetitorPage, providers: PostsProvider[]): Promise<{ kind: "posts"; posts: WirePost[] } | { kind: "not_found"; reason: string } | { kind: "failed"; reason: string }> {
   const skipped: string[] = [];
+  const notFound: string[] = [];
   for (const provider of providers) {
     let answer: TregAnswer;
     try {
@@ -433,10 +437,15 @@ async function readPosts(meter: EngagementMeter, page: CompetitorPage, providers
       console.warn(`[Apollo Service][linkedin-engagement] posts provider skipped for ${page.url}: ${verdict.reason}`);
       continue;
     }
+    if (verdict.kind === "not_found") {
+      notFound.push(verdict.reason);
+      continue;
+    }
     if (verdict.kind === "fail") throw new LinkedinTregError(verdict.reason);
     return verdict;
   }
-  return { kind: "failed", reason: `every posts provider failed: ${skipped.join(" | ")}` };
+  if (notFound.length === providers.length) return { kind: "not_found", reason: `no posts provider knows the page: ${notFound.join(" | ")}` };
+  return { kind: "failed", reason: `no posts provider could read the page: ${[...notFound, ...skipped].join(" | ")}` };
 }
 
 async function ensurePosts(meter: EngagementMeter, page: CompetitorPage, now: Date): Promise<PageOutcome> {
