@@ -246,6 +246,13 @@
       "when": 1780358400000,
       "tag": "0034_release_rate_limited_profiles",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1780444800000,
+      "tag": "0035_company_firmographics",
+      "breakpoints": true
     }
   ]
 }

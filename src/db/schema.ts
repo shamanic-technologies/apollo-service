@@ -781,3 +781,39 @@ export const linkedinEngagementServes = pgTable(
     index("idx_linkedin_serves_org_profile").on(table.orgId, table.profileId),
   ]
 );
+
+// ─── Company firmographics by domain (org-less, platform-billed) ────────────
+// "Who is the company behind this website, and what does this person do
+// there?" for a caller with no org (distribute.you's visit recap). Global facts,
+// no org_id. `raw` is Apollo's record verbatim (bronze), null when Apollo knows
+// no organization for the domain. A billed lookup whose platform cost could
+// not be declared keeps `cost_declared_at` null and is declared again, under
+// the same idempotency key, before the row is served.
+export const companyDomainLookups = pgTable("company_domain_lookups", {
+  domain: text("domain").primaryKey(),
+  apolloOrganizationId: text("apollo_organization_id"),
+  raw: jsonb("raw"),
+  fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
+  platformRunId: text("platform_run_id").notNull(),
+  creditsCharged: integer("credits_charged").notNull(),
+  costIdempotencyKey: text("cost_idempotency_key").notNull(),
+  costDeclaredAt: timestamp("cost_declared_at", { withTimezone: true }),
+  category: text("category"),
+  categoryConfidence: decimal("category_confidence", { precision: 6, scale: 5 }),
+  categoryJudgment: jsonb("category_judgment"),
+  categoryJudgedAt: timestamp("category_judged_at", { withTimezone: true }),
+});
+
+export const personRoleLookups = pgTable("person_role_lookups", {
+  personKey: text("person_key").primaryKey(),
+  domain: text("domain").notNull(),
+  matched: boolean("matched").notNull(),
+  title: text("title"),
+  seniority: text("seniority"),
+  raw: jsonb("raw"),
+  fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
+  platformRunId: text("platform_run_id").notNull(),
+  creditsCharged: integer("credits_charged").notNull(),
+  costIdempotencyKey: text("cost_idempotency_key").notNull(),
+  costDeclaredAt: timestamp("cost_declared_at", { withTimezone: true }),
+});
