@@ -3620,6 +3620,200 @@
           "dryRun"
         ]
       },
+      "CompanyFirmographicsResponse": {
+        "type": "object",
+        "properties": {
+          "domain": {
+            "type": "string",
+            "description": "The normalized domain that was looked up."
+          },
+          "company": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "name": {
+                "type": "string",
+                "nullable": true
+              },
+              "domain": {
+                "type": "string"
+              },
+              "countryCode": {
+                "type": "string",
+                "nullable": true,
+                "description": "ISO 3166-1 alpha-2 of the HQ country."
+              },
+              "countryName": {
+                "type": "string",
+                "nullable": true,
+                "description": "Apollo's English country name."
+              },
+              "industry": {
+                "type": "string",
+                "nullable": true
+              },
+              "revenueRange": {
+                "$ref": "#/components/schemas/FirmographicsRange"
+              },
+              "employeeRange": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/FirmographicsRange"
+                  },
+                  {
+                    "description": "Headcount bucket: 1-10, 11-50, 51-200, 201-500, 501-1,000, 1,001-5,000, 5,001-10,000, 10,001+."
+                  }
+                ]
+              },
+              "category": {
+                "type": "string",
+                "nullable": true,
+                "enum": [
+                  "B2B SaaS",
+                  "B2B Agency",
+                  "B2C",
+                  "Other",
+                  null
+                ],
+                "description": "Business model, judged by Jev from Apollo's description/keywords/industry. null when there was nothing to judge or confidence < 0.5."
+              },
+              "categoryConfidence": {
+                "type": "number",
+                "nullable": true
+              },
+              "apolloOrganizationId": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "name",
+              "domain",
+              "countryCode",
+              "countryName",
+              "industry",
+              "revenueRange",
+              "employeeRange",
+              "category",
+              "categoryConfidence",
+              "apolloOrganizationId"
+            ],
+            "description": "null when the domain is a free-mail provider or Apollo knows no company for it (see noCompanyReason). Every field is independently nullable."
+          },
+          "noCompanyReason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "personal_email_domain",
+              "not_found",
+              null
+            ]
+          },
+          "person": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "title": {
+                "type": "string",
+                "nullable": true
+              },
+              "seniority": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "title",
+              "seniority"
+            ],
+            "description": "The person's role, only when a person was given AND Apollo matched them. Never guessed."
+          },
+          "personMatched": {
+            "type": "boolean",
+            "nullable": true,
+            "description": "null when no person was given (email, or first+last name)."
+          },
+          "cached": {
+            "type": "object",
+            "properties": {
+              "company": {
+                "type": "boolean",
+                "nullable": true
+              },
+              "person": {
+                "type": "boolean",
+                "nullable": true
+              }
+            },
+            "required": [
+              "company",
+              "person"
+            ],
+            "description": "true = served from cache, nothing spent."
+          }
+        },
+        "required": [
+          "domain",
+          "company",
+          "noCompanyReason",
+          "person",
+          "personMatched",
+          "cached"
+        ]
+      },
+      "FirmographicsRange": {
+        "type": "object",
+        "nullable": true,
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "Display label, e.g. \"51-200\" or \"$10M-$50M\"."
+          },
+          "min": {
+            "type": "number"
+          },
+          "max": {
+            "type": "number",
+            "nullable": true,
+            "description": "null for the open-ended top bucket."
+          }
+        },
+        "required": [
+          "label",
+          "min",
+          "max"
+        ],
+        "description": "Annual revenue bucket (USD): <$1M, $1M-$10M, $10M-$50M, $50M-$100M, $100M-$500M, $500M-$1B, $1B+."
+      },
+      "CompanyFirmographicsRequest": {
+        "type": "object",
+        "properties": {
+          "domain": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 253,
+            "description": "The company's website domain (a URL is accepted and reduced to its host, `www.` dropped)."
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "description": "The person's email, when known. Used only to read their role."
+          },
+          "firstName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "lastName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "domain"
+        ]
+      },
       "ValidateResponse": {
         "type": "object",
         "properties": {
@@ -6361,6 +6555,74 @@
           },
           "500": {
             "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/company-firmographics": {
+      "post": {
+        "summary": "Company firmographics for a domain (+ a person's role), org-less and platform-billed",
+        "description": "For platform jobs with no org (distribute.you visit recap). Given a company website domain and optionally the person's email and/or first+last name, answers HQ country, industry, revenue range, headcount range, business-model category (B2B SaaS | B2B Agency | B2C | Other), and the person's role when Apollo matches them. Free-mail domains (gmail.com, outlook.com, ...) answer company null / personal_email_domain without spending. Spend: Apollo organizations/enrich (1 apollo-credit when found, 0 when not) and people/match (1 apollo-credit when matched, 0 otherwise), declared as actual costs on an apollo-service platform run; the category is one Jev choice judgment billed by chat-service on its platform tier. Cached globally per domain and per person (90 days when found, 30 when not): a repeat call spends nothing. Requires x-api-key = APOLLO_SERVICE_API_KEY. No identity headers.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanyFirmographicsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Firmographics (fields null when unknown)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyFirmographicsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error (bad body or not a domain)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid x-api-key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Apollo, key-service, runs-service (cost declaration) or chat-service failed. A paid lookup whose cost could not be declared is declared on the next call, never paid twice.",
             "content": {
               "application/json": {
                 "schema": {

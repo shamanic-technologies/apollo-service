@@ -19,6 +19,7 @@ import emailFinderRoutes from "./routes/email-finder.js";
 import emailVerificationRoutes from "./routes/email-verifications.js";
 import webhookRoutes from "./routes/webhook.js";
 import costHoldRoutes from "./routes/cost-holds.js";
+import companyFirmographicsRoutes from "./routes/company-firmographics.js";
 import { startHoldReconciler } from "./lib/hold-reconciler.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -62,6 +63,7 @@ app.use(emailVerificationRoutes);
 app.use(transferBrandRoutes);
 app.use(webhookRoutes);
 app.use(costHoldRoutes);
+app.use(companyFirmographicsRoutes);
 
 // 404 handler
 app.use((req, res) => {

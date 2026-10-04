@@ -153,13 +153,14 @@ export interface IdentityHeaders {
 
 async function runsRequest<T>(
   path: string,
-  options: { method?: string; body?: unknown; identity?: IdentityHeaders } = {}
+  options: { method?: string; body?: unknown; identity?: IdentityHeaders; extraHeaders?: Record<string, string> } = {}
 ): Promise<T> {
-  const { method = "GET", body, identity } = options;
+  const { method = "GET", body, identity, extraHeaders } = options;
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "X-API-Key": RUNS_SERVICE_API_KEY,
+    ...extraHeaders,
   };
 
   if (identity?.orgId) headers["x-org-id"] = identity.orgId;
@@ -406,4 +407,36 @@ export async function getRunsBatch(
   if (runIds.length === 0) return new Map();
   const results = await Promise.all(runIds.map((id) => getRun(id, identity)));
   return new Map(results.map((r) => [r.id, r]));
+}
+
+// ─── Platform runs (org-less spend) ─────────────────────────────────────────
+//
+// For a caller with no org (a platform job such as the distribute.you visit
+// recap). runs-service records the run with no organization; costs are posted
+// with costSource "platform" as `actual` once the vendor answered. There is no
+// org balance to authorize against and no provisioned hold.
+
+const PLATFORM_HEADERS = { "x-service-name": "apollo-service" };
+
+export async function createPlatformRun(params: { taskName: string; idempotencyKey: string }): Promise<{ id: string }> {
+  return runsRequest<{ id: string }>("/v1/platform-runs", {
+    method: "POST",
+    extraHeaders: PLATFORM_HEADERS,
+    body: { serviceName: "apollo-service", taskName: params.taskName, idempotencyKey: params.idempotencyKey },
+  });
+}
+
+export async function addPlatformRunCosts(
+  runId: string,
+  items: Array<{ costName: string; quantity: number; idempotencyKey: string }>
+): Promise<{ costs: RunCost[] }> {
+  return runsRequest<{ costs: RunCost[] }>(`/v1/platform-runs/${runId}/costs`, {
+    method: "POST",
+    extraHeaders: PLATFORM_HEADERS,
+    body: { items: items.map((i) => ({ ...i, costSource: "platform", status: "actual" })) },
+  });
+}
+
+export async function updatePlatformRun(runId: string, status: "completed" | "failed"): Promise<void> {
+  await runsRequest(`/v1/platform-runs/${runId}`, { method: "PATCH", extraHeaders: PLATFORM_HEADERS, body: { status } });
 }

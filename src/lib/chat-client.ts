@@ -156,3 +156,42 @@ export async function chatComplete(
 
   return (await res.json()) as ChatCompleteResult;
 }
+
+// ─── Judgments (Jev) ────────────────────────────────────────────────────────
+
+export interface ChoiceJudgment {
+  type: "choice";
+  choice: string;
+  confidence: number;
+  probabilities: Record<string, number>;
+}
+
+/**
+ * One `choice` classification on the PLATFORM tier (`POST
+ * /internal/platform-judgments`): org-less, x-api-key only. chat-service
+ * declares the spend on its own platform run, so nothing is declared here.
+ */
+export async function platformChoiceJudgment(params: {
+  state: string | Record<string, unknown>;
+  instructions: string;
+  criteria: Record<string, string>;
+}): Promise<ChoiceJudgment> {
+  const res = await fetchWithRetry(`${baseUrl()}/internal/platform-judgments`, {
+    method: "POST",
+    headers: buildPlatformHeaders(),
+    body: JSON.stringify({
+      state: params.state,
+      questions: { answer: { type: "choice", instructions: params.instructions, criteria: params.criteria } },
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`[apollo-service][chat-client] POST /internal/platform-judgments returned ${res.status}: ${text}`);
+  }
+  const body = (await res.json()) as { answers?: Record<string, ChoiceJudgment> };
+  const answer = body.answers?.answer;
+  if (!answer || answer.type !== "choice" || typeof answer.choice !== "string") {
+    throw new Error(`[apollo-service][chat-client] platform-judgments answered without a choice: ${JSON.stringify(body).slice(0, 300)}`);
+  }
+  return answer;
+}

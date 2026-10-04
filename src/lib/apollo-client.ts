@@ -627,6 +627,54 @@ export async function getOrganizationById(
   return body.organization ?? null;
 }
 
+/**
+ * BILLED when found: Apollo's organization record for a website domain —
+ * `GET organizations/enrich?domain=`. Measured 2026-10-04 via
+ * credit_usage_stats: 1 lead credit when an organization comes back, 0 when
+ * Apollo answers 200 with no organization (an unknown domain).
+ */
+export async function enrichOrganizationByDomain(
+  apiKey: string,
+  domain: string
+): Promise<ApolloOrganization | null> {
+  const response = await sendApolloRequest("organizations/enrich", "Apollo organization enrich failed", undefined, () =>
+    fetchWithTimeout(`${APOLLO_API_BASE}/organizations/enrich?domain=${encodeURIComponent(domain)}`, {
+      method: "GET",
+      headers: { "X-Api-Key": apiKey },
+    }),
+  );
+  const body = (await response.json()) as { organization?: ApolloOrganization | null };
+  return body.organization ?? null;
+}
+
+/**
+ * `people/match` by email (plus name and domain when known), to read a
+ * person's role. Measured 2026-10-04: 1 lead credit for a real match; an
+ * address Apollo does not know comes back as a synthetic person carrying
+ * `match_confidence: "none"` and no title, for 0 credits.
+ */
+export async function matchPersonForRole(
+  apiKey: string,
+  args: { email?: string; firstName?: string; lastName?: string; domain?: string }
+): Promise<(ApolloPerson & { match_confidence?: string | null }) | null> {
+  const response = await sendApolloRequest("people/match (role)", "Apollo match failed", undefined, () =>
+    fetchWithTimeout(`${APOLLO_API_BASE}/people/match`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Api-Key": apiKey },
+      body: JSON.stringify({
+        ...(args.email && { email: args.email }),
+        ...(args.firstName && { first_name: args.firstName }),
+        ...(args.lastName && { last_name: args.lastName }),
+        ...(args.domain && { domain: args.domain }),
+        reveal_personal_emails: false,
+        run_waterfall_email: false,
+      }),
+    }),
+  );
+  const parsed = await parseWithSafeRequestId<{ person?: (ApolloPerson & { match_confidence?: string | null }) | null }>(response);
+  return parsed.person ?? null;
+}
+
 /** One job posting as Apollo's organization job-postings endpoint returns it. */
 export interface ApolloJobPosting {
   id?: string | null;
