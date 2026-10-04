@@ -21,6 +21,7 @@ import webhookRoutes from "./routes/webhook.js";
 import costHoldRoutes from "./routes/cost-holds.js";
 import companyFirmographicsRoutes from "./routes/company-firmographics.js";
 import { startHoldReconciler } from "./lib/hold-reconciler.js";
+import { stripNulReplacer } from "./lib/nul-strip.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -28,6 +29,9 @@ const openapiPath = join(__dirname, "..", "openapi.json");
 
 const app = express();
 const PORT = process.env.PORT || 3004;
+
+// Served strings never carry U+0000 (see lib/nul-strip.ts).
+app.set("json replacer", stripNulReplacer);
 
 // Middleware
 app.use(cors());

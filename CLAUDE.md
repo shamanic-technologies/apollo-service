@@ -1137,6 +1137,17 @@ both `/search/filters-prompt` and the audience-refine system prompt. If you ever
 "re-sync `SearchFiltersSchema` to the official Apollo doc", **keep these fields +
 the encart** — they are not in the doc by design, but they work.
 
+## U+0000 in provider data is stripped at the DRIVER, never per field
+
+Postgres rejects NUL in text (`invalid byte sequence 0x00`) and in json/jsonb
+(`22P05 \u0000 cannot be converted to text`). One LinkedIn profile (treg body)
+with a NUL in a position description 500'd every `/search/next` of its audience
+(2026-10-04; #353 stripped that path, which also cleans the served engagers). `src/lib/nul-strip.ts` wraps the postgres.js serializers for
+text/varchar/bpchar/json/jsonb once in `getSql()`, so every write (drizzle or raw
+`sql`) is clean; the `json replacer` in `src/index.ts` strips served strings too.
+Do not add more per-path sanitizers or catch-and-skip 22P05. Accessor properties keep
+the wrap alive when a later `drizzle()` re-assigns the json serializers.
+
 ## Architecture
 
 - `src/schemas.ts` — Zod schemas + OpenAPI registry (source of truth for validation + OpenAPI)
