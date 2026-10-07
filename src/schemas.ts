@@ -1374,6 +1374,42 @@ registry.registerPath({
   },
 });
 
+// ─── POST /internal/person-identity ──────────────────────────────────────
+
+export const PersonIdentityRequestSchema = z
+  .object({ email: z.string().email().max(320).describe("The person's email. The ONLY input: a name is never used to match.") })
+  .openapi("PersonIdentityRequest");
+
+const PersonIdentityResponseSchema = z
+  .object({
+    email: z.string().describe("The email looked up, lower-cased."),
+    matched: z.boolean().describe("Apollo matched a real person (match_confidence present and not \"none\")."),
+    matchConfidence: z.string().nullable().describe("Apollo's match_confidence verbatim (\"high\" | \"low\" | \"none\"). A caller that must not guess should accept only \"high\"."),
+    linkedinUrl: z.string().nullable().describe("The matched person's LinkedIn profile URL, verbatim from Apollo. null when not matched or Apollo holds none."),
+    apolloPersonId: z.string().nullable(),
+    name: z.string().nullable(),
+    cached: z.boolean().describe("true = served from cache, nothing spent."),
+  })
+  .openapi("PersonIdentityResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/person-identity",
+  summary: "Who is the person behind an email (LinkedIn profile), org-less and platform-billed",
+  description:
+    "Apollo people/match by EMAIL only (never by name). For org-less callers (client-service resolving one of our own users' LinkedIn profiles). Spend: 1 apollo-credit when Apollo matches a real person, 0 otherwise, declared as an actual cost on an apollo-service platform run before the answer is served. Cached globally per email with the firmographics person leg (90 days matched, 30 not): a repeat call spends nothing. Requires x-api-key = APOLLO_SERVICE_API_KEY. No identity headers.",
+  request: {
+    headers: z.object({ "x-api-key": z.string() }),
+    body: { content: { "application/json": { schema: PersonIdentityRequestSchema } }, required: true },
+  },
+  responses: {
+    200: { description: "Match result (unmatched is an answer, not an error)", content: { "application/json": { schema: PersonIdentityResponseSchema } } },
+    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponseSchema } } },
+    401: { description: "Missing or invalid x-api-key", content: { "application/json": { schema: ErrorResponseSchema } } },
+    502: { description: "Apollo, key-service or runs-service (cost declaration) failed. A paid lookup whose cost could not be declared is declared on the next call, never paid twice.", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
 // ─── POST /internal/company-firmographics ────────────────────────────────
 
 export const CompanyFirmographicsRequestSchema = z
