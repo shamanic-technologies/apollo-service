@@ -3742,6 +3742,11 @@
               "apolloOrganizationId": {
                 "type": "string",
                 "nullable": true
+              },
+              "linkedinUrl": {
+                "type": "string",
+                "nullable": true,
+                "description": "The company's LinkedIn page, verbatim from Apollo's organization record (linkedin_url, e.g. http://www.linkedin.com/company/stripe). null when Apollo has none. Not validated against the domain: a caller that needs the company's OWN page checks it."
               }
             },
             "required": [
@@ -3754,7 +3759,8 @@
               "employeeRange",
               "category",
               "categoryConfidence",
-              "apolloOrganizationId"
+              "apolloOrganizationId",
+              "linkedinUrl"
             ],
             "description": "null when the domain is a free-mail provider or Apollo knows no company for it (see noCompanyReason). Every field is independently nullable."
           },
