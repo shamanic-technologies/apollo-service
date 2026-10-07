@@ -4,6 +4,7 @@ import { db } from "../db/index.js";
 import { apolloPeopleSearches, apolloPeopleEnrichments, apolloSearchCursors } from "../db/schema.js";
 import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
 import { gateReveal, recordRevealSkip, rememberTeaserEmployers } from "../lib/reveal-domain-gate.js";
+import { teaserEmployerDomains, employerDomainFor } from "../lib/teaser-employer-domains.js";
 import { readSignalSpec, signalConflicts, BuyingSignalConflictError, SignalNotApolloSearchableError } from "../lib/buying-signal-spec.js";
 import { serveLinkedinEngagers, filtersBesideEngagement, findServed, loadProfile, evidenceFor, LinkedinEngagementInsufficientCreditError, LinkedinCompetitorPagesUnreadableError } from "../lib/linkedin-engagement.js";
 import { parseLinkedinPersonId, linkedinEngagerToPerson, domainOf } from "../lib/linkedin-engagement-spec.js";
@@ -783,6 +784,9 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     const people = result.people ?? [];
     // Remember each teaser's employer so /enrich can judge its mail domain before paying.
     await rememberTeaserEmployers(people);
+    // The employer's web domain, from Apollo's FREE name lookup (exact name to ONE
+    // organization only), so a caller can qualify the company before any reveal.
+    const employerDomains = await teaserEmployerDomains(people, apolloApiKey, toCreditAlertIdentity(req));
     // And, for a buying-signal cohort, which signal served them, so /enrich can attach its evidence.
     const cohortSignal = readSignalSpec(cursorSearchParams);
     if (cohortSignal && cursorId) {
@@ -845,9 +849,14 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     openRun = null;
 
     // Transform and respond
-    const transformedPeople = people.map((person: ApolloPerson) =>
-      transformApolloPerson(person)
-    );
+    // organizationDomain: Apollo's own when the teaser carries one, else the
+    // employer domain resolved above, else absent (never guessed).
+    const transformedPeople = people.map((person: ApolloPerson) => {
+      const transformed = transformApolloPerson(person);
+      if (transformed.organizationDomain) return transformed;
+      const domain = employerDomainFor(person, employerDomains);
+      return domain ? { ...transformed, organizationDomain: domain } : transformed;
+    });
 
     traceEvent(runId, { service: "apollo-service", event: "search-next-done", detail: `page=${currentPage}, peopleCount=${people.length}, done=${done}, totalEntries=${totalEntries}`, data: { page: currentPage, peopleCount: people.length, done, totalEntries } }, req.headers).catch(() => {});
 

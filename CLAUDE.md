@@ -584,6 +584,29 @@ A reveal is 11.8¢, a BounceVerify check 0.445¢ (0 on unknown).
   human-service already treats `person: null` as a no-email reveal.
 - The DELIVERABLE policy is unchanged: only `valid` is served.
 
+## Employer domain on free teasers (`/search/next` → `organizationDomain`)
+
+So a caller (lead-service via human-service) can qualify a person's COMPANY
+before buying the reveal. The free teaser masks the domain; `/search/next` now
+fills the person's EXISTING `organizationDomain` field (human-service reads it
+verbatim as `organization.domain`, zero consumer change).
+`src/lib/teaser-employer-domains.ts`.
+
+- **Same rule as the reveal gate** (they share `exactOrganizationIds`): Apollo's
+  FREE name lookup (`organizations/search` fuzzy_select_mode, 0 credits) must
+  return EXACTLY ONE organization id whose name equals the employer name
+  (case/space-insensitive), with a domain (`domain`, else `website_url` host).
+  No match / several / no domain ⟹ field absent, never guessed. Apollo's own
+  `primary_domain`, when a teaser carries one, wins and is never looked up.
+- **Cache**: `apollo_employer_domains` (migration `0038`, global, no org_id, not
+  in transfer-brand), keyed on the normalized name, EVERY outcome cached 30 days.
+  A failed lookup (Apollo error / rate limit) is not cached and leaves the field
+  absent; it never fails the search.
+- **Latency**: misses looked up 8 at a time under a 4s budget per page; lookups
+  still running after the budget keep filling the cache for the next page.
+- **Scope**: the Apollo walk only. QuickEnrich pages already carry the domain;
+  linkedin_engagement pages are untouched. `/enrich` (billing, response) unchanged.
+
 ## Company firmographics by domain (`POST /internal/company-firmographics`) — ORG-LESS, platform-billed
 
 "Who is the company behind this website, and what does this person do there?"
