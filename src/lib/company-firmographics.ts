@@ -382,7 +382,14 @@ async function lookupPersonRow(
 
     const apiKey = await getKey();
     const { runId, result: person } = await onPlatformRun("person-role", key, () =>
-      matchPersonForRole(apiKey, { email: args.email, firstName: args.firstName, lastName: args.lastName, domain: args.domain }),
+      // A free-mail domain names no employer: sending it would only mislead the
+      // match. (Firmographics never reaches here for one; person-identity does.)
+      matchPersonForRole(apiKey, {
+        email: args.email,
+        firstName: args.firstName,
+        lastName: args.lastName,
+        domain: isPersonalDomain(args.domain) ? undefined : args.domain,
+      }),
     );
     const matched = !!person && person.match_confidence !== "none";
     const values = {
@@ -450,5 +457,52 @@ export async function lookupFirmographics(input: {
     person: personLookup?.row.matched ? { title: personLookup.row.title, seniority: personLookup.row.seniority } : null,
     personMatched: personLookup ? personLookup.row.matched : null,
     cached: { company: companyLookup.cached, person: personLookup ? personLookup.cached : null },
+  };
+}
+
+// ─── Person identity by email ────────────────────────────────────────────────
+
+export interface PersonIdentityAnswer {
+  /** The email that was looked up, lower-cased. */
+  email: string;
+  /** Apollo matched a real person (match_confidence present and not "none"). */
+  matched: boolean;
+  /** Apollo's own match_confidence ("high" | "low" | "none" | ...), verbatim. null when Apollo sent none. */
+  matchConfidence: string | null;
+  /** The matched person's LinkedIn profile URL, verbatim from Apollo. null when not matched or Apollo has none. */
+  linkedinUrl: string | null;
+  apolloPersonId: string | null;
+  name: string | null;
+  cached: boolean;
+}
+
+function str(v: unknown): string | null {
+  return typeof v === "string" && v.trim() ? v.trim() : null;
+}
+
+/**
+ * "Who is the person behind this email?" (their LinkedIn profile, mainly), for
+ * an org-less caller (client-service resolving one of our own users). Apollo
+ * `people/match` by EMAIL only: never by name, a name is not a person. Shares the
+ * `person_role_lookups` cache and its spend protocol with the firmographics
+ * person leg (1 apollo-credit when matched, 0 otherwise, platform run, declared
+ * before serving), so a person already looked up there is not paid twice.
+ */
+export async function lookupPersonIdentity(rawEmail: string): Promise<PersonIdentityAnswer> {
+  const email = rawEmail.trim().toLowerCase();
+  const domain = email.slice(email.lastIndexOf("@") + 1);
+  let key: Promise<string> | null = null;
+  const getKey = () => (key ??= decryptPlatformKey("apollo", { callerMethod: "POST", callerPath: "/internal/person-identity" }));
+  const lookup = await lookupPersonRow(`email:${email}`, { email, domain }, getKey);
+  const row = await settlePersonCost(lookup.row);
+  const p = (row.raw ?? {}) as Record<string, unknown>;
+  return {
+    email,
+    matched: row.matched,
+    matchConfidence: str(p.match_confidence),
+    linkedinUrl: row.matched ? str(p.linkedin_url) : null,
+    apolloPersonId: row.matched ? str(p.id) : null,
+    name: row.matched ? str(p.name) : null,
+    cached: lookup.cached,
   };
 }
