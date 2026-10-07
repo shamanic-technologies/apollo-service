@@ -521,6 +521,18 @@ export const apolloTeaserPeople = pgTable("apollo_teaser_people", {
   lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// Employer NAME -> web domain, through Apollo's FREE organization name lookup
+// (src/lib/teaser-employer-domains.ts). Exact name to ONE organization only;
+// every other outcome is cached with a null domain. Global, no org_id.
+export const apolloEmployerDomains = pgTable("apollo_employer_domains", {
+  organizationNameKey: text("organization_name_key").primaryKey(),
+  organizationName: text("organization_name").notNull(),
+  outcome: text("outcome").notNull(),
+  apolloOrganizationId: text("apollo_organization_id"),
+  domain: text("domain"),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 // Every reveal NOT bought because the person's mail domain cannot pass the
 // deliverability gate (src/lib/reveal-domain-gate.ts). `evidence` names each
 // domain judged, its verdict and the email_verifications row that proves it.

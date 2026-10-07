@@ -47,6 +47,7 @@ import { db } from "../db/index.js";
 import { apolloPeopleEnrichments, apolloTeaserPeople, emailVerifications, revealSkips } from "../db/schema.js";
 import { lookupOrganizationsByName, type ApolloOrganizationCandidate } from "./apollo-client.js";
 import type { CreditAlertIdentity } from "./credit-alert.js";
+import { exactOrganizationIds, normalizeDomain } from "./teaser-employer-domains.js";
 import { verifyRevealedEmail, VERDICT_REUSE_DAYS, type EmailVerdict, type VerificationContext } from "./email-verification.js";
 
 /** A catch-all verdict condemns its domain as long as a verdict is reused at all. */
@@ -87,16 +88,8 @@ export function judgeDomain(rows: DomainVerdictRow[], now: Date = new Date()): D
   return { state: "unknown" };
 }
 
-export function normalizeDomain(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-  let d = raw.trim().toLowerCase();
-  d = d.replace(/^[a-z]+:\/\//, "").split(/[/?#]/)[0].replace(/^www\./, "");
-  return /^[a-z0-9.-]+\.[a-z]{2,}$/.test(d) ? d : null;
-}
-
-function normalizeName(name: string): string {
-  return name.trim().replace(/\s+/g, " ").toLowerCase();
-}
+// One definition of "exact name to ONE organization", shared with the teaser employer domains.
+export { normalizeDomain };
 
 export interface DomainEvidence {
   domain: string;
@@ -151,9 +144,8 @@ export async function decideReveal(apolloPersonId: string, deps: GateDeps): Prom
   const organizationName = await deps.employerOf(apolloPersonId);
   if (!organizationName) return { action: "reveal", basis: "no_employer" };
 
-  const key = normalizeName(organizationName);
   const candidates = await deps.lookupOrganizations(organizationName);
-  const exactIds = [...new Set(candidates.filter((c) => typeof c.id === "string" && c.name && normalizeName(c.name) === key).map((c) => c.id))];
+  const exactIds = exactOrganizationIds(organizationName, candidates);
   if (exactIds.length === 0) return { action: "reveal", basis: "no_exact_org_match", organizationName };
   if (exactIds.length > 1) return { action: "reveal", basis: "ambiguous_org_name", organizationName };
   const organizationId = exactIds[0];

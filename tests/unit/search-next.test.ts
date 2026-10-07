@@ -134,6 +134,14 @@ vi.mock("../../src/lib/billing-client.js", () => ({
   authorizeCredit: vi.fn().mockResolvedValue({ sufficient: true, balance_cents: 99999 }),
 }));
 
+// Employer domains: the resolution is covered in teaser-employer-domains.test.ts;
+// here the route must put what it returns on organizationDomain.
+const mockTeaserEmployerDomains = vi.fn(async () => new Map<string, string | null>());
+vi.mock("../../src/lib/teaser-employer-domains.js", async (importOriginal) => ({
+  ...((await importOriginal()) as Record<string, unknown>),
+  teaserEmployerDomains: (...a: unknown[]) => mockTeaserEmployerDomains(...(a as [])),
+}));
+
 // Mock Apollo client
 const mockSearchPeople = vi.fn();
 
@@ -225,6 +233,35 @@ describe("POST /search/next", () => {
     expect(vi.mocked(gate.rememberTeaserEmployers).mock.calls.at(-1)![0]).toHaveLength(3);
     // Cursor insert should have been called
     expect(mockInsertReturning).toHaveBeenCalled();
+  });
+
+  // ─── Employer domain on free teasers ───────────────────────────────────────
+
+  it("puts the resolved employer domain on organizationDomain, keeps Apollo's own, leaves the rest absent", async () => {
+    const teaser = (id: string, org: Record<string, unknown>) => ({ id, first_name: `F-${id}`, title: "Owner", organization: org });
+    mockSearchPeople.mockResolvedValueOnce({
+      people: [
+        teaser("t1", { name: "Abderhalden Drogerie AG" }),
+        teaser("t2", { name: "Ambiguous GmbH" }),
+        teaser("t3", { name: "Own Domain Inc", primary_domain: "own.example" }),
+        teaser("t4", {}),
+      ],
+      total_entries: 4,
+    });
+    mockTeaserEmployerDomains.mockResolvedValueOnce(new Map([["abderhalden drogerie ag", "abderhalden.ch"], ["ambiguous gmbh", null]]));
+
+    const res = await request(app)
+      .post("/search/next")
+      .set("X-API-Key", "test-key")
+      .set("X-Org-Id", "org_test")
+      .set("X-User-Id", "user_test")
+      .set(BASE_HEADERS)
+      .send({ searchParams: SEARCH_PARAMS })
+      .expect(200);
+
+    const byId = Object.fromEntries(res.body.people.map((p: { id: string; organizationDomain?: string | null }) => [p.id, p.organizationDomain ?? null]));
+    expect(byId).toEqual({ t1: "abderhalden.ch", t2: null, t3: "own.example", t4: null });
+    expect(mockTeaserEmployerDomains).toHaveBeenCalledWith(expect.any(Array), "fake-apollo-key", expect.anything());
   });
 
   // ─── Cursor reuse ──────────────────────────────────────────────────────────
