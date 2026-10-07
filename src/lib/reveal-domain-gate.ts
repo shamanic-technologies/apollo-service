@@ -44,9 +44,9 @@
  * owns: that is a catch-all domain whatever the checker calls it.
  *
  * An AMBIGUOUS employer name (several Apollo organizations carry it exactly) is
- * judged across EVERY candidate's domains: whichever of them employs the
- * person, the reveal is skipped only when all of them are bad, so the benefit
- * of the doubt still holds. Measured 2026-10-02..07: ambiguous names were 56% of
+ * judged across the candidates' mail domains (`candidateMailDomains`: the
+ * candidates we already revealed people at, and their dominant revealed mail
+ * domains); the reveal is skipped only when all of them are bad. Measured 2026-10-02..07: ambiguous names were 56% of
  * the gate-passes that ended catch-all/unknown, the domain-judged path ~12%.
  *
  * Every skip is written to `reveal_skips` with its evidence and returned to the
@@ -141,11 +141,58 @@ export type GateDecision =
       evidence?: DomainEvidence[];
     };
 
+export interface RevealedDomain {
+  domain: string;
+  /** Reveals we already hold at this organization on this email domain. */
+  count: number;
+}
+
+/** A revealed domain is a mail domain of its organization when it carries at least this share of its reveals. */
+export const MAIL_DOMAIN_MIN_SHARE = 0.1;
+
+/**
+ * Pure. The mail domains to judge for the exact-name candidates of one employer.
+ *
+ * Reveals we already hold are POSITIVE evidence of where this name's people
+ * work and where their mail goes, so they win over a guess:
+ *   - several candidates (homonyms): only the candidates we already revealed
+ *     people at are kept, when any is. Measured 2026-10-07: every one of 371
+ *     "Jump Trading" reveals sat on ONE of its two organization ids (the other
+ *     is jumpcrypto.com); "Amber Group" has four ids, one with all 20 reveals,
+ *     another is amber.com.bd.
+ *   - per organization with reveals: its mail domains are the revealed email
+ *     domains carrying >= MAIL_DOMAIN_MIN_SHARE of them (one stray jumpcrypto.com
+ *     address among 372 is not where that company's mail goes); the website is
+ *     no longer a guess worth judging.
+ *   - an organization with no reveal: its website domain.
+ */
+export function candidateMailDomains(orgs: Array<{ website: string | null; revealed: RevealedDomain[] }>): string[] {
+  const norm = orgs.map((o) => ({
+    website: o.website,
+    revealed: o.revealed.flatMap((r) => {
+      const domain = normalizeDomain(r.domain);
+      return domain && r.count > 0 ? [{ domain, count: r.count }] : [];
+    }),
+  }));
+  const met = norm.filter((o) => o.revealed.length > 0);
+  const kept = met.length > 0 ? met : norm;
+  const out: string[] = [];
+  for (const o of kept) {
+    if (o.revealed.length === 0) {
+      if (o.website) out.push(o.website);
+      continue;
+    }
+    const total = o.revealed.reduce((n, r) => n + r.count, 0);
+    out.push(...o.revealed.filter((r) => r.count / total >= MAIL_DOMAIN_MIN_SHARE).map((r) => r.domain));
+  }
+  return [...new Set(out)];
+}
+
 /** Everything the gate reads or calls, so the decision is testable without a DB or Apollo. */
 export interface GateDeps {
   employerOf(apolloPersonId: string): Promise<string | null>;
   lookupOrganizations(name: string): Promise<ApolloOrganizationCandidate[]>;
-  revealedEmailDomains(organizationId: string): Promise<string[]>;
+  revealedEmailDomains(organizationId: string): Promise<RevealedDomain[]>;
   domainVerdicts(domain: string): Promise<DomainVerdictRow[]>;
   /** Verify one random address at the domain; returns the stored verdict row. */
   probe(domain: string): Promise<DomainVerdictRow>;
@@ -171,20 +218,16 @@ export async function decideReveal(apolloPersonId: string, deps: GateDeps): Prom
   const candidates = await deps.lookupOrganizations(organizationName);
   const exactIds = exactOrganizationIds(organizationName, candidates);
   if (exactIds.length === 0) return { action: "reveal", basis: "no_exact_org_match", organizationName };
-  // Several organizations carry the name: the person works at ONE of them, so
-  // every candidate's domains are judged and a skip needs all of them bad.
   const organizationId = exactIds.join(",");
 
-  const domains: string[] = [];
-  for (const id of exactIds) {
-    const org = candidates.find((c) => c.id === id)!;
-    domains.push(
-      ...[normalizeDomain(org.domain) ?? normalizeDomain(org.website_url), ...(await deps.revealedEmailDomains(id)).map(normalizeDomain)].filter(
-        (d): d is string => !!d
-      )
-    );
-  }
-  const uniqueDomains = [...new Set(domains)];
+  const revealed = new Map<string, RevealedDomain[]>();
+  for (const id of exactIds) revealed.set(id, await deps.revealedEmailDomains(id));
+  const uniqueDomains = candidateMailDomains(
+    exactIds.map((id) => {
+      const org = candidates.find((c) => c.id === id)!;
+      return { website: normalizeDomain(org.domain) ?? normalizeDomain(org.website_url), revealed: revealed.get(id)! };
+    })
+  );
   if (uniqueDomains.length === 0) {
     return { action: "reveal", basis: exactIds.length > 1 ? "ambiguous_org_name" : "no_domain", organizationName, organizationId };
   }
@@ -237,12 +280,14 @@ async function employerOf(apolloPersonId: string): Promise<string | null> {
   return row?.name ?? null;
 }
 
-async function revealedEmailDomains(organizationId: string): Promise<string[]> {
+async function revealedEmailDomains(organizationId: string): Promise<RevealedDomain[]> {
+  const domain = sql<string>`lower(split_part(${apolloPeopleEnrichments.email}, '@', 2))`;
   const rows = await db
-    .selectDistinct({ domain: sql<string>`lower(split_part(${apolloPeopleEnrichments.email}, '@', 2))` })
+    .select({ domain, count: sql<number>`count(*)::int` })
     .from(apolloPeopleEnrichments)
-    .where(and(eq(apolloPeopleEnrichments.organizationId, organizationId), isNotNull(apolloPeopleEnrichments.email)));
-  return rows.map((r) => r.domain);
+    .where(and(eq(apolloPeopleEnrichments.organizationId, organizationId), isNotNull(apolloPeopleEnrichments.email)))
+    .groupBy(domain);
+  return rows.map((r) => ({ domain: r.domain, count: Number(r.count) }));
 }
 
 async function domainVerdicts(domain: string): Promise<DomainVerdictRow[]> {

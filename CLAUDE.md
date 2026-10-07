@@ -563,7 +563,7 @@ before authorizing or calling Apollo (`src/lib/reveal-domain-gate.ts`).
 catch_all and checker-refused (`unknown`) are DOMAIN facts: on prod
 2026-09-25..29, a domain already holding a catch_all verdict gave 132 more
 catch_alls and 0 valids; one holding an unknown gave 121 unknowns and 0 valids.
-A reveal is 11.8¢, a BounceVerify check 0.445¢ (0 on unknown).
+Prices are re-derived daily by costs-service (2026-10-07: reveal 5.6¢, BounceVerify check 3.2¢, 0 on unknown); a probe is paid once per domain fleet-wide, a wasted reveal once per person.
 
 - **Employer**: the free teaser only carries `organization.name`, so
   `/search/next` upserts it into `apollo_teaser_people` (global, no org).
@@ -578,8 +578,12 @@ A reveal is 11.8¢, a BounceVerify check 0.445¢ (0 on unknown).
   `verifyRevealedEmail` (source `reveal-domain-probe`, cost
   `apify-bounceverify-email`, normal protocol). A PROBE answering `valid` = the
   domain accepted a mailbox nobody owns = catch_all.
-- **Ambiguous name (several exact org ids) is judged across EVERY candidate's
-  domains** (skip only if all bad; `organizationId` = ids comma-joined).
+- **Mail domains judged = `candidateMailDomains`**: reveals we hold are the
+  evidence. Several exact org ids (homonyms) → only the ids we already revealed
+  people at, when any (every "Jump Trading" reveal sat on one of its two ids;
+  the other is jumpcrypto.com). Per org with reveals → its revealed email domains
+  carrying ≥10% of them (website dropped); without reveals → its website. Skip
+  only if all bad; `organizationId` = ids comma-joined.
 - **Skip only when EVERY domain is bad**; no employer / no exact org / no domain
   → reveal as before (benefit of the doubt). A probe failure 502s like any
   verification failure, never a silent pass.
