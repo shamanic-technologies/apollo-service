@@ -34,8 +34,20 @@
  *
  * A checker block is not a permanent fact about a domain: an `unknown` condemns
  * it for CHECKER_BLOCKED_TTL_DAYS only, then the next reveal re-probes (free
- * when it still answers unknown). A decisive verdict always wins over an
- * unknown, and the latest decisive one wins among them.
+ * when it still answers unknown). The latest decisive verdict wins among the
+ * decisive ones; it also wins over unknowns UNLESS at least
+ * BLOCK_RUN_AFTER_DECISIVE unknowns came after it (2026-10-07: jumptrading.com
+ * gave 370 unknowns — Proofpoint 554 on our checker — and ONE valid; that
+ * single valid kept the domain "ok" for 30 days and paid 256 more reveals).
+ *
+ * A PROBE answering `valid` means the domain accepted a random mailbox nobody
+ * owns: that is a catch-all domain whatever the checker calls it.
+ *
+ * An AMBIGUOUS employer name (several Apollo organizations carry it exactly) is
+ * judged across EVERY candidate's domains: whichever of them employs the
+ * person, the reveal is skipped only when all of them are bad, so the benefit
+ * of the doubt still holds. Measured 2026-10-02..07: ambiguous names were 56% of
+ * the gate-passes that ended catch-all/unknown, the domain-judged path ~12%.
  *
  * Every skip is written to `reveal_skips` with its evidence and returned to the
  * caller as `revealSkipped`; nothing is skipped silently.
@@ -54,6 +66,10 @@ import { verifyRevealedEmail, VERDICT_REUSE_DAYS, type EmailVerdict, type Verifi
 export const CATCH_ALL_TTL_DAYS = VERDICT_REUSE_DAYS;
 /** A checker block (unknown) is transient: re-probed after this. */
 export const CHECKER_BLOCKED_TTL_DAYS = 7;
+/** Unknowns needed AFTER the latest decisive verdict to overturn it (one transient timeout is not a block). */
+export const BLOCK_RUN_AFTER_DECISIVE = 2;
+/** The verification source a gate probe is recorded under. */
+export const PROBE_SOURCE = "reveal-domain-probe";
 const LOOKUP_PER_PAGE = 10;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -61,6 +77,8 @@ export interface DomainVerdictRow {
   verdict: EmailVerdict;
   verificationId: string;
   verifiedAt: Date;
+  /** true = a gate probe (a random address nobody owns), not a real person's address. */
+  probe?: boolean;
 }
 
 export type DomainJudgement =
@@ -70,20 +88,26 @@ export type DomainJudgement =
 
 /**
  * Pure. `rows` = every verdict held for the domain, any order. The latest
- * decisive verdict within CATCH_ALL_TTL_DAYS decides (catch_all → bad; valid,
- * invalid, risky → the domain confirms mailboxes → ok). With no decisive one,
- * an unknown within CHECKER_BLOCKED_TTL_DAYS means the checker is refused → bad.
+ * decisive verdict within CATCH_ALL_TTL_DAYS decides (catch_all, or a probe
+ * answering valid → bad; valid, invalid, risky → the domain confirms
+ * mailboxes → ok), unless BLOCK_RUN_AFTER_DECISIVE unknowns within
+ * CHECKER_BLOCKED_TTL_DAYS came after it (the checker is refused now → bad).
+ * With no decisive one, an unknown within CHECKER_BLOCKED_TTL_DAYS → bad.
  * Otherwise nothing is known.
  */
 export function judgeDomain(rows: DomainVerdictRow[], now: Date = new Date()): DomainJudgement {
   const age = (r: DomainVerdictRow) => now.getTime() - r.verifiedAt.getTime();
   const latest = (xs: DomainVerdictRow[]) => xs.reduce<DomainVerdictRow | null>((a, r) => (!a || r.verifiedAt > a.verifiedAt ? r : a), null);
 
+  const unknowns = rows.filter((r) => r.verdict === "unknown" && age(r) < CHECKER_BLOCKED_TTL_DAYS * DAY_MS);
   const decisive = latest(rows.filter((r) => r.verdict !== "unknown" && age(r) < CATCH_ALL_TTL_DAYS * DAY_MS));
   if (decisive) {
-    return decisive.verdict === "catch_all" ? { state: "bad", reason: "catch_all_domain", row: decisive } : { state: "ok", row: decisive };
+    const after = unknowns.filter((r) => r.verifiedAt > decisive.verifiedAt);
+    if (after.length >= BLOCK_RUN_AFTER_DECISIVE) return { state: "bad", reason: "checker_blocked_domain", row: latest(after)! };
+    const acceptsAnything = decisive.verdict === "catch_all" || (decisive.probe === true && decisive.verdict === "valid");
+    return acceptsAnything ? { state: "bad", reason: "catch_all_domain", row: decisive } : { state: "ok", row: decisive };
   }
-  const blocked = latest(rows.filter((r) => r.verdict === "unknown" && age(r) < CHECKER_BLOCKED_TTL_DAYS * DAY_MS));
+  const blocked = latest(unknowns);
   if (blocked) return { state: "bad", reason: "checker_blocked_domain", row: blocked };
   return { state: "unknown" };
 }
@@ -147,24 +171,29 @@ export async function decideReveal(apolloPersonId: string, deps: GateDeps): Prom
   const candidates = await deps.lookupOrganizations(organizationName);
   const exactIds = exactOrganizationIds(organizationName, candidates);
   if (exactIds.length === 0) return { action: "reveal", basis: "no_exact_org_match", organizationName };
-  if (exactIds.length > 1) return { action: "reveal", basis: "ambiguous_org_name", organizationName };
-  const organizationId = exactIds[0];
-  const org = candidates.find((c) => c.id === organizationId)!;
+  // Several organizations carry the name: the person works at ONE of them, so
+  // every candidate's domains are judged and a skip needs all of them bad.
+  const organizationId = exactIds.join(",");
 
-  const domains = [
-    ...new Set(
-      [normalizeDomain(org.domain) ?? normalizeDomain(org.website_url), ...(await deps.revealedEmailDomains(organizationId)).map(normalizeDomain)].filter(
+  const domains: string[] = [];
+  for (const id of exactIds) {
+    const org = candidates.find((c) => c.id === id)!;
+    domains.push(
+      ...[normalizeDomain(org.domain) ?? normalizeDomain(org.website_url), ...(await deps.revealedEmailDomains(id)).map(normalizeDomain)].filter(
         (d): d is string => !!d
       )
-    ),
-  ];
-  if (domains.length === 0) return { action: "reveal", basis: "no_domain", organizationName, organizationId };
+    );
+  }
+  const uniqueDomains = [...new Set(domains)];
+  if (uniqueDomains.length === 0) {
+    return { action: "reveal", basis: exactIds.length > 1 ? "ambiguous_org_name" : "no_domain", organizationName, organizationId };
+  }
 
   // Known domains first: one known-ok domain lets the reveal through without probing anything.
   const evidence: DomainEvidence[] = [];
   const unjudged: string[] = [];
   let reason: "catch_all_domain" | "checker_blocked_domain" | null = null;
-  for (const domain of domains) {
+  for (const domain of uniqueDomains) {
     const judged = judgeDomain(await deps.domainVerdicts(domain), now());
     if (judged.state === "ok") {
       return { action: "reveal", basis: "domain_ok", organizationName, organizationId, evidence: [toEvidence(domain, judged.row, false)] };
@@ -219,7 +248,7 @@ async function revealedEmailDomains(organizationId: string): Promise<string[]> {
 async function domainVerdicts(domain: string): Promise<DomainVerdictRow[]> {
   const since = new Date(Date.now() - CATCH_ALL_TTL_DAYS * DAY_MS);
   const rows = await db
-    .select({ verdict: emailVerifications.verdict, id: emailVerifications.id, verifiedAt: emailVerifications.verifiedAt })
+    .select({ verdict: emailVerifications.verdict, id: emailVerifications.id, verifiedAt: emailVerifications.verifiedAt, source: emailVerifications.source })
     .from(emailVerifications)
     .where(
       and(
@@ -230,7 +259,7 @@ async function domainVerdicts(domain: string): Promise<DomainVerdictRow[]> {
     )
     .orderBy(desc(emailVerifications.verifiedAt))
     .limit(50);
-  return rows.map((r) => ({ verdict: r.verdict as EmailVerdict, verificationId: r.id, verifiedAt: r.verifiedAt }));
+  return rows.map((r) => ({ verdict: r.verdict as EmailVerdict, verificationId: r.id, verifiedAt: r.verifiedAt, probe: r.source === PROBE_SOURCE }));
 }
 
 export function probeAddress(domain: string): string {
@@ -244,8 +273,8 @@ export function productionDeps(ctx: GateContext): GateDeps {
     revealedEmailDomains,
     domainVerdicts,
     probe: async (domain) => {
-      const result = await verifyRevealedEmail(probeAddress(domain), { ...ctx.verify, source: "reveal-domain-probe" });
-      return { verdict: result.verdict, verificationId: result.verificationId, verifiedAt: new Date(result.verifiedAt) };
+      const result = await verifyRevealedEmail(probeAddress(domain), { ...ctx.verify, source: PROBE_SOURCE });
+      return { verdict: result.verdict, verificationId: result.verificationId, verifiedAt: new Date(result.verifiedAt), probe: true };
     },
   };
 }
