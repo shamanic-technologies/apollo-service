@@ -733,7 +733,7 @@ export const SearchNextRequestSchema = z
 
 const SearchNextResponseSchema = z
   .object({
-    people: z.array(PersonSchema).openapi({ description: "People returned for this page. Empty array when done=true." }),
+    people: z.array(PersonSchema).openapi({ description: "People returned for this page. Empty array when done=true. On the Apollo walk each teaser's organizationDomain is the employer's web domain whenever it can be known for free: Apollo's own, else Apollo's FREE organization name lookup when exactly ONE organization carries exactly the employer name. No match, several, or a lookup not answered within the page's budget ⟹ organizationDomain absent (never guessed). No Apollo credit is spent for it." }),
     done: z.boolean().openapi({ description: "True ONLY when every page of this filter set's pool has been walked (true pool exhaustion). A page that returns few/no servable people is NOT exhaustion — done stays false and the caller must keep pulling. Do not stop on an empty/low-yield page while done=false." }),
     totalEntries: z.number().openapi({ description: "Total number of people matching the search filters across all pages." }),
     page: z.number().openapi({ description: "The page number just fetched (1-based)." }),

@@ -1082,7 +1082,7 @@
             "items": {
               "$ref": "#/components/schemas/Person"
             },
-            "description": "People returned for this page. Empty array when done=true."
+            "description": "People returned for this page. Empty array when done=true. On the Apollo walk each teaser's organizationDomain is the employer's web domain whenever it can be known for free: Apollo's own, else Apollo's FREE organization name lookup when exactly ONE organization carries exactly the employer name. No match, several, or a lookup not answered within the page's budget ⟹ organizationDomain absent (never guessed). No Apollo credit is spent for it."
           },
           "done": {
             "type": "boolean",
