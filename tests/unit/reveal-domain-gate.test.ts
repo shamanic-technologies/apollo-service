@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from "vitest";
 vi.mock("../../src/db/index.js", () => ({ db: {} }));
 
 import {
+  candidateMailDomains,
   decideReveal,
   judgeDomain,
   normalizeDomain,
@@ -112,7 +113,7 @@ describe("decideReveal", () => {
 
   it("reveals when ANY candidate mail domain is good (the org's website is catch-all, its mail domain is not)", async () => {
     const { d, probe } = deps({
-      revealedEmailDomains: async () => ["dugasmail.com"],
+      revealedEmailDomains: async () => [{ domain: "dugasmail.com", count: 3 }],
       verdicts: { "dugasdental.com": [row("catch_all", 1)], "dugasmail.com": [row("valid", 1)] },
     });
     expect(await decideReveal("p1", d)).toMatchObject({ action: "reveal", basis: "domain_ok" });
@@ -121,7 +122,7 @@ describe("decideReveal", () => {
 
   it("skips only when EVERY candidate domain is bad", async () => {
     const { d } = deps({
-      revealedEmailDomains: async () => ["dugasmail.com"],
+      revealedEmailDomains: async () => [{ domain: "dugasdental.com", count: 3 }, { domain: "dugasmail.com", count: 3 }],
       verdicts: { "dugasdental.com": [row("catch_all", 1)] },
       probeVerdicts: { "dugasmail.com": "unknown" },
     });
@@ -160,6 +161,17 @@ describe("decideReveal", () => {
     expect(probe).toHaveBeenCalledOnce();
   });
 
+  it("homonyms: only the candidate we already revealed people at counts, on its dominant mail domain", async () => {
+    const { d, probe } = deps({
+      employerOf: async () => "Jump Trading",
+      lookupOrganizations: twins,
+      revealedEmailDomains: async (id) => (id === "a" ? [{ domain: "jumptrading.com", count: 371 }, { domain: "jumpcrypto.com", count: 1 }] : []),
+      verdicts: { "jumptrading.com": [row("unknown", 1)] },
+    });
+    expect(await decideReveal("p1", d)).toMatchObject({ action: "skip", reason: "checker_blocked_domain", evidence: [{ domain: "jumptrading.com" }] });
+    expect(probe).not.toHaveBeenCalled();
+  });
+
   it("an AMBIGUOUS name reveals when ANY candidate's domain is good", async () => {
     const { d } = deps({ employerOf: async () => "Jump Trading", lookupOrganizations: twins, verdicts: { "jumptrading.com": [row("catch_all", 1)] } });
     expect(await decideReveal("p1", d)).toMatchObject({ action: "reveal", basis: "domain_ok", organizationId: "a,b" });
@@ -191,6 +203,21 @@ describe("decideReveal", () => {
   it("a probe failure is NOT swallowed", async () => {
     const { d } = deps({ probe: async () => { throw new Error("apify down"); } });
     await expect(decideReveal("p1", d)).rejects.toThrow("apify down");
+  });
+});
+
+describe("candidateMailDomains", () => {
+  it("no reveal anywhere: every candidate's website", () => {
+    expect(candidateMailDomains([{ website: "a.com", revealed: [] }, { website: "b.com", revealed: [] }, { website: null, revealed: [] }])).toEqual(["a.com", "b.com"]);
+  });
+  it("revealed mail domains replace the website and keep only those with >= 10% of the reveals", () => {
+    expect(
+      candidateMailDomains([
+        { website: "wintermute.com", revealed: [{ domain: "wintermute.com", count: 26 }, { domain: "Wintermute-Trading.com", count: 3 }, { domain: "wintermute.llc", count: 1 }] },
+        { website: "other.io", revealed: [] },
+      ])
+    ).toEqual(["wintermute.com", "wintermute-trading.com"]);
+    expect(candidateMailDomains([{ website: "site.com", revealed: [{ domain: "mail.com", count: 2 }] }])).toEqual(["mail.com"]);
   });
 });
 
