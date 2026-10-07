@@ -21,7 +21,7 @@ const row = (verdict: DomainVerdictRow["verdict"], ageDays: number, id = `v-${ve
 });
 
 function deps(over: Partial<GateDeps> & { verdicts?: Record<string, DomainVerdictRow[]>; probeVerdicts?: Record<string, DomainVerdictRow["verdict"]> } = {}) {
-  const probe = vi.fn(async (domain: string) => row(over.probeVerdicts?.[domain] ?? "invalid", 0, `probe-${domain}`));
+  const probe = vi.fn(async (domain: string) => ({ ...row(over.probeVerdicts?.[domain] ?? "invalid", 0, `probe-${domain}`), probe: true }));
   const d: GateDeps = {
     employerOf: async () => "Dugas Dental",
     lookupOrganizations: async () => [{ id: "org-1", name: "Dugas Dental", domain: "dugasdental.com" }],
@@ -39,9 +39,24 @@ describe("judgeDomain", () => {
     expect(judgeDomain([row("catch_all", 3)], NOW)).toMatchObject({ state: "bad", reason: "catch_all_domain" });
   });
 
-  it("the latest decisive verdict wins, and beats any unknown", () => {
+  it("the latest decisive verdict wins, and beats a single later unknown", () => {
     expect(judgeDomain([row("catch_all", 10), row("valid", 2), row("unknown", 1)], NOW)).toMatchObject({ state: "ok" });
     expect(judgeDomain([row("valid", 10), row("catch_all", 2)], NOW)).toMatchObject({ state: "bad", reason: "catch_all_domain" });
+  });
+
+  it("a RUN of unknowns after the latest decisive verdict overturns it (jumptrading.com: 1 valid, 370 unknowns)", () => {
+    const rows = [row("valid", 5), row("unknown", 3, "u1"), row("unknown", 1, "u2")];
+    expect(judgeDomain(rows, NOW)).toMatchObject({ state: "bad", reason: "checker_blocked_domain", row: { verificationId: "u2" } });
+    // Unknowns BEFORE the decisive verdict, or older than the block window, do not count.
+    expect(judgeDomain([row("unknown", 4), row("unknown", 3), row("valid", 2)], NOW)).toMatchObject({ state: "ok" });
+    expect(judgeDomain([row("valid", 20), row("unknown", 10), row("unknown", 9)], NOW)).toMatchObject({ state: "ok" });
+  });
+
+  it("a PROBE answering valid means the domain accepts a mailbox nobody owns: catch-all", () => {
+    expect(judgeDomain([{ ...row("valid", 1), probe: true }], NOW)).toMatchObject({ state: "bad", reason: "catch_all_domain" });
+    expect(judgeDomain([{ ...row("invalid", 1), probe: true }], NOW)).toMatchObject({ state: "ok" });
+    // A real person's address verified valid stays ok.
+    expect(judgeDomain([row("valid", 1)], NOW)).toMatchObject({ state: "ok" });
   });
 
   it("an invalid address proves the domain confirms mailboxes (not catch-all)", () => {
@@ -118,7 +133,39 @@ describe("decideReveal", () => {
     ]);
   });
 
-  it("gives the benefit of the doubt without positive evidence: no employer, no exact org, ambiguous name, no domain", async () => {
+  it("SKIPS on an unseen domain whose probe accepted the random mailbox (valid) — no reveal", async () => {
+    const { d, probe } = deps({ probeVerdicts: { "dugasdental.com": "valid" } });
+    expect(await decideReveal("p1", d)).toMatchObject({ action: "skip", reason: "catch_all_domain", evidence: [{ domain: "dugasdental.com", verdict: "valid", probed: true }] });
+    expect(probe).toHaveBeenCalledOnce();
+  });
+
+  const twins = async () => [
+    { id: "a", name: "Jump Trading", domain: "jumptrading.com" },
+    { id: "b", name: "jump  trading", domain: "jumptrading.ch" },
+  ];
+
+  it("an AMBIGUOUS name is judged across every candidate: skipped when all are bad", async () => {
+    const { d, probe } = deps({
+      employerOf: async () => "Jump Trading",
+      lookupOrganizations: twins,
+      verdicts: { "jumptrading.com": [row("unknown", 1)] },
+      probeVerdicts: { "jumptrading.ch": "catch_all" },
+    });
+    const out = await decideReveal("p1", d);
+    expect(out).toMatchObject({ action: "skip", reason: "checker_blocked_domain", organizationId: "a,b" });
+    expect(out.action === "skip" && out.evidence.map((e) => [e.domain, e.verdict, e.probed])).toEqual([
+      ["jumptrading.com", "unknown", false],
+      ["jumptrading.ch", "catch_all", true],
+    ]);
+    expect(probe).toHaveBeenCalledOnce();
+  });
+
+  it("an AMBIGUOUS name reveals when ANY candidate's domain is good", async () => {
+    const { d } = deps({ employerOf: async () => "Jump Trading", lookupOrganizations: twins, verdicts: { "jumptrading.com": [row("catch_all", 1)] } });
+    expect(await decideReveal("p1", d)).toMatchObject({ action: "reveal", basis: "domain_ok", organizationId: "a,b" });
+  });
+
+  it("gives the benefit of the doubt without positive evidence: no employer, no exact org, ambiguous name with no domain, no domain", async () => {
     expect(await decideReveal("p1", deps({ employerOf: async () => null }).d)).toMatchObject({ action: "reveal", basis: "no_employer" });
     expect(await decideReveal("p1", deps({ lookupOrganizations: async () => [{ id: "x", name: "Dugas Dental Group", domain: "x.com" }] }).d)).toMatchObject({
       action: "reveal",
@@ -129,8 +176,8 @@ describe("decideReveal", () => {
         "p1",
         deps({
           lookupOrganizations: async () => [
-            { id: "a", name: "Dugas Dental", domain: "a.com" },
-            { id: "b", name: "dugas  dental", domain: "b.com" },
+            { id: "a", name: "Dugas Dental", domain: null },
+            { id: "b", name: "dugas  dental", domain: null },
           ],
         }).d
       )

@@ -571,13 +571,25 @@ A reveal is 11.8¢, a BounceVerify check 0.445¢ (0 on unknown).
 - **Domains**: Apollo's FREE org lookup, EXACT name to ONE org id (else no
   gate), its domain + every email domain already revealed at that org id.
 - **Judge** (`judgeDomain`, fleet-wide `email_verifications`, any org/source):
-  latest decisive verdict within 30d decides (catch_all = bad, else ok); no
-  decisive one + an unknown within 7d = bad (`checker_blocked_domain`, TRANSIENT,
-  re-probed after); nothing = PROBE one random `zz-probe-…@domain` address through
-  `verifyRevealedEmail` (source `reveal-domain-probe`, normal cost protocol).
-- **Skip only when EVERY domain is bad**; no employer / no exact org / ambiguous
-  name / no domain → reveal as before (benefit of the doubt). A probe failure
-  502s like any verification failure, never a silent pass.
+  latest decisive verdict within 30d decides (catch_all = bad, else ok) unless
+  2+ unknowns within 7d came AFTER it (= bad); no decisive one + an unknown
+  within 7d = bad (`checker_blocked_domain`, TRANSIENT, re-probed after);
+  nothing = PROBE one random `zz-probe-…@domain` address through
+  `verifyRevealedEmail` (source `reveal-domain-probe`, cost
+  `apify-bounceverify-email`, normal protocol). A PROBE answering `valid` = the
+  domain accepted a mailbox nobody owns = catch_all.
+- **Ambiguous name (several exact org ids) is judged across EVERY candidate's
+  domains** (skip only if all bad; `organizationId` = ids comma-joined).
+- **Skip only when EVERY domain is bad**; no employer / no exact org / no domain
+  → reveal as before (benefit of the doubt). A probe failure 502s like any
+  verification failure, never a silent pass.
+- **Where the waste was (prod 2026-10-02..07, 625 paid gate-passes):** ambiguous
+  name 344 wasted of 407 (Jump Trading alone 370 `unknown` reveals: Proofpoint
+  554s our checker, one fluke `valid` kept it "ok" 30 days), domain-judged 120 of
+  731 (mostly person-level `invalid`). First-seen domains on the judged path were
+  NOT the bulk. The 2,305 `no_employer` reveals of 2026-10-01 were a
+  transactional-email-service mailing-list release whose people never came
+  through `/search/next` (no teaser employer).
 - **A skip**: `person: null`, `emailVerification: null`, additive
   `revealSkipped {skipId, reason, evidence[]}`, a `reveal_skips` row (moved by
   transfer-brand), an `enrich-skipped` trace. No apollo-credit authorized or spent.
