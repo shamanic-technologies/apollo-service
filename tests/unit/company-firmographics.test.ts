@@ -222,6 +222,63 @@ describe("POST /internal/company-firmographics", () => {
   });
 });
 
+describe("POST /internal/person-identity", () => {
+  const postId = async (body: unknown, key = "svc-key") =>
+    request(await buildApp()).post("/internal/person-identity").set("x-api-key", key).send(body);
+
+  it("matches by email only, returns the LinkedIn URL, bills 1 credit once, and the repeat spends nothing", async () => {
+    mockMatchPerson.mockResolvedValue({ id: "p1", name: "Patrick Collison", linkedin_url: "http://www.linkedin.com/in/patrickcollison", match_confidence: "high" });
+    const res = await postId({ email: "Patrick@Stripe.com" });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      email: "patrick@stripe.com",
+      matched: true,
+      matchConfidence: "high",
+      linkedinUrl: "http://www.linkedin.com/in/patrickcollison",
+      apolloPersonId: "p1",
+      name: "Patrick Collison",
+      cached: false,
+    });
+    expect(mockMatchPerson).toHaveBeenCalledWith("apollo-platform-key", { email: "patrick@stripe.com", firstName: undefined, lastName: undefined, domain: "stripe.com" });
+    expect(mockAddPlatformRunCosts).toHaveBeenCalledWith("run-1", [
+      { costName: "apollo-credit", quantity: 1, idempotencyKey: "apollo-service:person-role:run-1" },
+    ]);
+    expect(mockEnrichOrg).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    const again = await postId({ email: "patrick@stripe.com" });
+    expect(again.body.cached).toBe(true);
+    expect(again.body.linkedinUrl).toBe("http://www.linkedin.com/in/patrickcollison");
+    expect(mockMatchPerson).not.toHaveBeenCalled();
+    expect(mockCreatePlatformRun).not.toHaveBeenCalled();
+    expect(mockDecryptPlatformKey).not.toHaveBeenCalled();
+  });
+
+  it("free-mail address: matched by email with no domain sent", async () => {
+    mockMatchPerson.mockResolvedValue({ id: "p2", linkedin_url: "https://linkedin.com/in/x", match_confidence: "high" });
+    await postId({ email: "someone@gmail.com" });
+    expect(mockMatchPerson).toHaveBeenCalledWith("apollo-platform-key", expect.objectContaining({ email: "someone@gmail.com", domain: undefined }));
+  });
+
+  it("unmatched: no URL, no person, no credit", async () => {
+    mockMatchPerson.mockResolvedValue({ id: "x", linkedin_url: "http://www.linkedin.com/in/someone-else", match_confidence: "none" });
+    const res = await postId({ email: "nobody@stripe.com" });
+    expect(res.body).toMatchObject({ matched: false, matchConfidence: "none", linkedinUrl: null, apolloPersonId: null });
+    expect(mockAddPlatformRunCosts).not.toHaveBeenCalled();
+  });
+
+  it("low confidence is passed through verbatim for the caller to judge", async () => {
+    mockMatchPerson.mockResolvedValue({ id: "p3", linkedin_url: "http://www.linkedin.com/in/maybe", match_confidence: "low" });
+    const res = await postId({ email: "info@gowhite.xyz" });
+    expect(res.body).toMatchObject({ matched: true, matchConfidence: "low" });
+  });
+
+  it("rejects a bad key and a non-email", async () => {
+    expect((await postId({ email: "a@b.co" }, "nope")).status).toBe(401);
+    expect((await postId({ email: "not-an-email" })).status).toBe(400);
+  });
+});
+
 describe("pure helpers", () => {
   it("maps Apollo country names to ISO-2", async () => {
     const { countryCode } = await import("../../src/lib/company-firmographics.js");
