@@ -612,6 +612,15 @@ job). `x-api-key` = `APOLLO_SERVICE_API_KEY`, no identity headers.
 - Every field nullable; ranges are buckets (`revenueRange`, `employeeRange`),
   country is ISO-2 from Apollo's English name (CLDR reverse map + aliases).
 
+## Person identity by email (`POST /internal/person-identity`) — ORG-LESS, platform-billed
+
+`{email}` → `{email, matched, matchConfidence, linkedinUrl, apolloPersonId, name, cached}`.
+Apollo `people/match` by EMAIL only (never a name: two people share one). Same
+cache row (`person_role_lookups`, key `email:<lower>`), spend protocol and
+`apollo-credit` declaration as the firmographics person leg, so neither pays
+twice. A free-mail domain is not sent to Apollo as `domain`. `matchConfidence`
+is Apollo's verbatim; the caller judges (client-service accepts only `high`).
+
 ## Other email finders: treg.to and Explee (bronze / silver / exact cost)
 
 apollo-service holds our enrichment PROVIDERS, not only Apollo. `POST

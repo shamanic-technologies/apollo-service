@@ -3620,6 +3620,64 @@
           "dryRun"
         ]
       },
+      "PersonIdentityResponse": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "The email looked up, lower-cased."
+          },
+          "matched": {
+            "type": "boolean",
+            "description": "Apollo matched a real person (match_confidence present and not \"none\")."
+          },
+          "matchConfidence": {
+            "type": "string",
+            "nullable": true,
+            "description": "Apollo's match_confidence verbatim (\"high\" | \"low\" | \"none\"). A caller that must not guess should accept only \"high\"."
+          },
+          "linkedinUrl": {
+            "type": "string",
+            "nullable": true,
+            "description": "The matched person's LinkedIn profile URL, verbatim from Apollo. null when not matched or Apollo holds none."
+          },
+          "apolloPersonId": {
+            "type": "string",
+            "nullable": true
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "cached": {
+            "type": "boolean",
+            "description": "true = served from cache, nothing spent."
+          }
+        },
+        "required": [
+          "email",
+          "matched",
+          "matchConfidence",
+          "linkedinUrl",
+          "apolloPersonId",
+          "name",
+          "cached"
+        ]
+      },
+      "PersonIdentityRequest": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "maxLength": 320,
+            "format": "email",
+            "description": "The person's email. The ONLY input: a name is never used to match."
+          }
+        },
+        "required": [
+          "email"
+        ]
+      },
       "CompanyFirmographicsResponse": {
         "type": "object",
         "properties": {
@@ -6555,6 +6613,74 @@
           },
           "500": {
             "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/person-identity": {
+      "post": {
+        "summary": "Who is the person behind an email (LinkedIn profile), org-less and platform-billed",
+        "description": "Apollo people/match by EMAIL only (never by name). For org-less callers (client-service resolving one of our own users' LinkedIn profiles). Spend: 1 apollo-credit when Apollo matches a real person, 0 otherwise, declared as an actual cost on an apollo-service platform run before the answer is served. Cached globally per email with the firmographics person leg (90 days matched, 30 not): a repeat call spends nothing. Requires x-api-key = APOLLO_SERVICE_API_KEY. No identity headers.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonIdentityRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Match result (unmatched is an answer, not an error)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonIdentityResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid x-api-key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Apollo, key-service or runs-service (cost declaration) failed. A paid lookup whose cost could not be declared is declared on the next call, never paid twice.",
             "content": {
               "application/json": {
                 "schema": {

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireServiceApiKey } from "./transfer-brand.js";
-import { CompanyFirmographicsRequestSchema } from "../schemas.js";
-import { lookupFirmographics, toCompanyDomain } from "../lib/company-firmographics.js";
+import { CompanyFirmographicsRequestSchema, PersonIdentityRequestSchema } from "../schemas.js";
+import { lookupFirmographics, lookupPersonIdentity, toCompanyDomain } from "../lib/company-firmographics.js";
 
 const router = Router();
 
@@ -31,6 +31,24 @@ router.post("/internal/company-firmographics", requireServiceApiKey, async (req,
     res.json(answer);
   } catch (error) {
     console.error("[Apollo Service][POST /internal/company-firmographics] ERROR:", error);
+    res.status(502).json({ type: "upstream", error: error instanceof Error ? error.message : "Upstream failure" });
+  }
+});
+
+/**
+ * POST /internal/person-identity — who the person behind an email is (their
+ * LinkedIn profile), org-less and platform-billed. Apollo people/match by email
+ * only, cached with the firmographics person leg. See lookupPersonIdentity.
+ */
+router.post("/internal/person-identity", requireServiceApiKey, async (req, res) => {
+  const parsed = PersonIdentityRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ type: "validation", error: "Invalid request", details: parsed.error.flatten() });
+  }
+  try {
+    res.json(await lookupPersonIdentity(parsed.data.email));
+  } catch (error) {
+    console.error("[Apollo Service][POST /internal/person-identity] ERROR:", error);
     res.status(502).json({ type: "upstream", error: error instanceof Error ? error.message : "Upstream failure" });
   }
 });
