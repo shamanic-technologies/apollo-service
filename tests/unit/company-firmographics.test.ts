@@ -78,6 +78,7 @@ const STRIPE = {
   country: "United States",
   short_description: "Stripe is a financial infrastructure platform for businesses.",
   keywords: ["payments", "developer tools", "enterprise software"],
+  linkedin_url: "http://www.linkedin.com/company/stripe",
 };
 
 process.env.APOLLO_SERVICE_API_KEY = "svc-key";
@@ -119,6 +120,7 @@ describe("POST /internal/company-firmographics", () => {
       revenueRange: { label: "$1B+", min: 1_000_000_000, max: null },
       employeeRange: { label: "5,001-10,000", min: 5001, max: 10000 },
       category: "B2B SaaS",
+      linkedinUrl: "http://www.linkedin.com/company/stripe",
     });
     expect(res.body.person).toBeNull();
     expect(res.body.personMatched).toBeNull();
@@ -136,6 +138,7 @@ describe("POST /internal/company-firmographics", () => {
     expect(again.status).toBe(200);
     expect(again.body.cached.company).toBe(true);
     expect(again.body.company.category).toBe("B2B SaaS");
+    expect(again.body.company.linkedinUrl).toBe("http://www.linkedin.com/company/stripe");
     expect(mockEnrichOrg).not.toHaveBeenCalled();
     expect(mockCreatePlatformRun).not.toHaveBeenCalled();
     expect(mockAddPlatformRunCosts).not.toHaveBeenCalled();
@@ -293,7 +296,15 @@ describe("pure helpers", () => {
     expect(countryCode(null)).toBeNull();
   });
 
-  it("buckets revenue and headcount", async () => {
+  it("company linkedinUrl is Apollo's linkedin_url verbatim, null when absent or blank", async () => {
+    const { toCompanyAnswer } = await import("../../src/lib/company-firmographics.js");
+    const row = (raw: unknown) => ({ apolloOrganizationId: "o1", raw, category: null, categoryConfidence: null });
+    expect(toCompanyAnswer("x.io", row({ linkedin_url: " http://www.linkedin.com/company/x " })).linkedinUrl).toBe("http://www.linkedin.com/company/x");
+    expect(toCompanyAnswer("x.io", row({ linkedin_url: "" })).linkedinUrl).toBeNull();
+    expect(toCompanyAnswer("x.io", row({})).linkedinUrl).toBeNull();
+  });
+
+    it("buckets revenue and headcount", async () => {
     const { revenueRange, employeeRange } = await import("../../src/lib/company-firmographics.js");
     expect(revenueRange(500_000)?.label).toBe("<$1M");
     expect(revenueRange(12_000_000)?.label).toBe("$10M-$50M");

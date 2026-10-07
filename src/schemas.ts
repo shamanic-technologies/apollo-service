@@ -1444,6 +1444,10 @@ const CompanyFirmographicsResponseSchema = z
         category: z.enum(["B2B SaaS", "B2B Agency", "B2C", "Other"]).nullable().describe("Business model, judged by Jev from Apollo's description/keywords/industry. null when there was nothing to judge or confidence < 0.5."),
         categoryConfidence: z.number().nullable(),
         apolloOrganizationId: z.string().nullable(),
+        linkedinUrl: z
+          .string()
+          .nullable()
+          .describe("The company's LinkedIn page, verbatim from Apollo's organization record (linkedin_url, e.g. http://www.linkedin.com/company/stripe). null when Apollo has none. Not validated against the domain: a caller that needs the company's OWN page checks it."),
       })
       .nullable()
       .describe("null when the domain is a free-mail provider or Apollo knows no company for it (see noCompanyReason). Every field is independently nullable."),

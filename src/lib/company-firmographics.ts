@@ -78,6 +78,8 @@ export interface CompanyAnswer {
   category: BusinessCategory | null;
   categoryConfidence: number | null;
   apolloOrganizationId: string | null;
+  /** The company's LinkedIn page, verbatim from Apollo (`linkedin_url`). null when Apollo has none. */
+  linkedinUrl: string | null;
 }
 
 export interface PersonAnswer {
@@ -242,6 +244,7 @@ export function toCompanyAnswer(domain: string, row: {
     category,
     categoryConfidence: confidence,
     apolloOrganizationId: row.apolloOrganizationId,
+    linkedinUrl: typeof o.linkedin_url === "string" && o.linkedin_url.trim() ? o.linkedin_url.trim() : null,
   };
 }
 
