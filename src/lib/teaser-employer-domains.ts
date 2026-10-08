@@ -24,12 +24,18 @@
  * and fills the cache for the next page. A failed lookup (Apollo error, rate
  * limit) is NOT cached and simply leaves the domain absent: the domain is
  * additive information, never a reason to fail a search.
+ *
+ * QUOTA: the lookup's 400/hour cap is shared with the PAID reveal gate. These
+ * lookups run at "background" priority (org-lookup-budget.ts): a capped share
+ * of the hour, no 429 retries, a pause after any 429, and the rest of the page
+ * stops looking up at the first refusal. A customer's /enrich never dies on a
+ * quota this fill spent (2026-10-08, Shockwave).
  */
 
 import { and, gt, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloEmployerDomains } from "../db/schema.js";
-import { lookupOrganizationsByName, type ApolloOrganizationCandidate } from "./apollo-client.js";
+import { ApolloRateLimitedError, lookupOrganizationsByName, type ApolloOrganizationCandidate } from "./apollo-client.js";
 import type { CreditAlertIdentity } from "./credit-alert.js";
 
 export const CACHE_DAYS = 30;
@@ -115,8 +121,9 @@ export async function resolveEmployerDomains(people: TeaserLike[], deps: Employe
 
   const found = new Map<string, string | null>();
   let next = 0;
+  let rateLimited = false;
   const worker = async () => {
-    while (next < misses.length) {
+    while (next < misses.length && !rateLimited) {
       const [key, name] = misses[next++];
       try {
         const resolution = resolveEmployer(name, await deps.lookup(name));
@@ -124,6 +131,12 @@ export async function resolveEmployerDomains(people: TeaserLike[], deps: Employe
         await deps.writeCache(name, resolution);
       } catch (error) {
         // Not cached: the next page retries this name.
+        if (error instanceof ApolloRateLimitedError) {
+          // Quota shared with the paid reveal gate: stop this page's fill at the first refusal.
+          if (!rateLimited) console.warn(`[Apollo Service][teaser-employer-domains] lookups stopped for this page (${misses.length - next + 1} left): ${error.message.slice(0, 200)}`);
+          rateLimited = true;
+          continue;
+        }
         console.warn(`[Apollo Service][teaser-employer-domains] lookup failed for "${name}"`, error instanceof Error ? error.message : error);
       }
     }
@@ -185,7 +198,7 @@ export function productionEmployerDomainDeps(apiKey: string, alertIdentity?: Cre
           },
         });
     },
-    lookup: (name) => lookupOrganizationsByName(apiKey, name, LOOKUP_PER_PAGE, alertIdentity),
+    lookup: (name) => lookupOrganizationsByName(apiKey, name, LOOKUP_PER_PAGE, alertIdentity, "background"),
   };
 }
 
