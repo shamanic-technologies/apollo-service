@@ -1,6 +1,7 @@
 import type { EmailStatus } from "../schemas.js";
 import { reportApolloCreditsExhausted, type CreditAlertIdentity } from "./credit-alert.js";
 import { ApolloCreditsExhaustedError } from "./provider-error.js";
+import { orgLookupBudget, type OrgLookupBudget, type OrgLookupPriority } from "./org-lookup-budget.js";
 
 const APOLLO_API_BASE = "https://api.apollo.io/api/v1";
 
@@ -455,12 +456,17 @@ async function sendApolloRequest(
   label: string,
   alertIdentity: CreditAlertIdentity | undefined,
   send: () => Promise<Response>,
+  hooks: SendHooks = {},
 ): Promise<Response> {
+  const maxRetries = hooks.maxRateLimitRetries ?? APOLLO_RATE_LIMIT_RETRY_DELAYS_MS.length;
   for (let attempt = 0; ; attempt++) {
+    hooks.onSend?.();
     const response = await send();
     if (response.ok) return response;
     const body = await response.text();
-    if (isApolloRateLimit(response.status, body) && attempt < APOLLO_RATE_LIMIT_RETRY_DELAYS_MS.length) {
+    const rateLimited = isApolloRateLimit(response.status, body);
+    if (rateLimited) hooks.onRateLimited?.(body);
+    if (rateLimited && attempt < maxRetries) {
       const waitMs = retryAfterMs(response) ?? APOLLO_RATE_LIMIT_RETRY_DELAYS_MS[attempt];
       console.warn(`[Apollo Service] ${operation} rate-limited by Apollo (429), retry ${attempt + 1} in ${waitMs}ms`, {
         body: body.slice(0, 300),
@@ -469,7 +475,29 @@ async function sendApolloRequest(
       continue;
     }
     console.error(`[Apollo Service] ${operation} Apollo API error`, { status: response.status, body });
+    if (rateLimited) throw new ApolloRateLimitedError(`${label}: ${response.status} - ${body}`);
     throw apolloRequestFailure(operation, label, response.status, body, alertIdentity);
+  }
+}
+
+interface SendHooks {
+  /** Rate-limit retries for this call (default: APOLLO_RATE_LIMIT_RETRY_DELAYS_MS.length). */
+  maxRateLimitRetries?: number;
+  /** Called before every request actually sent (retries included). */
+  onSend?: () => void;
+  /** Called on every rate-limit 429. */
+  onRateLimited?: (body: string) => void;
+}
+
+/**
+ * Apollo still answered a rate-limit 429 after the bounded retries (or, for a
+ * background lookup, before it was even sent: its share of the quota is spent).
+ * `message` keeps the `<label>: 429 - <body>` shape every other failure has.
+ */
+export class ApolloRateLimitedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ApolloRateLimitedError";
   }
 }
 
@@ -590,13 +618,31 @@ export async function lookupOrganizationsByName(
   apiKey: string,
   name: string,
   perPage: number,
-  alertIdentity?: CreditAlertIdentity
+  alertIdentity?: CreditAlertIdentity,
+  priority: OrgLookupPriority = "serve",
+  budget: OrgLookupBudget = orgLookupBudget
 ): Promise<ApolloOrganizationCandidate[]> {
-  const response = await sendApolloRequest("organizations/search (lookup)", "Apollo organization lookup failed", alertIdentity, () => fetchWithTimeout(`${APOLLO_API_BASE}/organizations/search`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Api-Key": apiKey },
-    body: JSON.stringify({ q_organization_fuzzy_name: name, display_mode: "fuzzy_select_mode", page: 1, per_page: perPage }),
-  }));
+  // The 400/hour quota is shared with the paid serve path: a background fill
+  // never eats into the serves' reserve and never retries a 429 (org-lookup-budget.ts).
+  if (priority === "background") {
+    const refusal = budget.backgroundRefusal();
+    if (refusal) throw new ApolloRateLimitedError(`Apollo organization lookup skipped (background): ${refusal}`);
+  }
+  const response = await sendApolloRequest(
+    "organizations/search (lookup)",
+    "Apollo organization lookup failed",
+    alertIdentity,
+    () => fetchWithTimeout(`${APOLLO_API_BASE}/organizations/search`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Api-Key": apiKey },
+      body: JSON.stringify({ q_organization_fuzzy_name: name, display_mode: "fuzzy_select_mode", page: 1, per_page: perPage }),
+    }),
+    {
+      maxRateLimitRetries: priority === "background" ? 0 : undefined,
+      onSend: () => budget.recordCall(),
+      onRateLimited: (body) => budget.recordRateLimited(body),
+    }
+  );
   const body = (await response.json()) as { organizations?: ApolloOrganizationCandidate[] };
   return body.organizations ?? [];
 }
