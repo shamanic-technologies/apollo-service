@@ -568,8 +568,16 @@ Prices are re-derived daily by costs-service (2026-10-07: reveal 5.6¢, BounceVe
 - **Employer**: the free teaser only carries `organization.name`, so
   `/search/next` upserts it into `apollo_teaser_people` (global, no org).
   Migration 0030 backfilled 14 days of `apollo_people_searches`.
-- **Domains**: Apollo's FREE org lookup, EXACT name to ONE org id (else no
-  gate), its domain + every email domain already revealed at that org id.
+- **Domains**: Apollo's FREE org lookup (`organizations/search`), exact name to
+  org ids, then `candidateMailDomains` (below). ⚠️ That lookup is capped at
+  **400 calls/hour** on the platform key, shared by the gate and the teaser
+  employer domains: never replay the gate over history with live lookups (a
+  1,245-row replay hit the cap on 2026-10-07); stand in the reveal's own
+  `organization_id` instead. **Serves have priority** (`org-lookup-budget.ts`):
+  the teaser fill is `background` (≤250/h, no 429 retry, paused 10 min after an
+  hourly 429, page stops at first refusal); the gate memoizes a name 6h and a
+  rate-limited lookup REVEALS (basis `org_lookup_rate_limited`), never 500s
+  (2026-10-08: a resumed campaign's teaser burst 500'd two paid /enrich serves).
 - **Judge** (`judgeDomain`, fleet-wide `email_verifications`, any org/source):
   latest decisive verdict within 30d decides (catch_all = bad, else ok) unless
   2+ unknowns within 7d came AFTER it (= bad); no decisive one + an unknown

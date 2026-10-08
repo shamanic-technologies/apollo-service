@@ -51,15 +51,23 @@
  *
  * Every skip is written to `reveal_skips` with its evidence and returned to the
  * caller as `revealSkipped`; nothing is skipped silently.
+ *
+ * QUOTA: the free org lookup is capped at 400/hour on the platform key and the
+ * teaser employer-domain fill uses it too. The gate memoizes a name's
+ * candidates for LOOKUP_MEMO_MS (one employer is revealed many times in a row),
+ * and when Apollo still rate-limits the lookup the reveal goes through with
+ * basis `org_lookup_rate_limited`, like any other "no positive evidence" case:
+ * a free pre-check must never turn a customer's paid serve into a 500
+ * (2026-10-08, Shockwave: two /enrich 500s on a 429 a background fill caused).
  */
 
 import { randomBytes } from "node:crypto";
 import { and, desc, eq, gt, isNotNull, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloPeopleEnrichments, apolloTeaserPeople, emailVerifications, revealSkips } from "../db/schema.js";
-import { lookupOrganizationsByName, type ApolloOrganizationCandidate } from "./apollo-client.js";
+import { ApolloRateLimitedError, lookupOrganizationsByName, type ApolloOrganizationCandidate } from "./apollo-client.js";
 import type { CreditAlertIdentity } from "./credit-alert.js";
-import { exactOrganizationIds, normalizeDomain } from "./teaser-employer-domains.js";
+import { exactOrganizationIds, normalizeDomain, normalizeEmployerName } from "./teaser-employer-domains.js";
 import { verifyRevealedEmail, VERDICT_REUSE_DAYS, type EmailVerdict, type VerificationContext } from "./email-verification.js";
 
 /** A catch-all verdict condemns its domain as long as a verdict is reused at all. */
@@ -71,6 +79,9 @@ export const BLOCK_RUN_AFTER_DECISIVE = 2;
 /** The verification source a gate probe is recorded under. */
 export const PROBE_SOURCE = "reveal-domain-probe";
 const LOOKUP_PER_PAGE = 10;
+/** How long the gate reuses a name's org lookup (candidates of a name barely move). */
+export const LOOKUP_MEMO_MS = 6 * 60 * 60 * 1000;
+const LOOKUP_MEMO_MAX = 5000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface DomainVerdictRow {
@@ -135,7 +146,7 @@ export type GateDecision =
   | {
       action: "reveal";
       /** Why the gate let it through — for the trace, never a silent default. */
-      basis: "domain_ok" | "no_employer" | "no_exact_org_match" | "ambiguous_org_name" | "no_domain";
+      basis: "domain_ok" | "no_employer" | "org_lookup_rate_limited" | "no_exact_org_match" | "ambiguous_org_name" | "no_domain";
       organizationName?: string;
       organizationId?: string;
       evidence?: DomainEvidence[];
@@ -215,7 +226,14 @@ export async function decideReveal(apolloPersonId: string, deps: GateDeps): Prom
   const organizationName = await deps.employerOf(apolloPersonId);
   if (!organizationName) return { action: "reveal", basis: "no_employer" };
 
-  const candidates = await deps.lookupOrganizations(organizationName);
+  let candidates: ApolloOrganizationCandidate[];
+  try {
+    candidates = await deps.lookupOrganizations(organizationName);
+  } catch (error) {
+    if (!(error instanceof ApolloRateLimitedError)) throw error;
+    console.warn(`[Apollo Service][reveal-domain-gate] org lookup rate-limited for "${organizationName}", revealing without the gate: ${error.message.slice(0, 200)}`);
+    return { action: "reveal", basis: "org_lookup_rate_limited", organizationName };
+  }
   const exactIds = exactOrganizationIds(organizationName, candidates);
   if (exactIds.length === 0) return { action: "reveal", basis: "no_exact_org_match", organizationName };
   const organizationId = exactIds.join(",");
@@ -311,10 +329,37 @@ export function probeAddress(domain: string): string {
   return `zz-probe-${randomBytes(6).toString("hex")}@${domain}`;
 }
 
+/**
+ * A name's org lookup reused for LOOKUP_MEMO_MS, keyed on the normalized name
+ * (insertion-ordered Map, oldest evicted past `max`). Failures are not stored.
+ */
+export class LookupMemo {
+  private memo = new Map<string, { at: number; candidates: ApolloOrganizationCandidate[] }>();
+
+  constructor(
+    private readonly ttlMs: number = LOOKUP_MEMO_MS,
+    private readonly max: number = LOOKUP_MEMO_MAX,
+    private readonly now: () => number = Date.now
+  ) {}
+
+  async get(name: string, lookup: (name: string) => Promise<ApolloOrganizationCandidate[]>): Promise<ApolloOrganizationCandidate[]> {
+    const key = normalizeEmployerName(name);
+    const hit = this.memo.get(key);
+    if (hit && this.now() - hit.at < this.ttlMs) return hit.candidates;
+    const candidates = await lookup(name);
+    this.memo.delete(key);
+    this.memo.set(key, { at: this.now(), candidates });
+    while (this.memo.size > this.max) this.memo.delete(this.memo.keys().next().value!);
+    return candidates;
+  }
+}
+
+const gateLookupMemo = new LookupMemo();
+
 export function productionDeps(ctx: GateContext): GateDeps {
   return {
     employerOf,
-    lookupOrganizations: (name) => lookupOrganizationsByName(ctx.apolloApiKey, name, LOOKUP_PER_PAGE, ctx.alertIdentity),
+    lookupOrganizations: (name) => gateLookupMemo.get(name, (n) => lookupOrganizationsByName(ctx.apolloApiKey, n, LOOKUP_PER_PAGE, ctx.alertIdentity)),
     revealedEmailDomains,
     domainVerdicts,
     probe: async (domain) => {
