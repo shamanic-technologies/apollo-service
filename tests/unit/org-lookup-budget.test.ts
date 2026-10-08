@@ -80,7 +80,15 @@ describe("lookupOrganizationsByName — priorities", () => {
     expect(b.backgroundRefusal()).toMatch(/paused/);
   });
 
-  it("serve: a 429 is retried (and each retry counted)", async () => {
+  it("serve: an HOURLY 429 is not retried (the window does not clear in seconds)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 429, text: async () => HOURLY_BODY });
+    vi.stubGlobal("fetch", fetchMock);
+    const b = new OrgLookupBudget();
+    await expect(lookupOrganizationsByName("k", "Acme", 10, undefined, "serve", b)).rejects.toBeInstanceOf(ApolloRateLimitedError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("serve: a per-minute 429 is retried (and each retry counted)", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout"] });
     let n = 0;
     vi.stubGlobal(

@@ -71,7 +71,7 @@ export class OrgLookupBudget {
 
   /** Apollo answered 429: pause the background fill so serves get what is left. */
   recordRateLimited(body: string): void {
-    const cooldown = /per hour/i.test(body) ? HOURLY_LIMIT_COOLDOWN_MS : MINUTE_LIMIT_COOLDOWN_MS;
+    const cooldown = /times per hour/i.test(body) ? HOURLY_LIMIT_COOLDOWN_MS : MINUTE_LIMIT_COOLDOWN_MS;
     this.backgroundPausedUntil = Math.max(this.backgroundPausedUntil, this.now() + cooldown);
   }
 }

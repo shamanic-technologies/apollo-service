@@ -576,7 +576,8 @@ Prices are re-derived daily by costs-service (2026-10-07: reveal 5.6¢, BounceVe
   `organization_id` instead. **Serves have priority** (`org-lookup-budget.ts`):
   the teaser fill is `background` (≤250/h, no 429 retry, paused 10 min after an
   hourly 429, page stops at first refusal); the gate memoizes a name 6h and a
-  rate-limited lookup REVEALS (basis `org_lookup_rate_limited`), never 500s
+  rate-limited lookup REVEALS (basis `org_lookup_rate_limited`), never 500s;
+  an HOURLY 429 (any Apollo endpoint) is never retried, only per-minute ones
   (2026-10-08: a resumed campaign's teaser burst 500'd two paid /enrich serves).
 - **Judge** (`judgeDomain`, fleet-wide `email_verifications`, any org/source):
   latest decisive verdict within 30d decides (catch_all = bad, else ok) unless
