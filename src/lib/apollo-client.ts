@@ -427,6 +427,11 @@ export function isApolloRateLimit(status: number, body: string): boolean {
   return status === 429 && !looksLikeApolloCreditExhaustion(status, body);
 }
 
+/** Apollo's rate-limit body names its window ("… 400 times per hour"); an hourly one is not worth a retry. */
+export function isHourlyApolloRateLimit(body: string): boolean {
+  return /times per hour/i.test(body);
+}
+
 /**
  * Waits before each retry of a rate-limited Apollo call. Bounded on purpose:
  * `/match` and `/enrich` hold a DB advisory lock around the call, so the total
@@ -466,7 +471,8 @@ async function sendApolloRequest(
     const body = await response.text();
     const rateLimited = isApolloRateLimit(response.status, body);
     if (rateLimited) hooks.onRateLimited?.(body);
-    if (rateLimited && attempt < maxRetries) {
+    // An hourly window does not clear in seconds: retrying it only holds the caller's lock.
+    if (rateLimited && !isHourlyApolloRateLimit(body) && attempt < maxRetries) {
       const waitMs = retryAfterMs(response) ?? APOLLO_RATE_LIMIT_RETRY_DELAYS_MS[attempt];
       console.warn(`[Apollo Service] ${operation} rate-limited by Apollo (429), retry ${attempt + 1} in ${waitMs}ms`, {
         body: body.slice(0, 300),
@@ -474,8 +480,11 @@ async function sendApolloRequest(
       await new Promise((resolve) => setTimeout(resolve, waitMs));
       continue;
     }
+    if (rateLimited) {
+      console.warn(`[Apollo Service] ${operation} rate-limited by Apollo (429), giving up`, { body: body.slice(0, 300) });
+      throw new ApolloRateLimitedError(`${label}: ${response.status} - ${body}`);
+    }
     console.error(`[Apollo Service] ${operation} Apollo API error`, { status: response.status, body });
-    if (rateLimited) throw new ApolloRateLimitedError(`${label}: ${response.status} - ${body}`);
     throw apolloRequestFailure(operation, label, response.status, body, alertIdentity);
   }
 }
