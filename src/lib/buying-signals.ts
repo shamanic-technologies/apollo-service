@@ -32,6 +32,7 @@ import { and, desc, eq, gt, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloJobPostingsFetches, apolloSearchCursors, apolloSignalServes, buyingSignals } from "../db/schema.js";
 import { getOrganizationJobPostings, type ApolloJobPosting } from "./apollo-client.js";
+import { withTregFallback, tregCostItems } from "./apollo-reveal-route.js";
 import { addDays, readSignalSpec, toDay, utcDay, type BuyingSignalSpec, type BuyingSignalType } from "./buying-signal-spec.js";
 import { advisoryXactLock } from "./advisory-lock.js";
 import { decryptKey } from "./keys-client.js";
@@ -378,19 +379,31 @@ async function loadJobPostings(apolloOrganizationId: string, ctx: EvidenceContex
       }
     }
 
-    let body;
+    let fetched;
     try {
-      body = await getOrganizationJobPostings(key, apolloOrganizationId, ctx.alertIdentity);
+      // Our Apollo key, or Apollo through treg while ours is out of credits (apollo-reveal-route.ts).
+      fetched = await withTregFallback(keySource, {
+        own: () => getOrganizationJobPostings(key, apolloOrganizationId, ctx.alertIdentity),
+        treg: { endpoint: "apollo.companies.jobs", method: "GET", query: { organization_id: apolloOrganizationId } },
+        callerPath: "/enrich",
+      });
     } catch (error) {
       await releaseHold("failed");
       throw error;
     }
+    const body = fetched.response;
     const postings = body.organization_job_postings ?? [];
     // Outside the lock tx on purpose: what Apollo billed is kept even if this request fails later.
     await db.insert(apolloJobPostingsFetches).values({ apolloOrganizationId, runId: run.id, postingsCount: postings.length, responseBody: body });
-    // Apollo bills the call only when it returns postings (measured: 0 for an empty list).
-    if (postings.length > 0) {
-      await addCosts(run.id, [{ costName: JOB_POSTINGS_COST_NAME, costSource: keySource, quantity: 1 }], identity);
+    // treg: its own charge. Apollo: billed only when it returns postings (measured: 0 for an empty list).
+    const costItems =
+      fetched.via === "treg"
+        ? tregCostItems(fetched.tregCostMicro)
+        : postings.length > 0
+          ? [{ costName: JOB_POSTINGS_COST_NAME, costSource: keySource, quantity: 1 }]
+          : [];
+    if (costItems.length > 0) {
+      await addCosts(run.id, costItems, identity);
     }
     await releaseHold("completed");
     return postings;

@@ -821,15 +821,21 @@ owner decision; do not build it by default.
 
 ## Platform reveals fall back to Apollo THROUGH treg when our credits are out
 
-`/enrich` and `/match` (`people/match`) on the PLATFORM key: on
-`ApolloCreditsExhaustedError` the same match is answered by treg's
-`apollo.people.enrich` (Apollo's own params in the query string, verbatim Apollo
-response, ~$0.026/success), then every platform reveal goes to treg directly
-for 1h before our key is retried, so it ends by itself at renewal
-(`src/lib/apollo-reveal-route.ts`). Cost declared = treg's `X-Treg-Cost-Micro`
-as `treg-micro-usd`, never an `apollo-credit`. BYOK keys are never rerouted.
-Not covered (still fail while out): phone reveal, firmographics, job postings,
-audience companies. 2026-10-09: credits ran out 3 days before the Oct 12 cycle.
+Every PAID Apollo call on the PLATFORM key (`withTregFallback`,
+`src/lib/apollo-reveal-route.ts`): on `ApolloCreditsExhaustedError` the same call
+goes through treg (Apollo's own params in the query string, verbatim Apollo
+response, ~$0.026), then every platform call goes to treg directly for 1h before
+our key is retried, so it ends by itself at renewal. Cost declared = treg's
+`X-Treg-Cost-Micro` as `treg-micro-usd`, never an `apollo-credit`. BYOK never
+rerouted. Map: `people/match` (/enrich, /match, phone reveal, person role /
+identity) → `apollo.people.enrich`; `organizations/enrich` → `apollo.companies.enrich`;
+job postings → `apollo.companies.jobs`; `organizations/{id}` (audience
+companies, not in treg) → `apollo.companies.enrich` by the lookup's domain, kept
+only when Apollo returns the SAME id (no domain = no firmographics while out).
+Org-less lookups store `cost_name`; a treg phone reveal is `reveal_route = treg`
+(callback + reconciler cancel the 8-credit hold, declare no Apollo credit). treg
+meters a phone reveal at 1 credit (its documented under-metering of the +8).
+2026-10-09: credits ran out 3 days before the Oct 12 cycle.
 
 ## Running out of Apollo credits raises a STAFF EMAIL — never let it stay silent
 
