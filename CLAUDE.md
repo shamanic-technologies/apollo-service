@@ -819,6 +819,18 @@ open path — resolving a LinkedIn URL from name + last-name mask + company +
 title via a paid people search — risks emailing the wrong human and needs an
 owner decision; do not build it by default.
 
+## Platform reveals fall back to Apollo THROUGH treg when our credits are out
+
+`/enrich` and `/match` (`people/match`) on the PLATFORM key: on
+`ApolloCreditsExhaustedError` the same match is answered by treg's
+`apollo.people.enrich` (Apollo's own params in the query string, verbatim Apollo
+response, ~$0.026/success), then every platform reveal goes to treg directly
+for 1h before our key is retried, so it ends by itself at renewal
+(`src/lib/apollo-reveal-route.ts`). Cost declared = treg's `X-Treg-Cost-Micro`
+as `treg-micro-usd`, never an `apollo-credit`. BYOK keys are never rerouted.
+Not covered (still fail while out): phone reveal, firmographics, job postings,
+audience companies. 2026-10-09: credits ran out 3 days before the Oct 12 cycle.
+
 ## Running out of Apollo credits raises a STAFF EMAIL — never let it stay silent
 
 Apollo signals credit exhaustion two ways, and BOTH used to be silent here: a
