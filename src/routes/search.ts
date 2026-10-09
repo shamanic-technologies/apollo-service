@@ -11,6 +11,7 @@ import { parseLinkedinPersonId, linkedinEngagerToPerson, domainOf } from "../lib
 import { buyingSignalForEnrich, recordSignalServes, resolveSignalCohort, BuyingSignalInsufficientCreditError, type EnrichedPersonLike } from "../lib/buying-signals.js";
 import { searchPeople, enrichPerson, ApolloPerson, buildWaterfallWebhookUrl, withVerifiedEmailOnly, isBilledApolloPerson, BILLED_NO_EMAIL_CACHE_DAYS } from "../lib/apollo-client.js";
 import { providerErrorFields } from "../lib/provider-error.js";
+import { revealPerson, revealCostItems } from "../lib/apollo-reveal-route.js";
 import { advisoryXactLock, enrichLockKey } from "../lib/advisory-lock.js";
 import { decryptKey } from "../lib/keys-client.js";
 import { createRun, updateRun, addCosts, failOpenRun, type IdentityHeaders } from "../lib/runs-client.js";
@@ -407,7 +408,14 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       const recheck = await findCachedEnrichmentByPersonId(apolloPersonId);
       if (recheck) return { kind: "cached", record: recheck.record, negative: recheck.negative };
 
-      const result = await enrichPerson(apolloApiKey, apolloPersonId, webhookUrl, toCreditAlertIdentity(req));
+      // Our Apollo key, or Apollo through treg while ours is out of credits (apollo-reveal-route.ts).
+      const reveal = await revealPerson(keySource, {
+        own: () => enrichPerson(apolloApiKey, apolloPersonId, webhookUrl, toCreditAlertIdentity(req)),
+        tregQuery: { id: apolloPersonId, reveal_personal_emails: "false", run_waterfall_email: "false" },
+        callerPath: "/enrich",
+      });
+      const result = reveal.response;
+      if (reveal.via === "treg") console.log(`[Apollo Service][POST /enrich] revealed through treg person=${apolloPersonId} costMicro=${reveal.tregCostMicro} callId=${reveal.tregCallId}`);
       // Apollo bills a credit for any person it returns, email or not.
       const billed = isBilledApolloPerson(result.person);
       // Treat any non-verified email as no email (not positive-cached, not returned).
@@ -444,8 +452,9 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
         enrichmentId = enrichment.id;
 
-        if (billed) {
-          await addCosts(enrichRun.id, [{ costName: "apollo-credit", costSource: keySource, quantity: 1 }], identity);
+        const costItems = revealCostItems(reveal, billed, keySource);
+        if (costItems.length > 0) {
+          await addCosts(enrichRun.id, costItems, identity);
         }
 
         // Waterfall disabled 2026-05-28 — see src/lib/waterfall.ts revive notes.

@@ -3,6 +3,7 @@ import { and, gt, eq, isNotNull, desc, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloPeopleEnrichments } from "../db/schema.js";
 import { serviceAuth, type AuthenticatedRequest } from "../middleware/auth.js";
+import { revealPerson, revealCostItems } from "../lib/apollo-reveal-route.js";
 import { matchPersonByName, buildWaterfallWebhookUrl, withVerifiedEmailOnly, isBilledApolloPerson, BILLED_NO_EMAIL_CACHE_DAYS, type ApolloPerson } from "../lib/apollo-client.js";
 import { providerErrorFields } from "../lib/provider-error.js";
 import { advisoryXactLock, matchLockKey } from "../lib/advisory-lock.js";
@@ -208,7 +209,14 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
       const recheck = await findCachedMatch(firstName, lastName, organizationDomain);
       if (recheck) return { kind: "cached", record: recheck.record, negative: recheck.negative };
 
-      const result = await matchPersonByName(apolloApiKey, firstName, lastName, organizationDomain, webhookUrl, toCreditAlertIdentity(req));
+      // Our Apollo key, or Apollo through treg while ours is out of credits (apollo-reveal-route.ts).
+      const reveal = await revealPerson(keySource, {
+        own: () => matchPersonByName(apolloApiKey, firstName, lastName, organizationDomain, webhookUrl, toCreditAlertIdentity(req)),
+        tregQuery: { first_name: firstName, last_name: lastName, domain: organizationDomain, reveal_personal_emails: "false", run_waterfall_email: "false" },
+        callerPath: "/match",
+      });
+      const result = reveal.response;
+      if (reveal.via === "treg") console.log(`[Apollo Service][POST /match] matched through treg domain=${organizationDomain} costMicro=${reveal.tregCostMicro} callId=${reveal.tregCallId}`);
       // Apollo bills a credit for any person it returns, email or not.
       const billed = isBilledApolloPerson(result.person);
       // Treat any non-verified email as no email (not positive-cached, not returned).
@@ -246,9 +254,10 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
         enrichmentId = enrichment.id;
 
-        if (billed) {
-          // Apollo returned a person: 1 credit, with or without a verified email.
-          await addCosts(matchRun.id, [{ costName: "apollo-credit", costSource: keySource, quantity: 1 }], identity);
+        // Apollo returned a person: 1 credit, with or without a verified email (or treg's own charge).
+        const costItems = revealCostItems(reveal, billed, keySource);
+        if (costItems.length > 0) {
+          await addCosts(matchRun.id, costItems, identity);
         }
       } else {
         // Store negative cache record so we don't re-query Apollo for 24h
