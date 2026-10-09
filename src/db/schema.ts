@@ -398,9 +398,6 @@ export const emailFindings = pgTable(
     chargedQuantity: decimal("charged_quantity", { precision: 20, scale: 6 }),
     chargedUnit: text("charged_unit"),
     keySource: text("key_source"),
-    // NULL = our own Apollo key; "treg" = answered by Apollo through treg (its charge
-    // declared at the call; the callback declares no Apollo credit).
-    revealRoute: text("reveal_route"),
     provisionedCostId: text("provisioned_cost_id"),
     actualCostId: text("actual_cost_id"),
 
