@@ -1018,7 +1018,10 @@ bogus "rename from orgs/users" options. Don't fight it. To add a migration:
 3. Append an entry to `drizzle/meta/_journal.json` (`idx`+1, same `version`,
    `when` greater than the previous, `tag` = the filename without `.sql`).
 Boot `migrate()` reads ONLY the `.sql` files + `_journal.json` (never the
-snapshots), so a missing snapshot does not affect boot. Do NOT write to the
+snapshots), so a missing snapshot does not affect boot.
+`tests/unit/schema-migrations.regression.test.ts` fails when a `schema.ts`
+column has no migration on its table (2026-10-09: a stray
+`email_findings.reveal_route` 500'd every `/email-finder/find` for ~16h). Do NOT write to the
 journal/sql via a hooked shell redirect (`>`) — use the editor or `python3`
 direct file write (RTK truncation gotcha).
 
