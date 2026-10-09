@@ -338,6 +338,34 @@ describe("POST /email-finder/find — treg", () => {
     expect(calls[0].error).toContain("upstream down");
   });
 
+  it("a treg 503 (pool saturated) is retried once: the second answer serves, both calls stay in bronze", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(503, { detail: "treg's database pool is saturated — retry in a moment" }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, { output: { email: "ada@example.com", verified: true }, raw: {} }, { "x-treg-cost-micro": "8900", "x-treg-served-by": "tomba.email.find" })
+      );
+    const app = await buildApp();
+    const res = await request(app).post("/email-finder/find").set(HEADERS).send({ vendor: "treg", person: PERSON });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ status: "found", email: "ada@example.com" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(calls.map((c) => c.httpStatus)).toEqual([503, 200]);
+    // Same Idempotency-Key on both attempts: a lost answer replays free.
+    expect(fetchMock.mock.calls[0][1].headers["Idempotency-Key"]).toBe(fetchMock.mock.calls[1][1].headers["Idempotency-Key"]);
+  }, 10_000);
+
+  it("a treg 503 that persists fails loud (502) after one retry", async () => {
+    fetchMock.mockImplementation(async () => jsonResponse(503, { detail: "treg's database pool is saturated — retry in a moment" }));
+    const app = await buildApp();
+    const res = await request(app).post("/email-finder/find").set(HEADERS).send({ vendor: "treg", person: PERSON });
+
+    expect(res.status).toBe(502);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(findings[0]).toMatchObject({ status: "failed" });
+    expect(mockUpdateCostStatus).toHaveBeenCalledWith("find-run-1", "hold-1", "cancelled", expect.anything());
+  }, 10_000);
+
   it("a lost answer (network error) KEEPS the hold — treg may have billed", async () => {
     fetchMock.mockRejectedValue(new Error("socket hang up"));
     const app = await buildApp();

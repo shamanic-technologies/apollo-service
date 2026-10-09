@@ -742,6 +742,10 @@ identity, idempotency, persistence and cost.
   retry replays treg free and declares the charge once. After the `actual`
   lands (a later `updateRun` fails), the row is stored SETTLED, so no retry
   calls the vendor or declares again.
+- **A vendor 503 is retried ONCE after 2s** (same Idempotency-Key, one bronze
+  row per attempt): treg answered "database pool is saturated — retry in a
+  moment" on 2026-10-09 and that single answer failed a whole outreach run.
+  Other statuses are not retried here.
 - **Missing platform key = 503 `provider_key_missing`** naming the key-service
   provider (`treg` / `treg-org` / `explee`), before any row, hold or vendor call.
   treg's token is an IDENTITY (team-scoped) token: every call also sends
