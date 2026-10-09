@@ -92,6 +92,16 @@ function isSettledOrInFlight(row: EmailFinding): boolean {
   return row.status === "found" || row.status === "not_found" || row.status === "pending";
 }
 
+// A vendor answering 503 is down for a moment ("treg's database pool is
+// saturated — retry in a moment", 2026-10-09) and billed nothing. One such
+// answer used to fail the whole outreach run upstream; one retry after a short
+// pause absorbs it. Each attempt keeps its own bronze row.
+export const VENDOR_UNAVAILABLE_MAX_ATTEMPTS = 2;
+export const VENDOR_UNAVAILABLE_RETRY_DELAY_MS = 2_000;
+function isVendorUnavailable(err: EmailFinderVendorError): boolean {
+  return !err.mayHaveCharged && err.exchange.httpStatus === 503;
+}
+
 async function writeBronze(args: {
   findingId: string;
   vendor: Vendor;
@@ -322,30 +332,37 @@ export async function executeEmailFind(
 
     // EXECUTE.
     let result: VendorFindResult;
-    try {
-      result =
-        vendor === "treg"
-          ? await findWithTreg(resolved.key, tregOrg!, person, `apollo-email-find:${claimed.id}`)
-          : await findWithExplee(resolved.key, person, preset as ExpleePreset);
-    } catch (err) {
-      if (err instanceof EmailFinderVendorError) {
-        const callId = await writeBronze({
-          findingId: claimed.id,
-          vendor,
-          preset,
-          orgId: orgId,
-          userId: userId,
-          runId,
-          findRunId,
-          exchange: err.exchange,
-          underlyingProvider: null,
-          chargedQuantity: null,
-          chargedUnit: plan.chargedUnit,
-          error: err.message,
-        });
-        await db.update(emailFindings).set({ lastCallId: callId }).where(eq(emailFindings.id, claimed.id));
+    for (let attempt = 1; ; attempt++) {
+      try {
+        result =
+          vendor === "treg"
+            ? await findWithTreg(resolved.key, tregOrg!, person, `apollo-email-find:${claimed.id}`)
+            : await findWithExplee(resolved.key, person, preset as ExpleePreset);
+        break;
+      } catch (err) {
+        if (err instanceof EmailFinderVendorError) {
+          const callId = await writeBronze({
+            findingId: claimed.id,
+            vendor,
+            preset,
+            orgId: orgId,
+            userId: userId,
+            runId,
+            findRunId,
+            exchange: err.exchange,
+            underlyingProvider: null,
+            chargedQuantity: null,
+            chargedUnit: plan.chargedUnit,
+            error: err.message,
+          });
+          await db.update(emailFindings).set({ lastCallId: callId }).where(eq(emailFindings.id, claimed.id));
+          if (attempt < VENDOR_UNAVAILABLE_MAX_ATTEMPTS && isVendorUnavailable(err)) {
+            await new Promise((resolve) => setTimeout(resolve, VENDOR_UNAVAILABLE_RETRY_DELAY_MS));
+            continue;
+          }
+        }
+        throw err;
       }
-      throw err;
     }
     answered = result;
 
