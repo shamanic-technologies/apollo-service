@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
+  withTregFallback,
+  tregCostItems,
   revealPerson,
   revealCostItems,
   resetRevealRoute,
@@ -101,5 +103,34 @@ describe("revealCostItems", () => {
   it("treg: treg's own charge as treg-micro-usd, never an apollo-credit", () => {
     expect(revealCostItems(treg(26000), true, "platform")).toEqual([{ costName: "treg-micro-usd", costSource: "platform", quantity: 26000 }]);
     expect(revealCostItems(treg(0), true, "platform")).toEqual([]);
+  });
+});
+
+describe("withTregFallback — the other Apollo calls (GET, path params as query)", () => {
+  it("job postings: our key out of credits → treg apollo.companies.jobs with organization_id in the query", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "x-treg-cost-micro": "26000" }),
+      text: async () => JSON.stringify({ organization_job_postings: [{ id: "j1" }], pagination: { total_entries: 1 } }),
+    })) as unknown as typeof fetch & ReturnType<typeof vi.fn>;
+    const r = await withTregFallback<{ organization_job_postings?: unknown[] }>("platform", {
+      own: async () => { throw EXHAUSTED(); },
+      treg: { endpoint: "apollo.companies.jobs", method: "GET", query: { organization_id: "o1" } },
+      callerPath: "/enrich",
+      credentials: creds,
+      fetchImpl,
+    });
+    expect(r).toMatchObject({ via: "treg", tregCostMicro: 26000 });
+    expect(r.response.organization_job_postings).toHaveLength(1);
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://treg.to/call/apollo.companies.jobs?organization_id=o1");
+    expect(init.method).toBe("GET");
+  });
+
+  it("tregCostItems: the charge as treg-micro-usd, nothing for 0 or null", () => {
+    expect(tregCostItems(26000)).toEqual([{ costName: "treg-micro-usd", costSource: "platform", quantity: 26000 }]);
+    expect(tregCostItems(0)).toEqual([]);
+    expect(tregCostItems(null)).toEqual([]);
   });
 });

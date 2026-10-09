@@ -75,6 +75,15 @@ describe("decideHold — one open hold, decided from what the call did", () => {
     expect(d.kind).toBe("actualize");
   });
 
+  it("phone-reveal answered through treg: its charge is declared at the call, the 8-credit hold is cancelled", () => {
+    const hold = cost("h", "apollo-credit", "provisioned", "8");
+    const d = decideHold(
+      { costId: "h", costName: "apollo-credit" },
+      { cost: hold, runCosts: [hold], runTaskName: "phone-reveal", ageMs: PHONE_GRACE_MS + 1, phoneReveal: { status: "found", creditsConsumed: 8, costReconciledAt: null, revealRoute: "treg" } }
+    );
+    expect(d.kind).toBe("cancel");
+  });
+
   it("phone-reveal: Apollo never delivered after the grace period → cancel", () => {
     const hold = cost("h", "apollo-credit", "provisioned", "8");
     const d = decideHold({ costId: "h", costName: "apollo-credit" }, { ...ev({ runTaskName: "phone-reveal", hold }), ageMs: PHONE_GRACE_MS + 1, phoneReveal: { status: "pending", creditsConsumed: null, costReconciledAt: null } });
