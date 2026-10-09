@@ -4,6 +4,7 @@ import { db } from "../db/index.js";
 import { apolloPhoneReveals, type ApolloPhoneReveal } from "../db/schema.js";
 import { serviceAuth, orgAuth, type AuthenticatedRequest } from "../middleware/auth.js";
 import { enrichPerson, buildPhoneRevealWebhookUrl, isBilledApolloPerson } from "../lib/apollo-client.js";
+import { revealPerson, revealCostItems } from "../lib/apollo-reveal-route.js";
 import { providerErrorFields } from "../lib/provider-error.js";
 import { advisoryXactLock } from "../lib/advisory-lock.js";
 import { decryptKey } from "../lib/keys-client.js";
@@ -192,9 +193,23 @@ router.post("/people/:apolloPersonId/phone-reveal", serviceAuth, async (req: Aut
         .returning();
 
       try {
-        const result = await enrichPerson(apolloApiKey, apolloPersonId, webhookUrl, toCreditAlertIdentity(req), {
-          revealPhoneNumber: true,
+        // Our Apollo key, or Apollo through treg while ours is out of credits (apollo-reveal-route.ts).
+        const reveal = await revealPerson(keySource, {
+          own: () => enrichPerson(apolloApiKey, apolloPersonId, webhookUrl, toCreditAlertIdentity(req), { revealPhoneNumber: true }),
+          tregQuery: {
+            id: apolloPersonId,
+            reveal_personal_emails: "false",
+            run_waterfall_email: "false",
+            reveal_phone_number: "true",
+            webhook_url: webhookUrl,
+          },
+          callerPath: "/people/:apolloPersonId/phone-reveal",
         });
+        const result = reveal.response;
+        const viaTreg = reveal.via === "treg";
+        if (viaTreg) {
+          await tx.update(apolloPhoneReveals).set({ revealRoute: "treg", updatedAt: new Date() }).where(eq(apolloPhoneReveals.id, row.id));
+        }
 
         const apolloRequestId = result.request_id !== undefined && result.request_id !== null ? String(result.request_id) : null;
 
@@ -202,8 +217,10 @@ router.post("/people/:apolloPersonId/phone-reveal", serviceAuth, async (req: Aut
         // the mobile it may deliver later (8, reconciled by the callback) —
         // measured 2026-09-26: one reveal moved the account counter by 9 while
         // the callback reported credits_consumed: 8.
-        if (isBilledApolloPerson(result.person)) {
-          await addCosts(revealRun.id, [{ costName: PHONE_REVEAL_COST_NAME, costSource: keySource, quantity: 1 }], identity);
+        // Through treg: treg's own charge for the whole call instead.
+        const costItems = revealCostItems(reveal, isBilledApolloPerson(result.person), keySource);
+        if (costItems.length > 0) {
+          await addCosts(revealRun.id, costItems, identity);
         }
 
         // Apollo normally answers WITHOUT the number. If it did include one,
@@ -228,7 +245,8 @@ router.post("/people/:apolloPersonId/phone-reveal", serviceAuth, async (req: Aut
             .returning();
 
           if (provisionedCostId) {
-            await updateCostStatus(revealRun.id, provisionedCostId, "actual", identity);
+            // Through treg no Apollo credit was spent: release the hold instead.
+            await updateCostStatus(revealRun.id, provisionedCostId, viaTreg ? "cancelled" : "actual", identity);
           }
           await updateRun(revealRun.id, "completed", identity);
           return { kind: "found" as const, row: completed };

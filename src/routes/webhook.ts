@@ -82,6 +82,15 @@ async function reconcileCost(row: ApolloPhoneReveal, creditsConsumed: number): P
   const identity = identityFor(row);
   const keySource = (row.keySource === "org" ? "org" : "platform") as "org" | "platform";
 
+  // Answered through treg: treg's charge was declared at the call and we spent
+  // no Apollo credit, whatever Apollo reports here. Release the hold only.
+  if (row.revealRoute === "treg") {
+    if (row.provisionedCostId) {
+      await updateCostStatus(row.revealRunId, row.provisionedCostId, "cancelled", identity);
+    }
+    return;
+  }
+
   if (creditsConsumed <= 0) {
     if (row.provisionedCostId) {
       await updateCostStatus(row.revealRunId, row.provisionedCostId, "cancelled", identity);

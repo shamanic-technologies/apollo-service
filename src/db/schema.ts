@@ -299,6 +299,9 @@ export const apolloPhoneReveals = pgTable(
     // the hold was reconciled (actualized or cancelled). NULL `costReconciledAt`
     // on a terminal row means the reconcile still owes — the callback retries it.
     keySource: text("key_source"),
+    // NULL = our own Apollo key; "treg" = answered by Apollo through treg (its charge
+    // declared at the call; the callback declares no Apollo credit).
+    revealRoute: text("reveal_route"),
     provisionedCostId: text("provisioned_cost_id"),
     creditsConsumed: integer("credits_consumed"),
     costReconciledAt: timestamp("cost_reconciled_at", { withTimezone: true }),
@@ -395,6 +398,9 @@ export const emailFindings = pgTable(
     chargedQuantity: decimal("charged_quantity", { precision: 20, scale: 6 }),
     chargedUnit: text("charged_unit"),
     keySource: text("key_source"),
+    // NULL = our own Apollo key; "treg" = answered by Apollo through treg (its charge
+    // declared at the call; the callback declares no Apollo credit).
+    revealRoute: text("reveal_route"),
     provisionedCostId: text("provisioned_cost_id"),
     actualCostId: text("actual_cost_id"),
 
@@ -813,6 +819,8 @@ export const companyDomainLookups = pgTable("company_domain_lookups", {
   creditsCharged: integer("credits_charged").notNull(),
   costIdempotencyKey: text("cost_idempotency_key").notNull(),
   costDeclaredAt: timestamp("cost_declared_at", { withTimezone: true }),
+  // NULL = apollo-credit (our key); "treg-micro-usd" when treg answered (creditsCharged = micro-USD).
+  costName: text("cost_name"),
   category: text("category"),
   categoryConfidence: decimal("category_confidence", { precision: 6, scale: 5 }),
   categoryJudgment: jsonb("category_judgment"),
@@ -831,4 +839,6 @@ export const personRoleLookups = pgTable("person_role_lookups", {
   creditsCharged: integer("credits_charged").notNull(),
   costIdempotencyKey: text("cost_idempotency_key").notNull(),
   costDeclaredAt: timestamp("cost_declared_at", { withTimezone: true }),
+  // NULL = apollo-credit (our key); "treg-micro-usd" when treg answered (creditsCharged = micro-USD).
+  costName: text("cost_name"),
 });

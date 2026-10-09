@@ -20,6 +20,8 @@ import {
   normalizeCompanyName,
 } from "../lib/audience-companies.js";
 import { getOrganizationById, searchPeople, type ApolloOrganization } from "../lib/apollo-client.js";
+import { withTregFallback, tregCostItems, ownKeyExhausted } from "../lib/apollo-reveal-route.js";
+import { normalizeDomain } from "../lib/teaser-employer-domains.js";
 import { toApolloSearchParams } from "../lib/transform.js";
 import { apolloOrganizations } from "../db/schema.js";
 import { advisoryXactLock } from "../lib/advisory-lock.js";
@@ -282,6 +284,8 @@ type EnrichOutcome =
  */
 async function enrichOrganizations(args: {
   ids: string[];
+  /** id → the domain the free lookup gave it: how treg is asked while our Apollo credits are out. */
+  domains: Map<string, string>;
   audienceRowId: string;
   apolloApiKey: string;
   keySource: "org" | "platform";
@@ -354,13 +358,31 @@ async function enrichOrganizations(args: {
     // EXECUTE.
     const alertIdentity = toCreditAlertIdentity(req);
     const results = await mapConcurrent(missing, LOOKUP_CONCURRENCY, async (id) => {
+      const domain = args.domains.get(id);
       try {
-        return { id, org: await getOrganizationById(apolloApiKey, id, alertIdentity), error: null as unknown };
+        if (!domain) {
+          if (keySource === "platform" && ownKeyExhausted()) {
+            // treg can only be asked by domain: no domain, no firmographics while our credits are out.
+            console.warn(`[Apollo Service][audience-companies] no domain for org ${id}, firmographics skipped while our Apollo credits are out`);
+            return { id, org: null, tregCostMicro: null, error: null as unknown };
+          }
+          return { id, org: await getOrganizationById(apolloApiKey, id, alertIdentity), tregCostMicro: null, error: null as unknown };
+        }
+        // Our Apollo key, or Apollo through treg while ours is out of credits (apollo-reveal-route.ts).
+        const r = await withTregFallback<ApolloOrganization | null>(keySource, {
+          own: () => getOrganizationById(apolloApiKey, id, alertIdentity),
+          treg: { endpoint: "apollo.companies.enrich", method: "GET", query: { domain } },
+          callerPath: "/audiences/:apolloAudienceId/companies",
+        });
+        if (r.via === "apollo") return { id, org: r.response, tregCostMicro: null, error: null as unknown };
+        // treg answers organizations/enrich by domain: keep it only when it is the SAME organization.
+        const org = (r.response as unknown as { organization?: ApolloOrganization | null }).organization ?? null;
+        return { id, org: org && org.id === id ? org : null, tregCostMicro: r.tregCostMicro, error: null as unknown };
       } catch (error) {
-        return { id, org: null, error };
+        return { id, org: null, tregCostMicro: null, error };
       }
     });
-    const fetched = results.filter((r): r is { id: string; org: ApolloOrganization; error: unknown } => r.org !== null);
+    const fetched = results.filter((r): r is { id: string; org: ApolloOrganization; tregCostMicro: number | null; error: unknown } => r.org !== null);
     for (const r of fetched) {
       orgs.set(r.id, r.org);
       // Outside the tx on purpose: a record Apollo billed us for is kept even if this request fails later.
@@ -371,8 +393,15 @@ async function enrichOrganizations(args: {
     }
 
     // ACTUALIZE what Apollo returned (a 404 bills nothing), then release the hold.
-    if (fetched.length > 0) {
-      await addCosts(run.id, [{ costName: COMPANY_FIRMOGRAPHICS_COST_NAME, costSource: keySource, quantity: fetched.length }], identity);
+    // Our key bills 1 credit per organization returned; treg bills what its header says, matched or not.
+    const ownBilled = fetched.filter((r) => r.tregCostMicro === null).length;
+    const tregMicro = results.reduce((n, r) => n + (r.tregCostMicro ?? 0), 0);
+    const costItems = [
+      ...(ownBilled > 0 ? [{ costName: COMPANY_FIRMOGRAPHICS_COST_NAME, costSource: keySource, quantity: ownBilled }] : []),
+      ...tregCostItems(tregMicro),
+    ];
+    if (costItems.length > 0) {
+      await addCosts(run.id, costItems, identity);
     }
     const failure = results.find((r) => r.error);
     await releaseHold(failure ? "failed" : "completed");
@@ -432,8 +461,13 @@ router.get("/audiences/:apolloAudienceId/companies", serviceAuth, async (req: Au
 
     const candidates = await mapConcurrent(chunk, LOOKUP_CONCURRENCY, (e) => resolveOrganization(apolloApiKey, filters, e, alertIdentity));
     const ids = [...new Set(candidates.map((c) => c?.id).filter((id): id is string => !!id))];
+    const domains = new Map<string, string>();
+    for (const c of candidates) {
+      const domain = c ? normalizeDomain(c.domain) ?? normalizeDomain(c.website_url) : null;
+      if (c && domain) domains.set(c.id, domain);
+    }
 
-    const enriched = await enrichOrganizations({ ids, audienceRowId: row.id, apolloApiKey, keySource, identity, runId: req.runId, req });
+    const enriched = await enrichOrganizations({ ids, domains, audienceRowId: row.id, apolloApiKey, keySource, identity, runId: req.runId, req });
     if (enriched.kind === "insufficient") {
       return res.status(402).json({
         type: "credit_insufficient",

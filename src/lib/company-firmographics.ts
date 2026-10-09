@@ -36,6 +36,7 @@ import {
 import { platformChoiceJudgment } from "./chat-client.js";
 import { PERSONAL_EMAIL_DOMAINS, normalizeDomain } from "./email-finders.js";
 import { decryptPlatformKey } from "./keys-client.js";
+import { withTregFallback, TREG_COST_NAME } from "./apollo-reveal-route.js";
 import { addPlatformRunCosts, createPlatformRun, updatePlatformRun } from "./runs-client.js";
 
 export const FIRMOGRAPHICS_COST_NAME = "apollo-credit";
@@ -260,9 +261,9 @@ export function personKey(args: { email?: string; firstName?: string; lastName?:
 
 // ─── Spend (org-less) ────────────────────────────────────────────────────────
 
-async function declareCredits(runId: string, credits: number, idempotencyKey: string): Promise<void> {
+async function declareCredits(runId: string, credits: number, idempotencyKey: string, costName: string | null): Promise<void> {
   if (credits > 0) {
-    await addPlatformRunCosts(runId, [{ costName: FIRMOGRAPHICS_COST_NAME, quantity: credits, idempotencyKey }]);
+    await addPlatformRunCosts(runId, [{ costName: costName ?? FIRMOGRAPHICS_COST_NAME, quantity: credits, idempotencyKey }]);
   }
   await updatePlatformRun(runId, "completed");
 }
@@ -301,14 +302,23 @@ async function lookupCompanyRow(domain: string, getKey: () => Promise<string>): 
     if (existing && isFresh(existing.fetchedAt, existing.raw !== null)) return { row: existing, cached: true };
 
     const apiKey = await getKey();
-    const { runId, result: org } = await onPlatformRun("company-firmographics", domain, () => enrichOrganizationByDomain(apiKey, domain));
+    // Our Apollo key, or Apollo through treg while ours is out of credits (apollo-reveal-route.ts).
+    const { runId, result: r } = await onPlatformRun("company-firmographics", domain, () =>
+      withTregFallback("platform", {
+        own: () => enrichOrganizationByDomain(apiKey, domain),
+        treg: { endpoint: "apollo.companies.enrich", method: "GET", query: { domain } },
+        callerPath: "/internal/company-firmographics",
+      }),
+    );
+    const org = r.via === "treg" ? ((r.response as unknown as { organization?: ApolloOrganization | null }).organization ?? null) : r.response;
     const values = {
       domain,
       apolloOrganizationId: typeof org?.id === "string" ? org.id : null,
       raw: org ?? null,
       fetchedAt: new Date(),
       platformRunId: runId,
-      creditsCharged: org ? 1 : 0,
+      creditsCharged: r.via === "treg" ? r.tregCostMicro ?? 0 : org ? 1 : 0,
+      costName: r.via === "treg" ? TREG_COST_NAME : null,
       costIdempotencyKey: `apollo-service:company-firmographics:${runId}`,
       costDeclaredAt: null,
       category: null,
@@ -334,7 +344,7 @@ async function lookupCompanyRow(domain: string, getKey: () => Promise<string>): 
  */
 async function settleCompanyCost(row: CompanyRow): Promise<CompanyRow> {
   if (row.costDeclaredAt) return row;
-  await declareCredits(row.platformRunId, row.creditsCharged, row.costIdempotencyKey);
+  await declareCredits(row.platformRunId, row.creditsCharged, row.costIdempotencyKey, row.costName);
   const [settled] = await db
     .update(companyDomainLookups)
     .set({ costDeclaredAt: new Date() })
@@ -384,16 +394,29 @@ async function lookupPersonRow(
     if (existing && isFresh(existing.fetchedAt, existing.matched)) return { row: existing, cached: true };
 
     const apiKey = await getKey();
-    const { runId, result: person } = await onPlatformRun("person-role", key, () =>
-      // A free-mail domain names no employer: sending it would only mislead the
-      // match. (Firmographics never reaches here for one; person-identity does.)
-      matchPersonForRole(apiKey, {
-        email: args.email,
-        firstName: args.firstName,
-        lastName: args.lastName,
-        domain: isPersonalDomain(args.domain) ? undefined : args.domain,
+    // A free-mail domain names no employer: sending it would only mislead the
+    // match. (Firmographics never reaches here for one; person-identity does.)
+    const matchArgs = {
+      email: args.email,
+      firstName: args.firstName,
+      lastName: args.lastName,
+      domain: isPersonalDomain(args.domain) ? undefined : args.domain,
+    };
+    const tregQuery: Record<string, string> = { reveal_personal_emails: "false", run_waterfall_email: "false" };
+    if (matchArgs.email) tregQuery.email = matchArgs.email;
+    if (matchArgs.firstName) tregQuery.first_name = matchArgs.firstName;
+    if (matchArgs.lastName) tregQuery.last_name = matchArgs.lastName;
+    if (matchArgs.domain) tregQuery.domain = matchArgs.domain;
+    // Our Apollo key, or Apollo through treg while ours is out of credits (apollo-reveal-route.ts).
+    const { runId, result: r } = await onPlatformRun("person-role", key, () =>
+      withTregFallback("platform", {
+        own: () => matchPersonForRole(apiKey, matchArgs),
+        treg: { endpoint: "apollo.people.enrich", method: "POST", query: tregQuery },
+        callerPath: "/internal/person-identity",
       }),
     );
+    type RolePerson = Awaited<ReturnType<typeof matchPersonForRole>>;
+    const person: RolePerson = r.via === "treg" ? ((r.response as unknown as { person?: RolePerson }).person ?? null) : r.response;
     const matched = !!person && person.match_confidence !== "none";
     const values = {
       personKey: key,
@@ -404,7 +427,8 @@ async function lookupPersonRow(
       raw: person ?? null,
       fetchedAt: new Date(),
       platformRunId: runId,
-      creditsCharged: matched ? 1 : 0,
+      creditsCharged: r.via === "treg" ? r.tregCostMicro ?? 0 : matched ? 1 : 0,
+      costName: r.via === "treg" ? TREG_COST_NAME : null,
       costIdempotencyKey: `apollo-service:person-role:${runId}`,
       costDeclaredAt: null,
     };
@@ -419,7 +443,7 @@ async function lookupPersonRow(
 
 async function settlePersonCost(row: PersonRow): Promise<PersonRow> {
   if (row.costDeclaredAt) return row;
-  await declareCredits(row.platformRunId, row.creditsCharged, row.costIdempotencyKey);
+  await declareCredits(row.platformRunId, row.creditsCharged, row.costIdempotencyKey, row.costName);
   const [settled] = await db
     .update(personRoleLookups)
     .set({ costDeclaredAt: new Date() })

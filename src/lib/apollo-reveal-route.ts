@@ -1,6 +1,9 @@
 /**
- * Who answers a paid Apollo `people/match` (the /enrich and /match reveals):
- * our own Apollo subscription, or Apollo THROUGH treg when ours is out of credits.
+ * Who answers a paid Apollo call: our own Apollo subscription, or Apollo
+ * THROUGH treg when ours is out of credits. Covers people/match (/enrich,
+ * /match, phone reveal, person role/identity), organizations/enrich
+ * (firmographics), organizations/{id} (audience companies, via
+ * organizations/enrich by domain) and job postings.
  *
  * 2026-10-09: the platform Apollo team used every lead credit of its billing
  * cycle (422 `BILLING.LIMIT.CREDITS_EXHAUSTED`) three days before the next
@@ -23,7 +26,9 @@ import { decryptPlatformKey } from "./keys-client.js";
 import { ApolloCreditsExhaustedError } from "./provider-error.js";
 import type { ApolloPerson } from "./apollo-client.js";
 
-export const TREG_APOLLO_MATCH_URL = "https://treg.to/call/apollo.people.enrich";
+export const TREG_CALL_BASE = "https://treg.to/call/";
+export const TREG_APOLLO_MATCH_ENDPOINT = "apollo.people.enrich";
+export const TREG_APOLLO_MATCH_URL = `${TREG_CALL_BASE}${TREG_APOLLO_MATCH_ENDPOINT}`;
 export const TREG_COST_NAME = "treg-micro-usd";
 /** After our key says "out of credits", go to treg directly for this long before trying it again. */
 export const OWN_KEY_EXHAUSTED_RECHECK_MS = 60 * 60 * 1000;
@@ -40,6 +45,11 @@ export interface RevealResult<T> {
 }
 
 let ownKeyExhaustedUntil = 0;
+
+/** The treg cost line for a call it answered (none when it charged 0). */
+export function tregCostItems(costMicro: number | null): Array<{ costName: string; costSource: "platform"; quantity: number }> {
+  return costMicro && costMicro > 0 ? [{ costName: TREG_COST_NAME, costSource: "platform", quantity: costMicro }] : [];
+}
 
 /** Test hook. */
 export function resetRevealRoute(): void {
@@ -61,46 +71,53 @@ async function platformTregCredentials(callerPath: string): Promise<TregCredenti
   return { token, org };
 }
 
+/** One Apollo call through treg: treg's catalog id, its HTTP method, Apollo's own parameters (path ones included). */
+export interface TregApolloCall {
+  endpoint: string;
+  method: "GET" | "POST";
+  query: Record<string, string>;
+}
+
 /**
- * Apollo `POST /people/match` through treg. `query` = Apollo's own parameters.
- * Any non-2xx is thrown with treg's status and body (a 402 = treg balance).
+ * Apollo through treg. Any non-2xx is thrown with treg's status and body (a
+ * 402 = treg balance). The charge header is required: it IS the cost we declare.
  */
-export async function apolloMatchViaTreg<T>(
-  query: Record<string, string>,
+export async function callApolloViaTreg<T>(
+  call: TregApolloCall,
   creds: TregCredentials,
   fetchImpl: typeof fetch = fetch
 ): Promise<{ response: T; costMicro: number; callId: string | null }> {
-  const url = `${TREG_APOLLO_MATCH_URL}?${new URLSearchParams(query).toString()}`;
+  const url = `${TREG_CALL_BASE}${call.endpoint}?${new URLSearchParams(call.query).toString()}`;
   const res = await fetchImpl(url, {
-    method: "POST",
+    method: call.method,
     headers: { "X-Treg-Token": creds.token, "X-Treg-Org": creds.org },
     signal: AbortSignal.timeout(TREG_TIMEOUT_MS),
   });
   const text = await res.text();
-  if (!res.ok) throw new Error(`treg apollo.people.enrich failed: ${res.status} - ${text.slice(0, 500)}`);
+  if (!res.ok) throw new Error(`treg ${call.endpoint} failed: ${res.status} - ${text.slice(0, 500)}`);
   const rawCost = res.headers.get("x-treg-cost-micro");
   const costMicro = rawCost === null ? NaN : Number(rawCost);
-  // The charge IS the cost we declare: never guess it.
-  if (!Number.isFinite(costMicro) || costMicro < 0) throw new Error(`treg apollo.people.enrich answered without a readable X-Treg-Cost-Micro (${rawCost})`);
+  if (!Number.isFinite(costMicro) || costMicro < 0) throw new Error(`treg ${call.endpoint} answered without a readable X-Treg-Cost-Micro (${rawCost})`);
   const safe = text.replace(/"request_id"\s*:\s*(-?\d+)/, '"request_id":"$1"');
   return { response: JSON.parse(safe) as T, costMicro, callId: res.headers.get("x-treg-call-id") };
 }
 
-export interface RevealDeps<T> {
+export interface FallbackDeps<T> {
   /** The call on our own Apollo key. */
   own: () => Promise<T>;
-  /** Apollo's query-string parameters for the same match. */
-  tregQuery: Record<string, string>;
+  /** The same call through treg, answering the same shape. */
+  treg: TregApolloCall;
   callerPath: string;
   credentials?: () => Promise<TregCredentials>;
   fetchImpl?: typeof fetch;
   now?: () => number;
 }
 
-export async function revealPerson<T extends { person?: ApolloPerson | null }>(
-  keySource: "org" | "platform",
-  deps: RevealDeps<T>
-): Promise<RevealResult<T>> {
+/**
+ * Our Apollo key first; on its "out of credits" answer (platform key only)
+ * the same call through treg, and treg directly for the recheck window.
+ */
+export async function withTregFallback<T>(keySource: "org" | "platform", deps: FallbackDeps<T>): Promise<RevealResult<T>> {
   const now = deps.now ?? Date.now;
   if (keySource !== "platform" || !ownKeyExhausted(now())) {
     try {
@@ -108,12 +125,25 @@ export async function revealPerson<T extends { person?: ApolloPerson | null }>(
     } catch (error) {
       if (keySource !== "platform" || !(error instanceof ApolloCreditsExhaustedError)) throw error;
       ownKeyExhaustedUntil = now() + OWN_KEY_EXHAUSTED_RECHECK_MS;
-      console.warn(`[Apollo Service][reveal-route] own Apollo key out of credits, revealing through treg for ${OWN_KEY_EXHAUSTED_RECHECK_MS / 60000} min`);
+      console.warn(`[Apollo Service][reveal-route] own Apollo key out of credits, calling Apollo through treg for ${OWN_KEY_EXHAUSTED_RECHECK_MS / 60000} min`);
     }
   }
   const creds = await (deps.credentials ?? (() => platformTregCredentials(deps.callerPath)))();
-  const r = await apolloMatchViaTreg<T>(deps.tregQuery, creds, deps.fetchImpl);
+  const r = await callApolloViaTreg<T>(deps.treg, creds, deps.fetchImpl);
   return { response: r.response, via: "treg", tregCostMicro: r.costMicro, tregCallId: r.callId };
+}
+
+export interface RevealDeps<T> extends Omit<FallbackDeps<T>, "treg"> {
+  /** Apollo's query-string parameters for the same `people/match`. */
+  tregQuery: Record<string, string>;
+}
+
+/** A `people/match` (/enrich, /match, phone reveal): treg's `apollo.people.enrich`. */
+export async function revealPerson<T extends { person?: ApolloPerson | null }>(
+  keySource: "org" | "platform",
+  deps: RevealDeps<T>
+): Promise<RevealResult<T>> {
+  return withTregFallback(keySource, { ...deps, treg: { endpoint: TREG_APOLLO_MATCH_ENDPOINT, method: "POST", query: deps.tregQuery } });
 }
 
 /**
@@ -125,8 +155,6 @@ export function revealCostItems(
   billedByApollo: boolean,
   keySource: "org" | "platform"
 ): Array<{ costName: string; costSource: "org" | "platform"; quantity: number }> {
-  if (reveal.via === "treg") {
-    return reveal.tregCostMicro && reveal.tregCostMicro > 0 ? [{ costName: TREG_COST_NAME, costSource: "platform", quantity: reveal.tregCostMicro }] : [];
-  }
+  if (reveal.via === "treg") return tregCostItems(reveal.tregCostMicro);
   return billedByApollo ? [{ costName: "apollo-credit", costSource: keySource, quantity: 1 }] : [];
 }

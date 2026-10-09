@@ -59,7 +59,7 @@ export interface HoldEvidence {
   /** email-find: the largest charge the vendor reported on this run's calls, in the cost's unit. */
   findCharged?: number | null;
   /** phone-reveal: the reveal row holding this hold, if any. */
-  phoneReveal?: { status: string; creditsConsumed: number | null; costReconciledAt: Date | null } | null;
+  phoneReveal?: { status: string; creditsConsumed: number | null; costReconciledAt: Date | null; revealRoute?: string | null } | null;
 }
 
 /** Pure: what to do with one open hold, given what the call left behind. */
@@ -73,6 +73,8 @@ export function decideHold(hold: Pick<CostHold, "costId" | "costName">, ev: Hold
     if (ev.ageMs < PHONE_GRACE_MS) return { kind: "wait", reason: "phone reveal inside its webhook grace period" };
     const r = ev.phoneReveal;
     if (!r || r.status === "pending") return { kind: "cancel", reason: "Apollo never delivered the phone reveal" };
+    // Answered through treg: treg's charge was declared at the call, we spent no Apollo credit.
+    if (r.revealRoute === "treg") return { kind: "cancel", reason: "phone reveal answered through treg, its charge is already declared" };
     const credits = r.creditsConsumed ?? 0;
     if (credits <= 0) return { kind: "cancel", reason: `phone reveal ${r.status}, Apollo charged nothing` };
     if (credits === PHONE_REVEAL_MAX_CREDITS) return { kind: "actualize", reason: `Apollo charged ${credits} credits for the reveal` };
@@ -137,6 +139,7 @@ async function gatherEvidence(hold: CostHold, taskName: string, runCosts: RunCos
         status: apolloPhoneReveals.status,
         creditsConsumed: apolloPhoneReveals.creditsConsumed,
         costReconciledAt: apolloPhoneReveals.costReconciledAt,
+        revealRoute: apolloPhoneReveals.revealRoute,
       })
       .from(apolloPhoneReveals)
       .where(eq(apolloPhoneReveals.provisionedCostId, hold.costId))
