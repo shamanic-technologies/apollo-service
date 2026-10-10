@@ -237,7 +237,9 @@ describe("linkedin_engagement serve path", () => {
     const call = mockServeLinkedinEngagers.mock.calls[0][0];
     expect(call.campaignId).toBe("campaign-1");
     expect(call.spec).toEqual(LI_PARAMS.buying_signal);
-    expect(call.ctx).toMatchObject({ runId: "run-parent-1", callerPath: "/search/next", identity: { orgId: "org_test", brandIds: ["brand-1"] } });
+    // Parented on this request's own people-search-next run (run-1), never on the caller's run.
+    expect(mockCreateRun.mock.calls[0][0]).toMatchObject({ taskName: "people-search-next", parentRunId: "run-parent-1" });
+    expect(call.ctx).toMatchObject({ runId: "run-1", callerPath: "/search/next", identity: { orgId: "org_test", brandIds: ["brand-1"] } });
     // The cohort pin of the Apollo signals is never applied to this kind.
     expect(JSON.stringify(mockUpdateSet.mock.calls)).not.toContain("as_of");
   });

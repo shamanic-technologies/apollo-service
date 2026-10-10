@@ -694,8 +694,10 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     // decides exhaustion, so the cursor's flag only mirrors it.
     const engagementSignal = readSignalSpec(cursorSearchParams);
     if (engagementSignal?.type === "linkedin_engagement" && cursorId) {
+      // The paid engager reads are THIS request's work: their run hangs under the
+      // people-search-next run, so the cost of a /search/next call is its subtree.
       const served = await serveLinkedinEngagers({
-        ctx: { identity, userId: req.userId!, runId, tracking, callerPath: "/search/next" },
+        ctx: { identity, userId: req.userId!, runId: searchRun.id, tracking, callerPath: "/search/next" },
         campaignId,
         spec: engagementSignal,
       });
