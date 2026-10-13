@@ -422,6 +422,13 @@ window. `src/lib/linkedin-engagement-spec.ts` (pure) + `src/lib/linkedin-engagem
   24h) is SKIPPED with a loud log + warn trace, the other pages served; every page
   dead = 422 `competitor_pages_unreadable` (all providers down = 502, retryable).
   No provider resolves `showcase/eimmigration` (all three probed).
+- **`doneReason` says WHY a serve is done** (`/search/next`, engagement only, null
+  while `done=false`): `no_recent_posts` = no competitor page has a post published
+  in the window (nothing to read engagers from; NOT exhaustion, new posts may
+  come), `no_engagers` = in-window posts nobody engaged with, `all_served` =
+  every engager already considered for the audience. Doc Dinners 2026-10-13:
+  chirocandy + maxliving returned `posts: []` and the consumer stopped the
+  campaign as "exhausted".
 - **`/enrich li:<id>`** = treg find on public URL + names + company domain, then the
   verifier (same as `qe:`), plus `buyingSignal` with an additive `engagement` block
   (page, post, reaction/comment, dates). 404 if never served to this org.
