@@ -227,10 +227,10 @@ describe("linkedin_engagement serve path", () => {
   it("serves engagers, never calls Apollo, and says source=linkedin_engagement", async () => {
     mockServeLinkedinEngagers.mockResolvedValue({
       people: [{ id: "li:ACoAAAoz5ykB", firstName: "Peter", lastName: "Cools", title: "Founder & CEO", organizationName: "Rodz" }],
-      done: false, poolSize: 42, considered: 3, excluded: 2, unresolvable: 0, skippedPages: [], calls: 4, chargedMicro: 9000,
+      done: false, doneReason: null, poolSize: 42, considered: 3, excluded: 2, unresolvable: 0, skippedPages: [], calls: 4, chargedMicro: 9000,
     });
     const res = await post("/search/next", { searchParams: LI_PARAMS }).expect(200);
-    expect(res.body).toMatchObject({ source: "linkedin_engagement", done: false, hasMore: true, totalEntries: 42 });
+    expect(res.body).toMatchObject({ source: "linkedin_engagement", done: false, doneReason: null, hasMore: true, totalEntries: 42 });
     expect(res.body.people[0]).toMatchObject({ id: "li:ACoAAAoz5ykB", organizationName: "Rodz" });
     expect(mockSearchPeople).not.toHaveBeenCalled();
     expect(mockServeQuickenrichPage).not.toHaveBeenCalled();
@@ -245,10 +245,16 @@ describe("linkedin_engagement serve path", () => {
   });
 
   it("nobody left: done=true with an empty page (a truthful exhaustion, not an empty success)", async () => {
-    mockServeLinkedinEngagers.mockResolvedValue({ people: [], done: true, poolSize: 42, considered: 0, excluded: 0, unresolvable: 0, skippedPages: [], calls: 0, chargedMicro: 0 });
+    mockServeLinkedinEngagers.mockResolvedValue({ people: [], done: true, doneReason: "all_served", poolSize: 42, considered: 0, excluded: 0, unresolvable: 0, skippedPages: [], calls: 0, chargedMicro: 0 });
     const res = await post("/search/next", { searchParams: LI_PARAMS }).expect(200);
-    expect(res.body).toMatchObject({ people: [], done: true, hasMore: false });
+    expect(res.body).toMatchObject({ people: [], done: true, doneReason: "all_served", hasMore: false });
     expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ exhausted: true }));
+  });
+
+  it("competitor pages without any recent post: done=true says no_recent_posts, its own reason, not all_served", async () => {
+    mockServeLinkedinEngagers.mockResolvedValue({ people: [], done: true, doneReason: "no_recent_posts", poolSize: 0, considered: 0, excluded: 0, unresolvable: 0, skippedPages: [], calls: 2, chargedMicro: 3760 });
+    const res = await post("/search/next", { searchParams: LI_PARAMS }).expect(200);
+    expect(res.body).toMatchObject({ people: [], done: true, doneReason: "no_recent_posts", totalEntries: 0 });
   });
 
   it("every competitor page dead: a named 422 listing each page (permanent); an outage on all of them: 502 retryable", async () => {

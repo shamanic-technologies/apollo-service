@@ -739,6 +739,9 @@ const SearchNextResponseSchema = z
     page: z.number().openapi({ description: "The page number just fetched (1-based)." }),
     totalPages: z.number().openapi({ description: "Total pages for this filter set's pool, clamped to Apollo's reachable window (500). exhaustion happens when the next page would exceed this." }),
     hasMore: z.boolean().openapi({ description: "Convenience inverse of done — true when more pages remain to fetch for this filter set." }),
+    doneReason: z.enum(["no_recent_posts", "no_engagers", "all_served"]).nullable().optional().openapi({
+      description: "source=linkedin_engagement only (absent everywhere else). WHY done is what it is: null while done=false; when done=true, no_recent_posts = no competitor page has a post published inside the audience's window (nothing to read engagers from: NOT exhaustion of an engaged pool, new posts may come), no_engagers = posts exist inside the window but nobody reacted or commented, all_served = there were engagers and every one was already considered for this audience (served, competitor employee or profile unreadable).",
+    }),
     source: z.enum(["quickenrich", "linkedin_engagement"]).optional().openapi({
       description: "quickenrich: this page came from the FREE QuickEnrich search (the audience is switched to quickenrich); those people carry an id `qe:<emp_id>`, their full name, LinkedIn URL and company domain. linkedin_engagement: the filters carry a linkedin_engagement buying_signal; up to 5 engagers of the competitor pages per call, each with an id `li:<profileId>`, full name, title, headline, employer and LinkedIn URL, never the same person twice for the audience (x-audience-id, else the campaign), competitor employees excluded; done=true only once nobody is left. For both, POST /enrich with that id finds the email with treg and verifies it. Absent = the Apollo walk, unchanged.",
     }),

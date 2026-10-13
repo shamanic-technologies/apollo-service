@@ -628,6 +628,33 @@ export async function poolSize(pages: CompetitorPage[], spec: BuyingSignalSpec, 
   return row?.n ?? 0;
 }
 
+/** Posts of these pages published inside the window (whether or not anybody engaged with them). */
+export async function postsInWindow(pages: CompetitorPage[], spec: BuyingSignalSpec, now: Date): Promise<number> {
+  const [row] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(linkedinCompanyPosts)
+    .where(and(inArray(linkedinCompanyPosts.pageSlug, pages.map((p) => p.slug)), gte(linkedinCompanyPosts.publishedAt, windowStart(spec, now))));
+  return row?.n ?? 0;
+}
+
+/**
+ * WHY a linkedin_engagement serve is done, so a consumer never reads "the
+ * pages have no recent posts" as "every engager was served":
+ * - `no_recent_posts`: no competitor page has a post published inside the window
+ *   (nothing to read engagers from; a page may have posts, just older ones).
+ * - `no_engagers`: posts exist inside the window but nobody reacted or commented.
+ * - `all_served`: there were engagers and every one of them was considered for
+ *   this audience (served, competitor employee, or profile unreadable).
+ */
+export const ENGAGEMENT_DONE_REASONS = ["no_recent_posts", "no_engagers", "all_served"] as const;
+export type EngagementDoneReason = (typeof ENGAGEMENT_DONE_REASONS)[number];
+
+export function engagementDoneReason(postsInWindowCount: number, pool: number): EngagementDoneReason {
+  if (postsInWindowCount === 0) return "no_recent_posts";
+  if (pool === 0) return "no_engagers";
+  return "all_served";
+}
+
 function rowToProfile(row: typeof linkedinProfiles.$inferSelect): ResolvedProfile {
   return {
     profileId: row.profileId,
@@ -695,6 +722,8 @@ export interface EngagementServeResult {
   people: LinkedinTeaser[];
   /** True only when silver is current AND no engager is left for this audience. */
   done: boolean;
+  /** Set only when done: WHY nothing is left (see engagementDoneReason). null while done=false. */
+  doneReason: EngagementDoneReason | null;
   poolSize: number;
   considered: number;
   excluded: number;
@@ -729,7 +758,7 @@ export async function serveLinkedinEngagers(args: {
   const pages = competitorPagesOf(args.spec);
   const audienceKey = audienceKeyOf(identity.audienceId, args.campaignId);
   const meter = new EngagementMeter(args.ctx);
-  const result: EngagementServeResult = { people: [], done: false, poolSize: 0, considered: 0, excluded: 0, unresolvable: 0, deferred: 0, skippedPages: [], calls: 0, chargedMicro: 0 };
+  const result: EngagementServeResult = { people: [], done: false, doneReason: null, poolSize: 0, considered: 0, excluded: 0, unresolvable: 0, deferred: 0, skippedPages: [], calls: 0, chargedMicro: 0 };
   let ok = false;
   try {
     const { complete: harvested, skipped } = await harvest(meter, pages, args.spec, now, Date.now() + HARVEST_BUDGET_MS);
@@ -804,6 +833,7 @@ export async function serveLinkedinEngagers(args: {
     const left = await candidates(identity.orgId, audienceKey, pages, args.spec, now, 1);
     result.done = harvested && left.length === 0 && result.people.length === 0;
     result.poolSize = await poolSize(pages, args.spec, now);
+    if (result.done) result.doneReason = engagementDoneReason(await postsInWindow(pages, args.spec, now), result.poolSize);
     ok = true;
     return result;
   } finally {
