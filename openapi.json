@@ -1104,6 +1104,17 @@
             "type": "boolean",
             "description": "Convenience inverse of done — true when more pages remain to fetch for this filter set."
           },
+          "doneReason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "no_recent_posts",
+              "no_engagers",
+              "all_served",
+              null
+            ],
+            "description": "source=linkedin_engagement only (absent everywhere else). WHY done is what it is: null while done=false; when done=true, no_recent_posts = no competitor page has a post published inside the audience's window (nothing to read engagers from: NOT exhaustion of an engaged pool, new posts may come), no_engagers = posts exist inside the window but nobody reacted or commented, all_served = there were engagers and every one was already considered for this audience (served, competitor employee or profile unreadable)."
+          },
           "source": {
             "type": "string",
             "enum": [

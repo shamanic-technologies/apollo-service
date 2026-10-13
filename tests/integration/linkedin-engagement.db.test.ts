@@ -54,6 +54,12 @@ const ENGAGEMENT_111 = {
   reactionsHasMore: false,
   commentsHasMore: false,
 };
+const NO_ENGAGEMENT = { reactions: [], comments: [], reactionsHasMore: false, commentsHasMore: false };
+/** Pages other than lemlist (default: no post at all, as chirocandy / maxliving answered on 2026-10-13). */
+const OTHER_POSTS: Record<string, unknown> = {
+  quietco: { success: true, posts: [{ url: "https://www.linkedin.com/posts/quietco_q-activity-333", id: "333", text: "nobody cares", datePublished: daysAgo(5) }] },
+  oldco: { success: true, posts: [{ url: "https://www.linkedin.com/posts/oldco_o-activity-444", id: "444", text: "too old", datePublished: daysAgo(90) }] },
+};
 const PROFILES: Record<string, unknown> = {
   "https://www.linkedin.com/in/ACoAAAprospect1xxxxxxxxxxxxxxxxxxxxx": { firstName: "Peter", lastName: "Cools", title: "CEO @ Rodz", publicIdentifier: "coolspeter", url: "https://www.linkedin.com/in/coolspeter/", jobTitle: "CEO", companyName: "Rodz", companyPublicId: "rodzio", websites: [{ url: "https://rodz.io", category: "COMPANY" }] },
   "https://www.linkedin.com/in/ACoAAAemployee1xxxxxxxxxxxxxxxxxxxx": { firstName: "Dean", lastName: "Brown", title: "Events Manager", publicIdentifier: "dean-b", url: "https://www.linkedin.com/in/dean-b/", jobTitle: "Events Manager", companyName: "lemlist", companyPublicId: "lemlist" },
@@ -102,7 +108,7 @@ describe.skipIf(!DB_URL)("linkedin_engagement serve loop on a real database", ()
         if (mode === "withdrawn") return reply(404, NO_TOOL, "0");
         if (mode === "not_found") return reply(404, SC_NOT_FOUND, "0");
         if (mode === "502") return reply(502, { detail: "upstream" }, "0");
-        return reply(200, slug === "lemlist" ? POSTS : { success: true, posts: [] }, "1880");
+        return reply(200, slug === "lemlist" ? POSTS : OTHER_POSTS[slug] ?? { success: true, posts: [] }, "1880");
       }
       if (url.includes("tikhub.x.linkedin-web-v2-get-company-posts")) {
         const slug = new URL(url).searchParams.get("url")!.split("/").filter(Boolean).pop()!;
@@ -116,8 +122,9 @@ describe.skipIf(!DB_URL)("linkedin_engagement serve loop on a real database", ()
         return reply(200, { elements: null, error: "No valid target provided", status: 400 }, "4000");
       }
       if (url.includes("fetchinio.linkedin.post.engagement")) {
-        calls.push(`engagement:${new URL(url).searchParams.get("postUrlOrUrn")}`);
-        return reply(200, ENGAGEMENT_111, "3000");
+        const urn = new URL(url).searchParams.get("postUrlOrUrn")!;
+        calls.push(`engagement:${urn}`);
+        return reply(200, urn.endsWith(":111") ? ENGAGEMENT_111 : NO_ENGAGEMENT, "3000");
       }
       if (url.includes("treg.linkedin.user.profile")) {
         const u = JSON.parse(init.body!).linkedin_url as string;
@@ -148,7 +155,7 @@ describe.skipIf(!DB_URL)("linkedin_engagement serve loop on a real database", ()
   it("serves the prospects of in-window posts, drops the employee and the unreadable, pays each fact once", async () => {
     const first = await mod.serveLinkedinEngagers({ ctx: ctx("aud-1"), campaignId: "c1", spec, now: NOW });
     expect(first.people.map((p: { name: string }) => p.name).sort()).toEqual(["Ana Lima", "Peter Cools"]);
-    expect(first).toMatchObject({ excluded: 1, unresolvable: 1, poolSize: 4, done: false });
+    expect(first).toMatchObject({ excluded: 1, unresolvable: 1, poolSize: 4, done: false, doneReason: null });
     // Only the in-window post's engagement is read; the 60-day-old one is not.
     expect(calls.filter((c) => c.startsWith("engagement"))).toEqual(["engagement:urn:li:activity:111"]);
     // The commenter is resolved from the public slug, not the opaque id.
@@ -157,7 +164,7 @@ describe.skipIf(!DB_URL)("linkedin_engagement serve loop on a real database", ()
     calls.length = 0;
 
     const second = await mod.serveLinkedinEngagers({ ctx: ctx("aud-1"), campaignId: "c1", spec, now: NOW });
-    expect(second).toMatchObject({ people: [], done: true });
+    expect(second).toMatchObject({ people: [], done: true, doneReason: "all_served" });
     expect(calls).toEqual([]); // posts, engagement and profiles are all fresh in silver: nothing paid again
   });
 
@@ -225,6 +232,36 @@ describe.skipIf(!DB_URL)("linkedin_engagement serve loop on a real database", ()
     failWith = "rate_limited";
     await expect(mod.serveLinkedinEngagers({ ctx: ctx("aud-5"), campaignId: "c5", spec, now: NOW })).rejects.toThrow(/HTTP 502/);
     failProfileUrl = null;
+  });
+
+  describe("doneReason: WHY a serve is done (2026-10-13: chirocandy + maxliving had no post, read as exhausted)", () => {
+    const pagesSpec = (...slugs: string[]) => ({ ...spec, competitor_pages: slugs.map((s) => `https://www.linkedin.com/company/${s}/`) });
+
+    it("pages with no post at all: done, no_recent_posts", async () => {
+      const res = await mod.serveLinkedinEngagers({ ctx: ctx("aud-noposts"), campaignId: "c20", spec: pagesSpec("chirocandy", "maxliving"), now: NOW });
+      expect(res).toMatchObject({ people: [], done: true, doneReason: "no_recent_posts", poolSize: 0, skippedPages: [] });
+      const rows = await q`SELECT slug, posts_status, posts_count FROM linkedin_company_pages WHERE slug IN ('chirocandy', 'maxliving') ORDER BY slug`;
+      expect(rows).toEqual([{ slug: "chirocandy", posts_status: "ok", posts_count: 0 }, { slug: "maxliving", posts_status: "ok", posts_count: 0 }]);
+    });
+
+    it("a page whose only posts are older than the window: no_recent_posts too", async () => {
+      const res = await mod.serveLinkedinEngagers({ ctx: ctx("aud-oldposts"), campaignId: "c21", spec: pagesSpec("oldco"), now: NOW });
+      expect(res).toMatchObject({ done: true, doneReason: "no_recent_posts" });
+      expect(calls.filter((c) => c.startsWith("engagement"))).toEqual([]);
+    });
+
+    it("posts inside the window that nobody engaged with: no_engagers", async () => {
+      const res = await mod.serveLinkedinEngagers({ ctx: ctx("aud-quiet"), campaignId: "c22", spec: pagesSpec("quietco", "oldco"), now: NOW });
+      expect(calls.filter((c) => c.startsWith("engagement"))).toEqual(["engagement:urn:li:activity:333"]);
+      expect(res).toMatchObject({ people: [], done: true, doneReason: "no_engagers", poolSize: 0 });
+    });
+
+    it("engagers who were all served already: all_served, never no_recent_posts", async () => {
+      const first = await mod.serveLinkedinEngagers({ ctx: ctx("aud-mixed-reason"), campaignId: "c23", spec: pagesSpec("lemlist", "chirocandy"), now: NOW });
+      expect(first).toMatchObject({ done: false, doneReason: null });
+      const second = await mod.serveLinkedinEngagers({ ctx: ctx("aud-mixed-reason"), campaignId: "c23", spec: pagesSpec("lemlist", "chirocandy"), now: NOW });
+      expect(second).toMatchObject({ people: [], done: true, doneReason: "all_served" });
+    });
   });
 
   describe("posts providers (treg withdrew the routed treg.linkedin.company.posts on 2026-10-04)", () => {

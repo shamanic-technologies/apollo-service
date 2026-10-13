@@ -702,12 +702,13 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
         spec: engagementSignal,
       });
       await db.update(apolloSearchCursors).set({ exhausted: served.done, totalEntries: served.poolSize, updatedAt: new Date() }).where(eq(apolloSearchCursors.id, cursorId));
-      traceEvent(runId, { service: "apollo-service", event: "linkedin-engagement-page", ...(served.skippedPages.length > 0 ? { level: "warn" as const } : {}), detail: `served=${served.people.length}, considered=${served.considered}, excluded=${served.excluded}, unresolvable=${served.unresolvable}, deferred=${served.deferred}, skippedPages=${JSON.stringify(served.skippedPages)}, pool=${served.poolSize}, calls=${served.calls}, chargedMicro=${served.chargedMicro}, done=${served.done}` }, req.headers).catch(() => {});
+      traceEvent(runId, { service: "apollo-service", event: "linkedin-engagement-page", ...(served.skippedPages.length > 0 ? { level: "warn" as const } : {}), detail: `served=${served.people.length}, considered=${served.considered}, excluded=${served.excluded}, unresolvable=${served.unresolvable}, deferred=${served.deferred}, skippedPages=${JSON.stringify(served.skippedPages)}, pool=${served.poolSize}, calls=${served.calls}, chargedMicro=${served.chargedMicro}, done=${served.done}, doneReason=${served.doneReason}` }, req.headers).catch(() => {});
       await updateRun(searchRun.id, "completed", identity);
       openRun = null;
       return res.json({
         people: served.people,
         done: served.done,
+        doneReason: served.doneReason,
         totalEntries: served.poolSize,
         page: 1,
         totalPages: 1,
