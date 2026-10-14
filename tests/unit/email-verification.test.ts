@@ -123,6 +123,62 @@ describe("verifyRevealedEmail", () => {
     expect(inserted[0].error).toContain("500");
   });
 
+  describe("a TIMED-OUT actor run gets one longer second chance (VERIFY-TIMEOUT-1014)", () => {
+    const timedOut = () =>
+      actor({ error: { type: "run-failed", message: "Actor run did not succeed (run ID: XdYBX0KRc2FI3cqrP, status: TIMED-OUT)." } }, 400);
+
+    it("times out once, then answers: the verdict comes back in the SAME call, billed once, one bronze row", async () => {
+      fetchMock
+        .mockResolvedValueOnce(timedOut())
+        .mockResolvedValueOnce(actor([{ email: "tz-ny-1014@distribute.you", status: "valid", is_catch_all: true }]));
+      const { verifyRevealedEmail, ACTOR_RETRY_TIMEOUT_S } = await import("../../src/lib/email-verification.js");
+      const r = await verifyRevealedEmail("tz-ny-1014@distribute.you", CTX);
+
+      expect(r).toMatchObject({ verdict: "catch_all", deliverable: false, reused: false });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock.mock.calls[0][0]).toContain("timeout=60");
+      expect(fetchMock.mock.calls[1][0]).toContain(`timeout=${ACTOR_RETRY_TIMEOUT_S}`);
+      expect(ACTOR_RETRY_TIMEOUT_S).toBeGreaterThan(60);
+      expect(mockAddCosts).toHaveBeenCalledTimes(2);
+      expect(mockAddCosts).toHaveBeenNthCalledWith(2, "verify-run-1", [expect.objectContaining({ status: "actual", quantity: 1 })], expect.anything());
+      expect(mockUpdateRun).toHaveBeenCalledWith("verify-run-1", "completed", expect.anything());
+      expect(inserted).toHaveLength(1);
+      expect(inserted[0]).toMatchObject({ verdict: "catch_all", httpStatus: 200, error: null, billed: true });
+    });
+
+    it("keeps timing out: still NO verdict, fails loud with the reason, bills nothing, hold cancelled, no third call", async () => {
+      fetchMock.mockImplementation(async () => timedOut());
+      const { verifyRevealedEmail, EmailVerificationError } = await import("../../src/lib/email-verification.js");
+      const err = await verifyRevealedEmail("gate-nobody-1014@distribute.you", CTX).catch((e) => e);
+
+      expect(err).toBeInstanceOf(EmailVerificationError);
+      expect(err.message).toMatch(/TIMED-OUT/);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(mockAddCosts).toHaveBeenCalledTimes(1); // the hold only, never an actual
+      expect(mockUpdateCostStatus).toHaveBeenCalledWith("verify-run-1", "hold-1", "cancelled", expect.anything());
+      expect(mockUpdateRun).toHaveBeenCalledWith("verify-run-1", "failed", expect.anything());
+      expect(inserted).toHaveLength(1);
+      expect(inserted[0]).toMatchObject({ verdict: null, httpStatus: 400, billed: false });
+      expect(inserted[0].error).toContain("TIMED-OUT");
+    });
+
+    it("a run-failed that is NOT a timeout is not retried", async () => {
+      fetchMock.mockResolvedValue(actor({ error: { type: "run-failed", message: "Actor run did not succeed (run ID: x, status: FAILED)." } }, 400));
+      const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
+      await expect(verifyRevealedEmail("ada@example.com", CTX)).rejects.toThrow(/FAILED/);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("isActorTimeout: 400 TIMED-OUT and 408 only", async () => {
+      const { isActorTimeout } = await import("../../src/lib/email-verification.js");
+      expect(isActorTimeout({ httpStatus: 400, error: "apify bounceverify responded 400: ... status: TIMED-OUT)." })).toBe(true);
+      expect(isActorTimeout({ httpStatus: 408, error: "apify bounceverify responded 408: timeout" })).toBe(true);
+      expect(isActorTimeout({ httpStatus: 400, error: "apify bounceverify responded 400: invalid input" })).toBe(false);
+      expect(isActorTimeout({ httpStatus: 200, error: null })).toBe(false);
+      expect(isActorTimeout({ httpStatus: null, error: "apify unreachable: The operation was aborted due to timeout" })).toBe(false);
+    });
+  });
+
   it("insufficient balance throws before any call or hold", async () => {
     mockAuthorizeCredit.mockResolvedValue({ sufficient: false, balance_cents: 0, required_cents: 1 });
     const { verifyRevealedEmail, EmailVerificationError } = await import("../../src/lib/email-verification.js");

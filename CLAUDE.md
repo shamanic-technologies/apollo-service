@@ -559,6 +559,14 @@ pre-serve verification moved here from human-service. `/enrich`, `/match` and
   `idempotencyKey` (runs-service replays the original row) and PATCH is
   absolute. A 4xx is never retried. Apify's own gateway 502/503/504 is retried
   once (`APIFY_GATEWAY_RETRY_DELAY_MS`).
+- **A TIMED-OUT actor run gets ONE longer second chance (VERIFY-TIMEOUT-1014).**
+  Apify answers 400 `run-failed ... status: TIMED-OUT` (or 408) when the actor
+  outlives `ACTOR_TIMEOUT_S` 60; `isActorTimeout` → one rerun at
+  `ACTOR_RETRY_TIMEOUT_S` 120 inside the SAME hold and bronze row. 2026-10-14:
+  2.7% of calls, almost all answered on the next try; one address timed out 3×
+  at 60s then answered at 59.8s, hence the longer budget. One retry max per
+  verification whatever the cause; worst case ~180s (HTTP cap 240s, under the
+  caller's undici 300s). A repeat timeout stays NO verdict, never `unknown`.
 - Callers of `/match` today: human-service AND journalists-service — both now
   receive the verdict and its cost. Do not make it opt-in per caller; the
   owner's rule is that no revealed email leaves unverified.
