@@ -2210,3 +2210,65 @@ registry.registerPath({
     },
   },
 });
+
+// ─── GET /internal/email-verifications/history ───────────────────────────
+
+export const VerificationHistoryQuerySchema = z
+  .object({
+    after: z
+      .string()
+      .regex(/^\d{1,18}$/, "after must be a cursor returned by this route (digits)")
+      .optional()
+      .openapi({ description: "Opaque cursor: the `nextCursor` of the previous page. Omit (or \"0\") to start from the very first verification." }),
+    limit: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(5000)
+      .optional()
+      .openapi({ description: "Rows per page, 1-5000 (default 1000)." }),
+  })
+  .openapi("VerificationHistoryQuery");
+
+const VerificationHistoryRowSchema = z
+  .object({
+    id: z.string().uuid().openapi({ description: "Stable id of the verification (email_verifications.id)." }),
+    email: z.string().openapi({ description: "The verified address, lower-cased and trimmed." }),
+    verifier: z.string().openapi({ description: "Always \"bounceverify\" today." }),
+    verdict: z
+      .enum(["valid", "invalid", "catch_all", "risky", "unknown"])
+      .nullable()
+      .openapi({ description: "BounceVerify's verdict. null = the call returned NO verdict (actor failed, timed out, Apify refused); never an invented one." }),
+    verifiedAt: z.string().openapi({ description: "ISO timestamp the verification was recorded." }),
+    cursor: z.string().openapi({ description: "This row's position in the feed (insertion order). Resuming with after=<cursor> returns the rows after it." }),
+  })
+  .openapi("VerificationHistoryRow");
+
+const VerificationHistoryResponseSchema = z
+  .object({
+    verifications: z.array(VerificationHistoryRowSchema),
+    nextCursor: z.string().openapi({ description: "Pass as `after` on the next call. Equals the input cursor when the page is empty." }),
+    hasMore: z.boolean().openapi({ description: "true = more settled rows are ready now, call again at once; false = caught up, poll later." }),
+  })
+  .openapi("VerificationHistoryResponse");
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/email-verifications/history",
+  summary: "Every email verification ever made, as a resumable feed",
+  description:
+    "The full history of BounceVerify verifications (bronze email_verifications, every org and source, failed calls included with verdict null), in insertion order, for a consumer that mirrors it. Start without `after`, follow `nextCursor` while `hasMore`, then poll with the last cursor. No row is ever skipped: the cursor is an insertion-ordered key and a page stops before the first row recorded less than 60 seconds ago, so a row is only served once nothing can be inserted before it. Read-only, nothing billed. Requires x-api-key = APOLLO_SERVICE_API_KEY.",
+  request: {
+    headers: z.object({ "x-api-key": z.string() }),
+    query: VerificationHistoryQuerySchema,
+  },
+  responses: {
+    200: {
+      description: "One page of the feed",
+      content: { "application/json": { schema: VerificationHistoryResponseSchema } },
+    },
+    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponseSchema } } },
+    401: { description: "Missing or invalid x-api-key", content: { "application/json": { schema: ErrorResponseSchema } } },
+    500: { description: "Internal server error", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
