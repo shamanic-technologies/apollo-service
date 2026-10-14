@@ -38,8 +38,17 @@ import { reportProviderCreditsExhausted } from "./credit-alert.js";
 export const VERIFY_EMAIL_COST_NAME = "apify-bounceverify-email";
 export const VERIFIER = "bounceverify";
 const ACTOR = "bounceverify~bounceverify-email-verifier";
-const ACTOR_TIMEOUT_S = 60;
-const FETCH_TIMEOUT_MS = 90_000;
+/** First attempt's actor budget. Prod 2026-10-11..14: a verdict takes p50 3.6s, p99 28s, max 59.8s. */
+export const ACTOR_TIMEOUT_S = 60;
+/**
+ * Budget of the ONE second chance a TIMED-OUT run gets (VERIFY-TIMEOUT-1014).
+ * Longer than the first on purpose: the same address timed out up to 3 times
+ * in a row at 60s (2-min spacing) and then answered at 59.8s, so a plain
+ * repeat of 60s would lose the slow-but-alive mailbox server.
+ */
+export const ACTOR_RETRY_TIMEOUT_S = 120;
+/** The HTTP wait outlives the actor budget by this much (Apify answers the run-failed itself). */
+const FETCH_GRACE_MS = 30_000;
 
 /**
  * A decisive verdict younger than this is reused instead of paying again. A
@@ -152,23 +161,46 @@ interface ActorCall {
  * never ran) is retried once after this pause before the call counts as failed. */
 export const APIFY_GATEWAY_RETRY_DELAY_MS = 1_000;
 
+/**
+ * The actor RAN but did not finish inside its budget: Apify answers 400
+ * `run-failed` "... status: TIMED-OUT" (prod 2026-10-14, ~2.7% of calls), or
+ * 408 when the sync wait itself runs out. Not a verdict, never one.
+ */
+export function isActorTimeout(call: Pick<ActorCall, "httpStatus" | "error">): boolean {
+  if (!call.error) return false;
+  if (call.httpStatus === 408) return true;
+  return call.httpStatus === 400 && /TIMED-OUT/.test(call.error);
+}
+
+/**
+ * At most ONE retry per verification, whichever the cause, so the worst case
+ * stays bounded: gateway 5xx → same budget after 1s; actor timeout → one run
+ * with ACTOR_RETRY_TIMEOUT_S. A timeout that repeats returns the second error
+ * as-is: no verdict, the caller fails loud, nothing billed.
+ * Worst case ≈ 60s + 120s actor time (hard cap 90s + 150s of HTTP wait).
+ */
 async function callActor(apifyToken: string, email: string): Promise<ActorCall> {
-  const first = await callActorOnce(apifyToken, email);
+  const first = await callActorOnce(apifyToken, email, ACTOR_TIMEOUT_S);
+  if (isActorTimeout(first)) {
+    console.warn(`[Apollo Service] verify_email.apify_timeout_retry status=${first.httpStatus} after=${first.durationMs}ms budget=${ACTOR_RETRY_TIMEOUT_S}s`);
+    const second = await callActorOnce(apifyToken, email, ACTOR_RETRY_TIMEOUT_S);
+    return { ...second, durationMs: first.durationMs + second.durationMs };
+  }
   if (first.httpStatus === null || ![502, 503, 504].includes(first.httpStatus)) return first;
   console.warn(`[Apollo Service] verify_email.apify_gateway_retry status=${first.httpStatus}`);
   await new Promise((resolve) => setTimeout(resolve, APIFY_GATEWAY_RETRY_DELAY_MS));
-  return callActorOnce(apifyToken, email);
+  return callActorOnce(apifyToken, email, ACTOR_TIMEOUT_S);
 }
 
-async function callActorOnce(apifyToken: string, email: string): Promise<ActorCall> {
+async function callActorOnce(apifyToken: string, email: string, actorTimeoutS: number): Promise<ActorCall> {
   const started = Date.now();
   let res: Response;
   try {
-    res = await fetch(`https://api.apify.com/v2/acts/${ACTOR}/run-sync-get-dataset-items?timeout=${ACTOR_TIMEOUT_S}`, {
+    res = await fetch(`https://api.apify.com/v2/acts/${ACTOR}/run-sync-get-dataset-items?timeout=${actorTimeoutS}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apifyToken}` },
       body: JSON.stringify({ emails: [email] }),
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      signal: AbortSignal.timeout(actorTimeoutS * 1000 + FETCH_GRACE_MS),
     });
   } catch (err) {
     return { rows: null, httpStatus: null, error: `apify unreachable: ${err instanceof Error ? err.message : String(err)}`, durationMs: Date.now() - started };
