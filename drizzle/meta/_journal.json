@@ -281,6 +281,13 @@
       "when": 1780790400000,
       "tag": "0039_treg_route_cost_name",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1780876800000,
+      "tag": "0040_email_verifications_seq",
+      "breakpoints": true
     }
   ]
 }

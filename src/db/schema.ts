@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, uniqueIndex, index, integer, decimal, jsonb, boolean } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, uniqueIndex, index, integer, decimal, jsonb, boolean, bigserial } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 // Apollo people search results
@@ -448,9 +448,14 @@ export const emailVerifications = pgTable(
     billed: boolean("billed").notNull().default(false),
     durationMs: integer("duration_ms"),
     verifiedAt: timestamp("verified_at", { withTimezone: true }).notNull().defaultNow(),
+    // Insertion order (migration 0040): the cursor of GET /internal/email-verifications/history.
+    // The uuid id is random and verified_at can tie or interleave, so the history
+    // feed pages on this monotonic key instead.
+    seq: bigserial("seq", { mode: "number" }).notNull(),
   },
   (table) => [
     index("idx_email_verifications_email_at").on(table.email, table.verifiedAt),
+    uniqueIndex("idx_email_verifications_seq").on(table.seq),
     // Domain-level lookup for the reveal domain gate (catch-all is a domain fact).
     index("idx_email_verifications_domain_at").on(sql`split_part(${table.email}, '@', 2)`, table.verifiedAt),
   ]

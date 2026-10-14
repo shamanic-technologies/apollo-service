@@ -544,6 +544,14 @@ pre-serve verification moved here from human-service. `/enrich`, `/match` and
   CALLER's org. ALL OR NOTHING: one address that cannot be verified 502s the
   whole call, so a caller never holds a partial answer to send half of. Bronze
   `source` = `verify:<caller label>`.
+- **History feed: `GET /internal/email-verifications/history?after=&limit=`** (x-api-key,
+  `src/lib/verification-history.ts`; first consumer instantly-service, which mirrors
+  it to price/split deliveries by the verdict an address had AT SEND TIME). Every
+  bronze row, every org, failed calls as `verdict: null`. Cursor = `seq` (bigserial,
+  migration 0040; the uuid id is random, `verified_at` interleaves). A page stops
+  before the first row (in seq order) recorded < 60 s ago, so no row ever lands
+  behind a consumer's cursor (inserts are single autocommit statements: keep them
+  so, a long transaction around the insert would break this). Max 5000/page.
 - **Apify out of usage raises the SAME staff email as Apollo** (`provider: "apify"`)
   and the 502 carries `providerError` (provider `apify`). Apify answers 403
   `platform-feature-disabled` "Monthly usage hard limit exceeded" (or 402):

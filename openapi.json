@@ -5677,6 +5677,77 @@
         "required": [
           "emails"
         ]
+      },
+      "VerificationHistoryResponse": {
+        "type": "object",
+        "properties": {
+          "verifications": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VerificationHistoryRow"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "description": "Pass as `after` on the next call. Equals the input cursor when the page is empty."
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "true = more settled rows are ready now, call again at once; false = caught up, poll later."
+          }
+        },
+        "required": [
+          "verifications",
+          "nextCursor",
+          "hasMore"
+        ]
+      },
+      "VerificationHistoryRow": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Stable id of the verification (email_verifications.id)."
+          },
+          "email": {
+            "type": "string",
+            "description": "The verified address, lower-cased and trimmed."
+          },
+          "verifier": {
+            "type": "string",
+            "description": "Always \"bounceverify\" today."
+          },
+          "verdict": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "valid",
+              "invalid",
+              "catch_all",
+              "risky",
+              "unknown",
+              null
+            ],
+            "description": "BounceVerify's verdict. null = the call returned NO verdict (actor failed, timed out, Apify refused); never an invented one."
+          },
+          "verifiedAt": {
+            "type": "string",
+            "description": "ISO timestamp the verification was recorded."
+          },
+          "cursor": {
+            "type": "string",
+            "description": "This row's position in the feed (insertion order). Resuming with after=<cursor> returns the rows after it."
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "verifier",
+          "verdict",
+          "verifiedAt",
+          "cursor"
+        ]
       }
     },
     "parameters": {
@@ -8187,6 +8258,87 @@
                     "source",
                     "error"
                   ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/email-verifications/history": {
+      "get": {
+        "summary": "Every email verification ever made, as a resumable feed",
+        "description": "The full history of BounceVerify verifications (bronze email_verifications, every org and source, failed calls included with verdict null), in insertion order, for a consumer that mirrors it. Start without `after`, follow `nextCursor` while `hasMore`, then poll with the last cursor. No row is ever skipped: the cursor is an insertion-ordered key and a page stops before the first row recorded less than 60 seconds ago, so a row is only served once nothing can be inserted before it. Read-only, nothing billed. Requires x-api-key = APOLLO_SERVICE_API_KEY.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{1,18}$",
+              "description": "Opaque cursor: the `nextCursor` of the previous page. Omit (or \"0\") to start from the very first verification."
+            },
+            "required": false,
+            "description": "Opaque cursor: the `nextCursor` of the previous page. Omit (or \"0\") to start from the very first verification.",
+            "name": "after",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5000,
+              "description": "Rows per page, 1-5000 (default 1000)."
+            },
+            "required": false,
+            "description": "Rows per page, 1-5000 (default 1000).",
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of the feed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerificationHistoryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid x-api-key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
