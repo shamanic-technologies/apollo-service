@@ -26,7 +26,7 @@
  * deliverable.
  */
 
-import { and, desc, eq, gt, isNotNull, ne } from "drizzle-orm";
+import { and, desc, eq, gt, isNotNull, ne, or, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { emailVerifications, type EmailVerification } from "../db/schema.js";
 import { decryptKey, type TrackingContext } from "./keys-client.js";
@@ -34,6 +34,7 @@ import { createRun, updateRun, addCosts, updateCostStatus, type IdentityHeaders 
 import { authorizeCredit } from "./billing-client.js";
 import { apifyCreditsExhausted, type ProviderErrorDetail } from "./provider-error.js";
 import { reportProviderCreditsExhausted } from "./credit-alert.js";
+import { domainHasMx, MailDomainLookupError } from "./mail-domain.js";
 
 export const VERIFY_EMAIL_COST_NAME = "apify-bounceverify-email";
 export const VERIFIER = "bounceverify";
@@ -115,6 +116,32 @@ export function mapVerdict(row: Record<string, unknown> | undefined): EmailVerdi
   return "unknown";
 }
 
+/**
+ * The vendor said `invalid` because it found no mail domain (reason "Domain
+ * does not exist" / "No MX records found for domain"), not because a mail
+ * server refused the mailbox. That claim is checked against our own DNS before
+ * it may stand (DNE-FALSE-INVALID-1015, see mail-domain.ts).
+ */
+export function vendorClaimsNoMailDomain(row: unknown): boolean {
+  if (!row || typeof row !== "object") return false;
+  const r = row as Record<string, unknown>;
+  if (mapVerdict(r) !== "invalid") return false;
+  return r.domain_exists === false || r.mx_found === false;
+}
+
+/**
+ * The verdict we state for the vendor's row. Identical to mapVerdict, except a
+ * "no mail domain" invalid on a domain that DOES publish MX records: the
+ * vendor never reached a mail server, so nothing is known about the mailbox →
+ * `unknown` (never `valid`: there is no evidence the mailbox exists). A domain
+ * with no MX stays `invalid`. A DNS lookup that cannot answer throws.
+ */
+export async function decideVerdict(row: Record<string, unknown> | undefined, email: string): Promise<EmailVerdict> {
+  const mapped = mapVerdict(row);
+  if (!vendorClaimsNoMailDomain(row)) return mapped;
+  return (await domainHasMx(email.split("@")[1] ?? "")) ? "unknown" : "invalid";
+}
+
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
@@ -141,7 +168,10 @@ async function latestDecisiveVerdict(email: string): Promise<EmailVerification |
       and(
         eq(emailVerifications.email, email),
         isNotNull(emailVerifications.verdict),
-        ne(emailVerifications.verdict, "unknown"),
+        // A decisive verdict, or an `unknown` WE decided over the vendor's
+        // "no mail domain" invalid (decideVerdict): re-asking the vendor would
+        // pay again for the same wrong answer.
+        or(ne(emailVerifications.verdict, "unknown"), sql`${emailVerifications.rawResult}->>'status' = 'invalid'`),
         gt(emailVerifications.verifiedAt, since)
       )
     )
@@ -229,7 +259,13 @@ export async function verifyRevealedEmail(rawEmail: string, ctx: VerificationCon
   if (!email) throw new EmailVerificationError("empty email");
 
   const held = await latestDecisiveVerdict(email);
-  if (held) return toResult(held, true);
+  if (held) {
+    // A row stored before decideVerdict existed (or while the domain had no
+    // MX) carries the vendor's "no mail domain" invalid: re-check it now, free,
+    // so an old false invalid never blocks a send.
+    if (held.verdict === "invalid" && vendorClaimsNoMailDomain(held.rawResult)) return recheckHeldInvalid(held, email, ctx);
+    return toResult(held, true);
+  }
 
   const { identity, tracking } = ctx;
   if (!identity.userId) throw new EmailVerificationError("x-user-id is required to bill the verification");
@@ -284,9 +320,18 @@ export async function verifyRevealedEmail(rawEmail: string, ctx: VerificationCon
 
     const call = await callActor(apifyToken, email);
     const row = call.rows?.find((r) => typeof r.email === "string" && normalizeEmail(r.email) === email);
-    const verdict = call.error ? null : mapVerdict(row);
-    // BounceVerify charges only a DECISIVE result; `unknown` is free.
-    const billed = verdict !== null && verdict !== "unknown";
+    // BounceVerify charges only a DECISIVE result of ITS OWN; `unknown` is free.
+    const billed = !call.error && mapVerdict(row) !== "unknown";
+    let verdict: EmailVerdict | null = null;
+    let lookupError: string | null = null;
+    if (!call.error) {
+      try {
+        verdict = await decideVerdict(row, email);
+      } catch (err) {
+        if (!(err instanceof MailDomainLookupError)) throw err;
+        lookupError = err.message;
+      }
+    }
 
     const [stored] = await db
       .insert(emailVerifications)
@@ -296,7 +341,7 @@ export async function verifyRevealedEmail(rawEmail: string, ctx: VerificationCon
         verdict,
         rawResult: (row ?? (call.rows ? { rows: call.rows } : null)) as object | null,
         httpStatus: call.httpStatus,
-        error: call.error,
+        error: call.error ?? lookupError,
         orgId: identity.orgId,
         userId: identity.userId,
         runId: ctx.runId,
@@ -316,6 +361,12 @@ export async function verifyRevealedEmail(rawEmail: string, ctx: VerificationCon
         upstreamBody: call.error,
       });
       throw new EmailVerificationError(call.error, apifyCreditsExhausted());
+    }
+    if (lookupError) {
+      // The vendor answered (and charged); only our DNS check could not. Declare
+      // the charge, then fail loud: no verdict is better than a false one.
+      await addCosts(run.id, [{ costName: VERIFY_EMAIL_COST_NAME, costSource: keySource, quantity: 1, status: "actual" }], identity);
+      throw new EmailVerificationError(lookupError);
     }
     if (call.error || verdict === null) throw new EmailVerificationError(call.error ?? "no verdict");
 
@@ -338,6 +389,42 @@ export async function verifyRevealedEmail(rawEmail: string, ctx: VerificationCon
     if (err instanceof EmailVerificationError) throw err;
     throw new EmailVerificationError(err instanceof Error ? err.message : String(err));
   }
+}
+
+/**
+ * A held "no mail domain" invalid, re-judged against today's DNS. MX found →
+ * a NEW bronze row with verdict `unknown` (same vendor row, nothing called,
+ * nothing billed), which later asks reuse. No MX → the held invalid stands.
+ */
+async function recheckHeldInvalid(held: EmailVerification, email: string, ctx: VerificationContext): Promise<EmailVerificationResult> {
+  let hasMx: boolean;
+  try {
+    hasMx = await domainHasMx(email.split("@")[1] ?? "");
+  } catch (err) {
+    throw new EmailVerificationError(err instanceof Error ? err.message : String(err));
+  }
+  if (!hasMx) return toResult(held, true);
+  const [corrected] = await db
+    .insert(emailVerifications)
+    .values({
+      email,
+      verifier: VERIFIER,
+      verdict: "unknown",
+      rawResult: held.rawResult as object | null,
+      httpStatus: held.httpStatus,
+      error: null,
+      orgId: ctx.identity.orgId,
+      userId: ctx.identity.userId,
+      runId: ctx.runId,
+      verifyRunId: null,
+      source: ctx.source,
+      keySource: null,
+      billed: false,
+      durationMs: 0,
+    })
+    .returning();
+  console.warn(`[Apollo Service] verify_email.dne_overruled email=${email} held=${held.id} corrected=${corrected.id}`);
+  return toResult(corrected, true);
 }
 
 /** Most addresses one batch call may carry. A slice of a paced release is far smaller. */

@@ -575,6 +575,19 @@ pre-serve verification moved here from human-service. `/enrich`, `/match` and
   at 60s then answered at 59.8s, hence the longer budget. One retry max per
   verification whatever the cause; worst case ~180s (HTTP cap 240s, under the
   caller's undici 300s). A repeat timeout stays NO verdict, never `unknown`.
+- **A vendor "no mail domain" invalid is checked against OUR DNS (DNE-FALSE-INVALID-1015).**
+  The actor answers `invalid` + `domain_exists:false` + `mx_found:false` ("Domain
+  does not exist") for ANY domain without an A record, MX or not (reproduced
+  2026-10-15: definitejobsgroup.co.uk, colpal.com); 432 of 668 such prod rows sat
+  on a domain with MX. `decideVerdict` (`src/lib/mail-domain.ts` `domainHasMx`):
+  MX found → `unknown` (never `valid`: no mailbox evidence; instantly-service sends
+  unknown at ×3), no MX / null MX → `invalid`, DNS timeout → no verdict (502).
+  Billing follows the VENDOR's verdict (it charged a decisive invalid). A stored
+  such invalid is re-checked at reuse time and, on MX, a free `unknown` row is
+  appended; an `unknown` whose raw status is `invalid` is REUSED (re-asking pays
+  for the same wrong answer). Mailbox-level invalids are untouched. The official
+  BounceVerify API (`POST bounceverify.com/api/verify/single`) could not be
+  tested (guest quota 429, no key); the actor is published by BounceVerify itself.
 - Callers of `/match` today: human-service AND journalists-service — both now
   receive the verdict and its cost. Do not make it opt-in per caller; the
   owner's rule is that no revealed email leaves unverified.
