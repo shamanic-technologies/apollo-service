@@ -37,7 +37,12 @@ vi.mock("../../src/db/index.js", () => ({
   },
 }));
 vi.mock("../../src/db/schema.js", () => ({
-  emailVerifications: { email: "email", verdict: "verdict", verifiedAt: "verified_at" },
+  emailVerifications: { email: "email", verdict: "verdict", verifiedAt: "verified_at", rawResult: "raw_result" },
+}));
+const mockDomainHasMx = vi.fn();
+vi.mock("../../src/lib/mail-domain.js", async (orig) => ({
+  ...(await orig<typeof import("../../src/lib/mail-domain.js")>()),
+  domainHasMx: (...a: unknown[]) => mockDomainHasMx(...a),
 }));
 
 const fetchMock = vi.fn();
@@ -62,6 +67,7 @@ beforeEach(() => {
   mockUpdateCostStatus.mockResolvedValue({});
   mockAuthorizeCredit.mockResolvedValue({ sufficient: true, balance_cents: 100, required_cents: 1 });
   mockDecryptKey.mockResolvedValue({ key: "apify-token", keySource: "platform" });
+  mockDomainHasMx.mockReset();
   vi.stubGlobal("fetch", fetchMock);
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -209,5 +215,86 @@ describe("mapVerdict", () => {
     expect(mapVerdict({ status: "valid", is_spamtrap: true })).toBe("risky");
     expect(mapVerdict({ status: "valid" })).toBe("valid");
     expect(mapVerdict(undefined)).toBe("unknown");
+  });
+});
+
+describe("vendor 'Domain does not exist' is checked against our own DNS (DNE-FALSE-INVALID-1015)", () => {
+  // The actor's real row for team@definitejobsgroup.co.uk (prod 2026-10-15): the domain has MX, no A record.
+  const dneRow = (email: string) => ({
+    email, status: "invalid", reason: "Domain does not exist", domain_exists: false, mx_found: false, mx_records: [],
+    smtp_valid: null, is_catch_all: false, is_spamtrap: false, syntax_valid: true, score: 5,
+  });
+
+  it("domain HAS MX → verdict unknown (sendable, never valid), billed as the vendor charged, stored for reuse", async () => {
+    fetchMock.mockResolvedValue(actor([dneRow("team@definitejobsgroup.co.uk")]));
+    mockDomainHasMx.mockResolvedValue(true);
+    const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
+    const r = await verifyRevealedEmail("team@definitejobsgroup.co.uk", CTX);
+
+    expect(mockDomainHasMx).toHaveBeenCalledWith("definitejobsgroup.co.uk");
+    expect(r).toMatchObject({ verdict: "unknown", deliverable: false, reused: false });
+    expect(inserted[0]).toMatchObject({ verdict: "unknown", billed: true, rawResult: expect.objectContaining({ status: "invalid", reason: "Domain does not exist" }) });
+    expect(mockAddCosts).toHaveBeenNthCalledWith(2, "verify-run-1", [expect.objectContaining({ status: "actual" })], expect.anything());
+  });
+
+  it("domain truly has NO MX → still invalid", async () => {
+    fetchMock.mockResolvedValue(actor([dneRow("ada@gmail.con")]));
+    mockDomainHasMx.mockResolvedValue(false);
+    const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
+    const r = await verifyRevealedEmail("ada@gmail.con", CTX);
+    expect(r).toMatchObject({ verdict: "invalid", deliverable: false });
+    expect(inserted[0]).toMatchObject({ verdict: "invalid", billed: true });
+  });
+
+  it("a mailbox-level invalid (the domain's server refused it) is NOT re-checked", async () => {
+    fetchMock.mockResolvedValue(actor([{ email: "ada@example.com", status: "invalid", domain_exists: true, mx_found: true, reason: "Mailbox does not exist" }]));
+    const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
+    const r = await verifyRevealedEmail("ada@example.com", CTX);
+    expect(r.verdict).toBe("invalid");
+    expect(mockDomainHasMx).not.toHaveBeenCalled();
+  });
+
+  it("our DNS cannot answer → no verdict (loud), the vendor's charge still declared", async () => {
+    fetchMock.mockResolvedValue(actor([dneRow("team@definitejobsgroup.co.uk")]));
+    const { MailDomainLookupError } = await import("../../src/lib/mail-domain.js");
+    mockDomainHasMx.mockRejectedValue(new MailDomainLookupError("definitejobsgroup.co.uk", new Error("queryMx ETIMEOUT")));
+    const { verifyRevealedEmail, EmailVerificationError } = await import("../../src/lib/email-verification.js");
+    await expect(verifyRevealedEmail("team@definitejobsgroup.co.uk", CTX)).rejects.toBeInstanceOf(EmailVerificationError);
+    expect(inserted[0]).toMatchObject({ verdict: null, billed: true });
+    expect(inserted[0].error).toContain("ETIMEOUT");
+    expect(mockAddCosts).toHaveBeenNthCalledWith(2, "verify-run-1", [expect.objectContaining({ status: "actual" })], expect.anything());
+    expect(mockUpdateRun).toHaveBeenCalledWith("verify-run-1", "failed", expect.anything());
+  });
+
+  it("a HELD 'Domain does not exist' invalid on a domain with MX is not reused as invalid: a free unknown row replaces it", async () => {
+    heldRows = [{ id: "ver-old", email: "team@definitejobsgroup.co.uk", verdict: "invalid", httpStatus: 201, rawResult: dneRow("team@definitejobsgroup.co.uk"), verifiedAt: new Date("2026-10-15T12:10:22Z") }];
+    mockDomainHasMx.mockResolvedValue(true);
+    const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
+    const r = await verifyRevealedEmail("team@definitejobsgroup.co.uk", CTX);
+
+    expect(r).toMatchObject({ verdict: "unknown", deliverable: false, reused: true });
+    expect(r.verificationId).not.toBe("ver-old");
+    expect(inserted[0]).toMatchObject({ verdict: "unknown", billed: false, verifyRunId: null, rawResult: expect.objectContaining({ reason: "Domain does not exist" }) });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mockDecryptKey).not.toHaveBeenCalled();
+    expect(mockAddCosts).not.toHaveBeenCalled();
+  });
+
+  it("a HELD 'Domain does not exist' invalid on a domain with NO MX is reused as invalid", async () => {
+    heldRows = [{ id: "ver-old", email: "ada@gmail.con", verdict: "invalid", rawResult: dneRow("ada@gmail.con"), verifiedAt: new Date("2026-10-15T00:00:00Z") }];
+    mockDomainHasMx.mockResolvedValue(false);
+    const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
+    const r = await verifyRevealedEmail("ada@gmail.con", CTX);
+    expect(r).toMatchObject({ verdict: "invalid", reused: true, verificationId: "ver-old" });
+    expect(inserted).toHaveLength(0);
+  });
+
+  it("a held unknown WE decided (vendor row says invalid) is reused: the vendor is not paid again", async () => {
+    heldRows = [{ id: "ver-fixed", email: "team@definitejobsgroup.co.uk", verdict: "unknown", rawResult: dneRow("team@definitejobsgroup.co.uk"), verifiedAt: new Date("2026-10-15T00:00:00Z") }];
+    const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
+    const r = await verifyRevealedEmail("team@definitejobsgroup.co.uk", CTX);
+    expect(r).toMatchObject({ verdict: "unknown", reused: true, verificationId: "ver-fixed" });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mockDomainHasMx).not.toHaveBeenCalled();
   });
 });
