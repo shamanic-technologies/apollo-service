@@ -153,9 +153,16 @@ export interface IdentityHeaders {
 
 async function runsRequest<T>(
   path: string,
-  options: { method?: string; body?: unknown; identity?: IdentityHeaders; extraHeaders?: Record<string, string> } = {}
+  options: {
+    method?: string;
+    body?: unknown;
+    identity?: IdentityHeaders;
+    extraHeaders?: Record<string, string>;
+    /** Per-attempt timeout; defaults to RUNS_SERVICE_TIMEOUT_MS. */
+    timeoutMs?: number;
+  } = {}
 ): Promise<T> {
-  const { method = "GET", body, identity, extraHeaders } = options;
+  const { method = "GET", body, identity, extraHeaders, timeoutMs = RUNS_SERVICE_TIMEOUT_MS } = options;
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -174,7 +181,7 @@ async function runsRequest<T>(
 
   for (let attempt = 0; ; attempt++) {
     try {
-      return await runsAttempt<T>(path, method, headers, body);
+      return await runsAttempt<T>(path, method, headers, body, timeoutMs);
     } catch (err) {
       const retryable =
         err instanceof RunsServiceError &&
@@ -190,10 +197,11 @@ async function runsAttempt<T>(
   path: string,
   method: string,
   headers: Record<string, string>,
-  body: unknown
+  body: unknown,
+  timeoutMs: number
 ): Promise<T> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), RUNS_SERVICE_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   let response: Response;
   try {
@@ -209,7 +217,7 @@ async function runsAttempt<T>(
         kind: "timeout",
         path,
         method,
-        message: `runs-service ${method} ${path} timed out after ${RUNS_SERVICE_TIMEOUT_MS}ms`,
+        message: `runs-service ${method} ${path} timed out after ${timeoutMs}ms`,
       });
     }
     throw new RunsServiceError({
@@ -420,6 +428,14 @@ export interface BatchRunCost {
 }
 
 /**
+ * Per-attempt timeout of a cost batch read. A 500-id `/v1/runs/batch` answers in
+ * ~1.5s on an idle box but runs-service stalls for seconds under load, and the
+ * 10s default failed whole 5,000-lead acquisition-cost reads (2026-10-17). The
+ * read is idempotent and its caller (lead-service) waits 120s.
+ */
+export const RUNS_COST_BATCH_TIMEOUT_MS = 20_000;
+
+/**
  * Many runs of ONE org in one call (runs-service `POST /v1/runs/batch`, ≤ 10,000
  * ids, org-scoped by x-org-id). A run of another org, or an unknown id, is
  * simply absent from the answer.
@@ -430,6 +446,7 @@ export async function getRunCostsBatch(orgId: string, runIds: string[]): Promise
     method: "POST",
     identity: { orgId },
     body: { runIds },
+    timeoutMs: RUNS_COST_BATCH_TIMEOUT_MS,
   });
   return runs.map((r) => ({
     id: r.id,
