@@ -20,11 +20,12 @@ vi.mock("../../src/lib/billing-client.js", () => ({ authorizeCredit: (...a: unkn
 const mockDecryptKey = vi.fn();
 vi.mock("../../src/lib/keys-client.js", () => ({ decryptKey: (...a: unknown[]) => mockDecryptKey(...a) }));
 
-let heldRows: any[] = [];
+// One entry per SELECT, in order: [held verdict lookup, pending BounceBan lookup, ...].
+let selectQueue: any[][] = [];
 const inserted: any[] = [];
 vi.mock("../../src/db/index.js", () => ({
   db: {
-    select: () => ({ from: () => ({ where: () => ({ orderBy: () => ({ limit: async () => heldRows }) }) }) }),
+    select: () => ({ from: () => ({ where: () => ({ orderBy: () => ({ limit: async () => selectQueue.shift() ?? [] }) }) }) }),
     insert: () => ({
       values: (v: any) => ({
         returning: async () => {
@@ -37,7 +38,7 @@ vi.mock("../../src/db/index.js", () => ({
   },
 }));
 vi.mock("../../src/db/schema.js", () => ({
-  emailVerifications: { email: "email", verdict: "verdict", verifiedAt: "verified_at", rawResult: "raw_result" },
+  emailVerifications: { email: "email", verdict: "verdict", verifiedAt: "verified_at", rawResult: "raw_result", verifier: "verifier" },
 }));
 const mockDomainHasMx = vi.fn();
 vi.mock("../../src/lib/mail-domain.js", async (orig) => ({
@@ -57,9 +58,46 @@ function actor(rows: unknown, status = 200) {
   return new Response(JSON.stringify(rows), { status, headers: { "content-type": "application/json" } });
 }
 
-beforeEach(() => {
+/** A treg answer: body verbatim + treg's own charge header. */
+function treg(body: unknown, status = 200, costMicro: string | null = "4000") {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (costMicro !== null) headers["x-treg-cost-micro"] = costMicro;
+  return new Response(JSON.stringify(body), { status, headers });
+}
+
+type Vendor = "contactout" | "apify" | "trykitt" | "millionverifier" | "bounceban" | "status";
+function vendorOf(url: string): Vendor {
+  if (url.includes("api.apify.com")) return "apify";
+  if (url.includes("contactout.people.email.verify")) return "contactout";
+  if (url.includes("trykitt.people.email.verify")) return "trykitt";
+  if (url.includes("millionverifier.people.email.verify")) return "millionverifier";
+  if (url.includes("bounceban.people.email.verify.status")) return "status";
+  if (url.includes("bounceban.people.email.verify")) return "bounceban";
+  throw new Error(`unexpected fetch ${url}`);
+}
+/** ContactOut (step 1, first) as it answers most of the time live: 429, so BounceVerify answers. */
+const contactout429 = () => new Response("<html>Too Many Requests</html>", { status: 429, headers: { "x-treg-cost-micro": "0" } });
+/** Answers per vendor, consumed in order; the last one repeats. */
+const down = () => new Response("{}", { status: 503, headers: { "x-treg-cost-micro": "0" } });
+let answers: Record<Vendor, Array<() => Response>> = { contactout: [contactout429], apify: [], trykitt: [down], millionverifier: [down], bounceban: [], status: [] };
+/** Bronze rows minus the failed treg step-1 attempts (ContactOut's 429, TryKitt/MillionVerifier down). */
+const rows = () => inserted.filter((r) => !(["contactout", "trykitt", "millionverifier"].includes(r.verifier) && r.verdict === null));
+const callsTo = (v: Vendor) => fetchMock.mock.calls.filter(([url]) => vendorOf(String(url)) === v);
+
+const bounceban = (result: string, extra: Record<string, unknown> = {}, costMicro = "4000") =>
+  treg({ id: "bb-1", status: "success", email: "ada@example.com", result, score: 90, is_accept_all: false, credits_consumed: 1, ...extra }, 200, costMicro);
+
+beforeEach(async () => {
   vi.clearAllMocks();
-  heldRows = [];
+  fetchMock.mockReset();
+  answers = { contactout: [contactout429], apify: [], trykitt: [down], millionverifier: [down], bounceban: [], status: [] };
+  fetchMock.mockImplementation(async (url: string) => {
+    const q = answers[vendorOf(String(url))];
+    if (q.length === 0) throw new Error(`no answer queued for ${url}`);
+    return (q.length > 1 ? q.shift()! : q[0])();
+  });
+  (await import("../../src/lib/email-verification.js")).resetApifyFallback();
+  selectQueue = [];
   inserted.length = 0;
   mockCreateRun.mockResolvedValue({ id: "verify-run-1" });
   mockUpdateRun.mockResolvedValue({});
@@ -74,12 +112,12 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe("verifyRevealedEmail", () => {
   it("valid → deliverable, billed exactly 1, hold released, raw row stored", async () => {
-    fetchMock.mockResolvedValue(actor([{ email: "Ada@Example.com", status: "valid", is_catch_all: false }]));
+    answers.apify = [() => actor([{ email: "Ada@Example.com", status: "valid", is_catch_all: false }])];
     const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
     const r = await verifyRevealedEmail(" Ada@Example.com ", CTX);
 
     expect(r).toMatchObject({ email: "ada@example.com", verdict: "valid", deliverable: true, verifier: "bounceverify", reused: false });
-    const [url, init] = fetchMock.mock.calls[0];
+    const [url, init] = callsTo("apify")[0];
     expect(url).toContain("bounceverify~bounceverify-email-verifier/run-sync-get-dataset-items");
     expect(init.headers.Authorization).toBe("Bearer apify-token");
     expect(JSON.parse(init.body)).toEqual({ emails: ["ada@example.com"] });
@@ -89,28 +127,139 @@ describe("verifyRevealedEmail", () => {
     expect(mockAddCosts).toHaveBeenNthCalledWith(2, "verify-run-1", [{ costName: "apify-bounceverify-email", costSource: "platform", quantity: 1, status: "actual" }], expect.anything());
     expect(mockUpdateCostStatus).toHaveBeenCalledWith("verify-run-1", "hold-1", "cancelled", expect.anything());
     expect(mockUpdateRun).toHaveBeenCalledWith("verify-run-1", "completed", expect.anything());
-    expect(inserted[0]).toMatchObject({ email: "ada@example.com", verdict: "valid", billed: true, source: "enrich", rawResult: { email: "Ada@Example.com", status: "valid", is_catch_all: false } });
+    expect(rows()[0]).toMatchObject({ email: "ada@example.com", verdict: "valid", billed: true, source: "enrich", rawResult: { email: "Ada@Example.com", status: "valid", is_catch_all: false } });
   });
 
-  it("catch_all → NOT deliverable (still billed: decisive)", async () => {
-    fetchMock.mockResolvedValue(actor([{ email: "ada@example.com", status: "valid", is_catch_all: true }]));
+  it("catch_all → BounceBan decides (deliverable → valid), each vendor's spend declared and actualized", async () => {
+    answers.apify = [() => actor([{ email: "ada@example.com", status: "valid", is_catch_all: true }])];
+    answers.bounceban = [() => bounceban("deliverable", { is_accept_all: true })];
     const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
     const r = await verifyRevealedEmail("ada@example.com", CTX);
-    expect(r).toMatchObject({ verdict: "catch_all", deliverable: false });
-    expect(mockAddCosts).toHaveBeenCalledTimes(2);
+
+    expect(r).toMatchObject({ verdict: "valid", deliverable: true, verifier: "bounceban", reused: false, verificationId: "ver-3" });
+    const [url, init] = callsTo("bounceban")[0];
+    expect(url).toBe("https://treg.to/call/bounceban.people.email.verify?email=ada%40example.com&mode=regular");
+    expect(init.headers).toMatchObject({ "X-Treg-Token": "apify-token", "X-Treg-Org": "apify-token", "Cache-Control": "no-cache" });
+    expect(mockDecryptKey.mock.calls.map((c) => c[2])).toEqual(["treg", "treg-org", "apify", "treg", "treg-org"]);
+    // Apify: hold, actual 1. treg: hold 4000 micro, actual = X-Treg-Cost-Micro.
+    expect(mockAddCosts.mock.calls.map((c) => c[1][0])).toEqual([
+      { costName: "apify-bounceverify-email", costSource: "platform", quantity: 1, status: "provisioned" },
+      { costName: "apify-bounceverify-email", costSource: "platform", quantity: 1, status: "actual" },
+      { costName: "treg-micro-usd", costSource: "platform", quantity: 4000, status: "provisioned" },
+      { costName: "treg-micro-usd", costSource: "platform", quantity: 4000, status: "actual" },
+    ]);
+    expect(mockAuthorizeCredit).toHaveBeenLastCalledWith(expect.objectContaining({ items: [{ costName: "treg-micro-usd", quantity: 4000 }] }));
+    expect(mockUpdateCostStatus).toHaveBeenCalledTimes(2);
+    expect(mockCreateRun.mock.calls.map((c) => c[0].taskName)).toEqual(["verify-email-contactout", "verify-email", "verify-email-bounceban"]);
+    expect(rows().map((r) => [r.verifier, r.verdict, r.billed, r.costName, r.costQuantity])).toEqual([
+      ["bounceverify", "catch_all", true, "apify-bounceverify-email", 1],
+      ["bounceban", "valid", true, "treg-micro-usd", 4000],
+    ]);
+    expect(rows()[1].rawResult).toMatchObject({ result: "deliverable", is_accept_all: true, id: "bb-1" });
   });
 
-  it("unknown → NOT deliverable and free (no actual cost)", async () => {
-    fetchMock.mockResolvedValue(actor([{ email: "ada@example.com", status: "unknown" }]));
+  it("unknown → BounceBan decides (undeliverable → invalid); BounceVerify's unknown stays free", async () => {
+    answers.apify = [() => actor([{ email: "ada@example.com", status: "unknown" }])];
+    answers.bounceban = [() => bounceban("undeliverable")];
     const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
     const r = await verifyRevealedEmail("ada@example.com", CTX);
-    expect(r).toMatchObject({ verdict: "unknown", deliverable: false });
-    expect(mockAddCosts).toHaveBeenCalledTimes(1);
-    expect(inserted[0].billed).toBe(false);
+    expect(r).toMatchObject({ verdict: "invalid", deliverable: false, verifier: "bounceban" });
+    expect(rows()[0]).toMatchObject({ verifier: "bounceverify", verdict: "unknown", billed: false, costQuantity: 0 });
+    expect(mockAddCosts.mock.calls.filter((c) => c[1][0].status === "actual").map((c) => c[1][0].costName)).toEqual(["treg-micro-usd"]);
+  });
+
+  it("valid / invalid first passes never pay for a second opinion", async () => {
+    answers.apify = [() => actor([{ email: "ada@example.com", status: "invalid" }])];
+    const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
+    const r = await verifyRevealedEmail("ada@example.com", CTX);
+    expect(r).toMatchObject({ verdict: "invalid", verifier: "bounceverify" });
+    expect(callsTo("bounceban")).toHaveLength(0);
+  });
+
+  it("a BounceBan failure is loud: the first-pass catch_all is NEVER served, its charge still declared", async () => {
+    answers.apify = [() => actor([{ email: "ada@example.com", status: "valid", is_catch_all: true }])];
+    answers.bounceban = [() => treg({ detail: "provider_capacity_unavailable" }, 503, null)];
+    const { verifyRevealedEmail, EmailVerificationError } = await import("../../src/lib/email-verification.js");
+    const err = await verifyRevealedEmail("ada@example.com", CTX).catch((e) => e);
+    expect(err).toBeInstanceOf(EmailVerificationError);
+    expect(err.message).toMatch(/bounceban.*503/);
+    expect(rows()[1]).toMatchObject({ verifier: "bounceban", verdict: null, httpStatus: 503, billed: false });
+    expect(mockAddCosts.mock.calls.filter((c) => c[1][0].status === "actual").map((c) => c[1][0].costName)).toEqual(["apify-bounceverify-email"]);
+    expect(mockUpdateRun).toHaveBeenLastCalledWith("verify-run-1", "failed", expect.anything());
+  });
+
+  it("BounceBan answering `verifying` is polled by its task id (free) until it decides", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
+    try {
+      answers.apify = [() => actor([{ email: "ada@example.com", status: "unknown" }])];
+      answers.bounceban = [() => treg({ id: "bb-7", status: "verifying", email: "ada@example.com", credits_consumed: 1 })];
+      answers.status = [() => treg({ id: "bb-7", status: "verifying" }, 200, "0"), () => bounceban("deliverable", { id: "bb-7" }, "0")];
+      const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
+      const p = verifyRevealedEmail("ada@example.com", CTX);
+      for (let i = 0; i < 5; i++) await vi.advanceTimersByTimeAsync(10_000);
+      const r = await p;
+      expect(r).toMatchObject({ verdict: "valid", verifier: "bounceban" });
+      expect(callsTo("status").map(([u]) => u)).toEqual([
+        "https://treg.to/call/bounceban.people.email.verify.status?id=bb-7",
+        "https://treg.to/call/bounceban.people.email.verify.status?id=bb-7",
+      ]);
+      expect(rows()[1]).toMatchObject({ verdict: "valid", costQuantity: 4000 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("BounceBan still verifying past the budget: loud, paid once, and the next ask RESUMES the task instead of paying again", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
+    try {
+      answers.apify = [() => actor([{ email: "ada@example.com", status: "unknown" }])];
+      answers.bounceban = [() => treg({ id: "bb-9", status: "verifying", email: "ada@example.com" })];
+      answers.status = [() => treg({ id: "bb-9", status: "verifying" }, 200, "0")];
+      const { verifyRevealedEmail, EmailVerificationError, BOUNCEBAN_POLL_BUDGET_MS } = await import("../../src/lib/email-verification.js");
+      const p = verifyRevealedEmail("ada@example.com", CTX).catch((e) => e);
+      for (let i = 0; i < BOUNCEBAN_POLL_BUDGET_MS / 10_000 + 2; i++) await vi.advanceTimersByTimeAsync(10_000);
+      const err = await p;
+      expect(err).toBeInstanceOf(EmailVerificationError);
+      expect(err.message).toMatch(/still verifying/);
+      const pendingRow = rows()[1];
+      expect(pendingRow).toMatchObject({ verifier: "bounceban", verdict: null, billed: true, costQuantity: 4000, rawResult: { id: "bb-9", status: "verifying" } });
+
+      // Next ask: the first pass is held (unknown), the BounceBan task is pending → poll only.
+      mockAuthorizeCredit.mockClear();
+      mockAddCosts.mockClear();
+      const submissions = callsTo("bounceban").length;
+      answers.status = [() => bounceban("undeliverable", { id: "bb-9" }, "0")];
+      selectQueue = [[rows()[0]], [pendingRow]];
+      const r = await verifyRevealedEmail("ada@example.com", CTX);
+      expect(r).toMatchObject({ verdict: "invalid", verifier: "bounceban" });
+      expect(callsTo("bounceban")).toHaveLength(submissions);
+      expect(callsTo("status").at(-1)![0]).toBe("https://treg.to/call/bounceban.people.email.verify.status?id=bb-9");
+      expect(mockAuthorizeCredit).not.toHaveBeenCalled();
+      expect(mockAddCosts.mock.calls.filter((c) => c[1][0].status === "provisioned")).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a HELD first-pass catch_all goes straight to BounceBan: BounceVerify is not asked again", async () => {
+    selectQueue = [[{ id: "ver-old", email: "ada@example.com", verifier: "bounceverify", verdict: "catch_all", verifiedAt: new Date("2026-10-10T00:00:00Z") }]];
+    answers.bounceban = [() => bounceban("deliverable")];
+    const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
+    const r = await verifyRevealedEmail("ada@example.com", CTX);
+    expect(r).toMatchObject({ verdict: "valid", verifier: "bounceban", reused: false });
+    expect(callsTo("apify")).toHaveLength(0);
+  });
+
+  it("a HELD BounceBan verdict is final, whatever it says (reused, nothing called)", async () => {
+    selectQueue = [[{ id: "ver-bb", email: "ada@example.com", verifier: "bounceban", verdict: "unknown", verifiedAt: new Date("2026-10-10T00:00:00Z") }]];
+    const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
+    const r = await verifyRevealedEmail("ada@example.com", CTX);
+    expect(r).toMatchObject({ verdict: "unknown", verifier: "bounceban", reused: true, verificationId: "ver-bb" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("reuses a held decisive verdict: no key, no authorize, no call, no cost", async () => {
-    heldRows = [{ id: "ver-old", email: "ada@example.com", verdict: "invalid", verifiedAt: new Date("2026-09-20T00:00:00Z") }];
+    selectQueue = [[{ id: "ver-old", email: "ada@example.com", verifier: "bounceverify", verdict: "invalid", verifiedAt: new Date("2026-09-20T00:00:00Z") }]];
     const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
     const r = await verifyRevealedEmail("ada@example.com", CTX);
     expect(r).toMatchObject({ verdict: "invalid", deliverable: false, reused: true, verificationId: "ver-old" });
@@ -120,13 +269,13 @@ describe("verifyRevealedEmail", () => {
   });
 
   it("an actor failure throws, releases the hold, fails the run, and stores the error", async () => {
-    fetchMock.mockResolvedValue(actor({ error: "boom" }, 500));
+    answers.apify = [() => actor({ error: "boom" }, 500)];
     const { verifyRevealedEmail, EmailVerificationError } = await import("../../src/lib/email-verification.js");
     await expect(verifyRevealedEmail("ada@example.com", CTX)).rejects.toBeInstanceOf(EmailVerificationError);
     expect(mockUpdateCostStatus).toHaveBeenCalledWith("verify-run-1", "hold-1", "cancelled", expect.anything());
     expect(mockUpdateRun).toHaveBeenCalledWith("verify-run-1", "failed", expect.anything());
-    expect(inserted[0]).toMatchObject({ verdict: null, httpStatus: 500 });
-    expect(inserted[0].error).toContain("500");
+    expect(rows()[0]).toMatchObject({ verdict: null, httpStatus: 500 });
+    expect(rows()[0].error).toContain("500");
   });
 
   describe("a TIMED-OUT actor run gets one longer second chance (VERIFY-TIMEOUT-1014)", () => {
@@ -134,45 +283,45 @@ describe("verifyRevealedEmail", () => {
       actor({ error: { type: "run-failed", message: "Actor run did not succeed (run ID: XdYBX0KRc2FI3cqrP, status: TIMED-OUT)." } }, 400);
 
     it("times out once, then answers: the verdict comes back in the SAME call, billed once, one bronze row", async () => {
-      fetchMock
-        .mockResolvedValueOnce(timedOut())
-        .mockResolvedValueOnce(actor([{ email: "tz-ny-1014@distribute.you", status: "valid", is_catch_all: true }]));
+      answers.apify = [timedOut, () => actor([{ email: "tz-ny-1014@distribute.you", status: "valid", is_catch_all: false }])];
       const { verifyRevealedEmail, ACTOR_RETRY_TIMEOUT_S } = await import("../../src/lib/email-verification.js");
       const r = await verifyRevealedEmail("tz-ny-1014@distribute.you", CTX);
 
-      expect(r).toMatchObject({ verdict: "catch_all", deliverable: false, reused: false });
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      expect(fetchMock.mock.calls[0][0]).toContain("timeout=60");
-      expect(fetchMock.mock.calls[1][0]).toContain(`timeout=${ACTOR_RETRY_TIMEOUT_S}`);
+      expect(r).toMatchObject({ verdict: "valid", deliverable: true, reused: false });
+      expect(callsTo("apify")).toHaveLength(2);
+      expect(callsTo("apify")[0][0]).toContain("timeout=60");
+      expect(callsTo("apify")[1][0]).toContain(`timeout=${ACTOR_RETRY_TIMEOUT_S}`);
       expect(ACTOR_RETRY_TIMEOUT_S).toBeGreaterThan(60);
       expect(mockAddCosts).toHaveBeenCalledTimes(2);
       expect(mockAddCosts).toHaveBeenNthCalledWith(2, "verify-run-1", [expect.objectContaining({ status: "actual", quantity: 1 })], expect.anything());
       expect(mockUpdateRun).toHaveBeenCalledWith("verify-run-1", "completed", expect.anything());
-      expect(inserted).toHaveLength(1);
-      expect(inserted[0]).toMatchObject({ verdict: "catch_all", httpStatus: 200, error: null, billed: true });
+      expect(rows()).toHaveLength(1);
+      expect(rows()[0]).toMatchObject({ verdict: "valid", httpStatus: 200, error: null, billed: true });
     });
 
     it("keeps timing out: still NO verdict, fails loud with the reason, bills nothing, hold cancelled, no third call", async () => {
-      fetchMock.mockImplementation(async () => timedOut());
+      answers.apify = [timedOut];
+      answers.contactout = [contactout429];
       const { verifyRevealedEmail, EmailVerificationError } = await import("../../src/lib/email-verification.js");
       const err = await verifyRevealedEmail("gate-nobody-1014@distribute.you", CTX).catch((e) => e);
 
       expect(err).toBeInstanceOf(EmailVerificationError);
       expect(err.message).toMatch(/TIMED-OUT/);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      expect(mockAddCosts).toHaveBeenCalledTimes(1); // the hold only, never an actual
+      expect(callsTo("apify")).toHaveLength(2);
+      // BounceVerify: the hold only, never an actual.
+      expect(mockAddCosts.mock.calls.filter((c) => c[1][0].costName === "apify-bounceverify-email").map((c) => c[1][0].status)).toEqual(["provisioned"]);
       expect(mockUpdateCostStatus).toHaveBeenCalledWith("verify-run-1", "hold-1", "cancelled", expect.anything());
       expect(mockUpdateRun).toHaveBeenCalledWith("verify-run-1", "failed", expect.anything());
-      expect(inserted).toHaveLength(1);
-      expect(inserted[0]).toMatchObject({ verdict: null, httpStatus: 400, billed: false });
-      expect(inserted[0].error).toContain("TIMED-OUT");
+      expect(rows()).toHaveLength(1);
+      expect(rows()[0]).toMatchObject({ verdict: null, httpStatus: 400, billed: false });
+      expect(rows()[0].error).toContain("TIMED-OUT");
     });
 
     it("a run-failed that is NOT a timeout is not retried", async () => {
-      fetchMock.mockResolvedValue(actor({ error: { type: "run-failed", message: "Actor run did not succeed (run ID: x, status: FAILED)." } }, 400));
+      answers.apify = [() => actor({ error: { type: "run-failed", message: "Actor run did not succeed (run ID: x, status: FAILED)." } }, 400)];
       const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
       await expect(verifyRevealedEmail("ada@example.com", CTX)).rejects.toThrow(/FAILED/);
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(callsTo("apify")).toHaveLength(1);
     });
 
     it("isActorTimeout: 400 TIMED-OUT and 408 only", async () => {
@@ -185,11 +334,12 @@ describe("verifyRevealedEmail", () => {
     });
   });
 
-  it("insufficient balance throws before any call or hold", async () => {
+  it("insufficient balance throws before any paid call or hold (only the free ContactOut was asked)", async () => {
     mockAuthorizeCredit.mockResolvedValue({ sufficient: false, balance_cents: 0, required_cents: 1 });
     const { verifyRevealedEmail, EmailVerificationError } = await import("../../src/lib/email-verification.js");
     await expect(verifyRevealedEmail("ada@example.com", CTX)).rejects.toBeInstanceOf(EmailVerificationError);
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(callsTo("apify")).toHaveLength(0);
+    expect(callsTo("trykitt")).toHaveLength(0);
     expect(mockAddCosts).not.toHaveBeenCalled();
   });
 
@@ -204,7 +354,7 @@ describe("verifyRevealedEmail", () => {
       status: 402,
       body: { type: "credit_insufficient", source: "email-verification", error: "Sales funnel max budget reached", reason: "sales_funnel_max_budget_reached", sales_funnel_cap: cap, balance_cents: 900, required_cents: 3 },
     });
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(callsTo("apify")).toHaveLength(0);
   });
 
   it("a balance refusal keeps its 502 email_verification answer", async () => {
@@ -218,7 +368,10 @@ describe("verifyRevealedEmail", () => {
   });
 
   it("a missing apify key throws a legible error", async () => {
-    mockDecryptKey.mockRejectedValue(new Error("apify key not configured for this organization"));
+    mockDecryptKey.mockImplementation(async (_o: string, _u: string, provider: string) => {
+      if (provider === "apify") throw new Error("apify key not configured for this organization");
+      return { key: `${provider}-key`, keySource: "platform" };
+    });
     const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
     await expect(verifyRevealedEmail("ada@example.com", CTX)).rejects.toThrow(/"apify" key/);
   });
@@ -249,29 +402,30 @@ describe("vendor 'Domain does not exist' is checked against our own DNS (DNE-FAL
     smtp_valid: null, is_catch_all: false, is_spamtrap: false, syntax_valid: true, score: 5,
   });
 
-  it("domain HAS MX → verdict unknown (sendable, never valid), billed as the vendor charged, stored for reuse", async () => {
-    fetchMock.mockResolvedValue(actor([dneRow("team@definitejobsgroup.co.uk")]));
+  it("domain HAS MX → first pass unknown (billed as the vendor charged), then BounceBan decides", async () => {
+    answers.apify = [() => actor([dneRow("team@definitejobsgroup.co.uk")])];
+    answers.bounceban = [() => bounceban("deliverable", { email: "team@definitejobsgroup.co.uk" })];
     mockDomainHasMx.mockResolvedValue(true);
     const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
     const r = await verifyRevealedEmail("team@definitejobsgroup.co.uk", CTX);
 
     expect(mockDomainHasMx).toHaveBeenCalledWith("definitejobsgroup.co.uk");
-    expect(r).toMatchObject({ verdict: "unknown", deliverable: false, reused: false });
-    expect(inserted[0]).toMatchObject({ verdict: "unknown", billed: true, rawResult: expect.objectContaining({ status: "invalid", reason: "Domain does not exist" }) });
+    expect(r).toMatchObject({ verdict: "valid", deliverable: true, verifier: "bounceban", reused: false });
+    expect(rows()[0]).toMatchObject({ verdict: "unknown", billed: true, rawResult: expect.objectContaining({ status: "invalid", reason: "Domain does not exist" }) });
     expect(mockAddCosts).toHaveBeenNthCalledWith(2, "verify-run-1", [expect.objectContaining({ status: "actual" })], expect.anything());
   });
 
   it("domain truly has NO MX → still invalid", async () => {
-    fetchMock.mockResolvedValue(actor([dneRow("ada@gmail.con")]));
+    answers.apify = [() => actor([dneRow("ada@gmail.con")])];
     mockDomainHasMx.mockResolvedValue(false);
     const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
     const r = await verifyRevealedEmail("ada@gmail.con", CTX);
     expect(r).toMatchObject({ verdict: "invalid", deliverable: false });
-    expect(inserted[0]).toMatchObject({ verdict: "invalid", billed: true });
+    expect(rows()[0]).toMatchObject({ verdict: "invalid", billed: true });
   });
 
   it("a mailbox-level invalid (the domain's server refused it) is NOT re-checked", async () => {
-    fetchMock.mockResolvedValue(actor([{ email: "ada@example.com", status: "invalid", domain_exists: true, mx_found: true, reason: "Mailbox does not exist" }]));
+    answers.apify = [() => actor([{ email: "ada@example.com", status: "invalid", domain_exists: true, mx_found: true, reason: "Mailbox does not exist" }])];
     const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
     const r = await verifyRevealedEmail("ada@example.com", CTX);
     expect(r.verdict).toBe("invalid");
@@ -279,46 +433,46 @@ describe("vendor 'Domain does not exist' is checked against our own DNS (DNE-FAL
   });
 
   it("our DNS cannot answer → no verdict (loud), the vendor's charge still declared", async () => {
-    fetchMock.mockResolvedValue(actor([dneRow("team@definitejobsgroup.co.uk")]));
+    answers.apify = [() => actor([dneRow("team@definitejobsgroup.co.uk")])];
     const { MailDomainLookupError } = await import("../../src/lib/mail-domain.js");
     mockDomainHasMx.mockRejectedValue(new MailDomainLookupError("definitejobsgroup.co.uk", new Error("queryMx ETIMEOUT")));
     const { verifyRevealedEmail, EmailVerificationError } = await import("../../src/lib/email-verification.js");
     await expect(verifyRevealedEmail("team@definitejobsgroup.co.uk", CTX)).rejects.toBeInstanceOf(EmailVerificationError);
-    expect(inserted[0]).toMatchObject({ verdict: null, billed: true });
-    expect(inserted[0].error).toContain("ETIMEOUT");
+    expect(rows()[0]).toMatchObject({ verdict: null, billed: true });
+    expect(rows()[0].error).toContain("ETIMEOUT");
     expect(mockAddCosts).toHaveBeenNthCalledWith(2, "verify-run-1", [expect.objectContaining({ status: "actual" })], expect.anything());
     expect(mockUpdateRun).toHaveBeenCalledWith("verify-run-1", "failed", expect.anything());
   });
 
-  it("a HELD 'Domain does not exist' invalid on a domain with MX is not reused as invalid: a free unknown row replaces it", async () => {
-    heldRows = [{ id: "ver-old", email: "team@definitejobsgroup.co.uk", verdict: "invalid", httpStatus: 201, rawResult: dneRow("team@definitejobsgroup.co.uk"), verifiedAt: new Date("2026-10-15T12:10:22Z") }];
+  it("a HELD 'Domain does not exist' invalid on a domain with MX is not reused as invalid: a free unknown row replaces it, BounceBan decides", async () => {
+    selectQueue = [[{ id: "ver-old", email: "team@definitejobsgroup.co.uk", verifier: "bounceverify", verdict: "invalid", httpStatus: 201, rawResult: dneRow("team@definitejobsgroup.co.uk"), verifiedAt: new Date("2026-10-15T12:10:22Z") }]];
     mockDomainHasMx.mockResolvedValue(true);
+    answers.bounceban = [() => bounceban("undeliverable", { email: "team@definitejobsgroup.co.uk" })];
     const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
     const r = await verifyRevealedEmail("team@definitejobsgroup.co.uk", CTX);
 
-    expect(r).toMatchObject({ verdict: "unknown", deliverable: false, reused: true });
-    expect(r.verificationId).not.toBe("ver-old");
-    expect(inserted[0]).toMatchObject({ verdict: "unknown", billed: false, verifyRunId: null, rawResult: expect.objectContaining({ reason: "Domain does not exist" }) });
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(mockDecryptKey).not.toHaveBeenCalled();
-    expect(mockAddCosts).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ verdict: "invalid", verifier: "bounceban", reused: false });
+    expect(rows()[0]).toMatchObject({ verdict: "unknown", billed: false, verifyRunId: null, rawResult: expect.objectContaining({ reason: "Domain does not exist" }) });
+    expect(callsTo("apify")).toHaveLength(0);
+    expect(mockDecryptKey.mock.calls.map((c) => c[2])).toEqual(["treg", "treg-org"]);
   });
 
   it("a HELD 'Domain does not exist' invalid on a domain with NO MX is reused as invalid", async () => {
-    heldRows = [{ id: "ver-old", email: "ada@gmail.con", verdict: "invalid", rawResult: dneRow("ada@gmail.con"), verifiedAt: new Date("2026-10-15T00:00:00Z") }];
+    selectQueue = [[{ id: "ver-old", email: "ada@gmail.con", verifier: "bounceverify", verdict: "invalid", rawResult: dneRow("ada@gmail.con"), verifiedAt: new Date("2026-10-15T00:00:00Z") }]];
     mockDomainHasMx.mockResolvedValue(false);
     const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
     const r = await verifyRevealedEmail("ada@gmail.con", CTX);
     expect(r).toMatchObject({ verdict: "invalid", reused: true, verificationId: "ver-old" });
-    expect(inserted).toHaveLength(0);
+    expect(rows()).toHaveLength(0);
   });
 
-  it("a held unknown WE decided (vendor row says invalid) is reused: the vendor is not paid again", async () => {
-    heldRows = [{ id: "ver-fixed", email: "team@definitejobsgroup.co.uk", verdict: "unknown", rawResult: dneRow("team@definitejobsgroup.co.uk"), verifiedAt: new Date("2026-10-15T00:00:00Z") }];
+  it("a held unknown WE decided (vendor row says invalid) is not re-asked of BounceVerify: BounceBan decides it", async () => {
+    selectQueue = [[{ id: "ver-fixed", email: "team@definitejobsgroup.co.uk", verifier: "bounceverify", verdict: "unknown", rawResult: dneRow("team@definitejobsgroup.co.uk"), verifiedAt: new Date("2026-10-15T00:00:00Z") }]];
     const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
+    answers.bounceban = [() => bounceban("deliverable", { email: "team@definitejobsgroup.co.uk" })];
     const r = await verifyRevealedEmail("team@definitejobsgroup.co.uk", CTX);
-    expect(r).toMatchObject({ verdict: "unknown", reused: true, verificationId: "ver-fixed" });
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ verdict: "valid", verifier: "bounceban", reused: false });
+    expect(callsTo("apify")).toHaveLength(0);
     expect(mockDomainHasMx).not.toHaveBeenCalled();
   });
 });

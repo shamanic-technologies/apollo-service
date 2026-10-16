@@ -68,7 +68,7 @@ import { apolloPeopleEnrichments, apolloTeaserPeople, emailVerifications, reveal
 import { ApolloRateLimitedError, lookupOrganizationsByName, type ApolloOrganizationCandidate } from "./apollo-client.js";
 import type { CreditAlertIdentity } from "./credit-alert.js";
 import { exactOrganizationIds, normalizeDomain, normalizeEmployerName } from "./teaser-employer-domains.js";
-import { verifyRevealedEmail, VERDICT_REUSE_DAYS, type EmailVerdict, type VerificationContext } from "./email-verification.js";
+import { verifyRevealedEmail, VERDICT_REUSE_DAYS, SECOND_OPINION_VERIFIER, type EmailVerdict, type VerificationContext } from "./email-verification.js";
 
 /** A catch-all verdict condemns its domain as long as a verdict is reused at all. */
 export const CATCH_ALL_TTL_DAYS = VERDICT_REUSE_DAYS;
@@ -317,6 +317,11 @@ async function domainVerdicts(domain: string): Promise<DomainVerdictRow[]> {
       and(
         sql`split_part(${emailVerifications.email}, '@', 2) = ${domain}`,
         isNotNull(emailVerifications.verdict),
+        // Only FINAL verdicts judge a domain. A first-pass catch_all / unknown
+        // is not one any more: BounceBan decides it (2026-10-17), and it often
+        // confirms a mailbox on exactly those domains. Counting the first pass
+        // would keep skipping reveals the second opinion can verify.
+        sql`NOT (${emailVerifications.verifier} <> ${SECOND_OPINION_VERIFIER} AND ${emailVerifications.verdict} IN ('catch_all', 'unknown'))`,
         gt(emailVerifications.verifiedAt, since)
       )
     )

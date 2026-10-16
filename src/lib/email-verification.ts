@@ -17,16 +17,24 @@
  * can suppress them — the reveal credit is already spent); the verdict says
  * whether to send.
  *
- * Verifier: the BounceVerify Apify actor (real SMTP + catch-all detection),
- * ~3s per address, billed only on a DECISIVE result (`unknown` is free). Cost
- * name `apify-bounceverify-email`, platform (or org) `apify` key.
+ * Two steps (owner, 2026-10-16):
+ *   1. ONE verdict from the cheapest verifier that ANSWERS: ContactOut (treg,
+ *      free) → BounceVerify (Apify actor, real SMTP + catch-all detection,
+ *      billed only on a DECISIVE result, cost `apify-bounceverify-email`) →
+ *      TryKitt (treg, $0.0015) → MillionVerifier (treg, $0.00178). The next
+ *      one is asked only when a verifier FAILS to answer; any verdict ends step 1.
+ *   2. A step-1 catch_all or unknown goes to BounceBan (treg, $0.004), whose
+ *      verdict DECIDES. Live sample 2026-10-16: of 10 BounceVerify unknowns
+ *      BounceBan called 8 deliverable; both agreed 100% on valid and invalid.
+ *   treg spend is `treg-micro-usd` = treg's own X-Treg-Cost-Micro. Every call
+ *   is a bronze row naming its vendor, with its raw answer and its charge.
  *
  * Fail loud: a verification that cannot be declared, authorized or completed
  * throws EmailVerificationError. An unverified address is NEVER handed back as
  * deliverable.
  */
 
-import { and, desc, eq, gt, isNotNull, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, isNotNull, isNull, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { emailVerifications, type EmailVerification } from "../db/schema.js";
 import { decryptKey, type TrackingContext } from "./keys-client.js";
@@ -36,9 +44,31 @@ import { describeCreditRefusal } from "./credit-refusal.js";
 import { apifyCreditsExhausted, type ProviderErrorDetail } from "./provider-error.js";
 import { reportProviderCreditsExhausted } from "./credit-alert.js";
 import { domainHasMx, MailDomainLookupError } from "./mail-domain.js";
+import { TREG_COST_NAME } from "./email-finders.js";
 
 export const VERIFY_EMAIL_COST_NAME = "apify-bounceverify-email";
 export const VERIFIER = "bounceverify";
+/** Who stored a row: a step-1 verifier (contactout, bounceverify, trykitt, millionverifier) or bounceban (step 2). */
+export type Verifier = string;
+export const SECOND_OPINION_VERIFIER = "bounceban";
+/** A step-1 verdict among these cannot stand alone: BounceBan decides (owner: « I meant catchall or unknown »). */
+export const SECOND_OPINION_VERDICTS: ReadonlySet<EmailVerdict> = new Set<EmailVerdict>(["catch_all", "unknown"]);
+export { TREG_COST_NAME };
+
+const TREG_CALL_BASE = "https://treg.to/call/";
+/** After an Apify exhaustion answer, Apify is asked again only after this long. */
+export const APIFY_OUT_RETRY_MS = 60 * 60 * 1000;
+
+export const BOUNCEBAN_ENDPOINT = "bounceban.people.email.verify";
+export const BOUNCEBAN_STATUS_ENDPOINT = "bounceban.people.email.verify.status";
+/** $0.004 per submission (charged at submission, even while `verifying`); held and authorized before. */
+export const BOUNCEBAN_MAX_COST_MICRO = 4_000;
+/** BounceBan's single endpoint waits up to 15s itself. */
+const BOUNCEBAN_CALL_TIMEOUT_MS = 45_000;
+/** A `verifying` task is polled (free) this often, for at most BOUNCEBAN_POLL_BUDGET_MS. */
+export const BOUNCEBAN_POLL_INTERVAL_MS = 10_000;
+export const BOUNCEBAN_POLL_BUDGET_MS = 90_000;
+const BOUNCEBAN_IN_PROGRESS: ReadonlySet<string> = new Set(["verifying", "queue"]);
 const ACTOR = "bounceverify~bounceverify-email-verifier";
 /** First attempt's actor budget. Prod 2026-10-11..14: a verdict takes p50 3.6s, p99 28s, max 59.8s. */
 export const ACTOR_TIMEOUT_S = 60;
@@ -92,7 +122,8 @@ export interface EmailVerificationResult {
   email: string;
   verdict: EmailVerdict;
   deliverable: boolean;
-  verifier: typeof VERIFIER;
+  /** Who decided: the step-1 verifier that answered (contactout, bounceverify, trykitt, millionverifier) or bounceban (step 2). */
+  verifier: Verifier;
   verificationId: string;
   verifiedAt: string;
   /** true = a verdict already held was reused; nothing was called or billed. */
@@ -155,26 +186,56 @@ function toResult(row: EmailVerification, reused: boolean): EmailVerificationRes
     email: row.email,
     verdict,
     deliverable: DELIVERABLE_VERDICTS.has(verdict),
-    verifier: VERIFIER,
+    verifier: row.verifier as Verifier,
     verificationId: row.id,
     verifiedAt: row.verifiedAt instanceof Date ? row.verifiedAt.toISOString() : String(row.verifiedAt),
     reused,
   };
 }
 
-async function latestDecisiveVerdict(email: string): Promise<EmailVerification | undefined> {
+/**
+ * true = this row is a FIRST-PASS verdict that cannot stand alone: BounceVerify
+ * (or any step-1 verifier) said catch_all or unknown, so
+ * BounceBan decides. ~4,700 of 5,079 BounceVerify unknowns in 30 days were
+ * blocks on BounceVerify's own probing IP, not dead mailboxes (2026-10-16).
+ */
+export function needsSecondOpinion(row: Pick<EmailVerification, "verifier" | "verdict">): boolean {
+  return row.verifier !== SECOND_OPINION_VERIFIER && row.verdict !== null && SECOND_OPINION_VERDICTS.has(row.verdict as EmailVerdict);
+}
+
+/**
+ * The latest verdict held for the address under VERDICT_REUSE_DAYS, any
+ * verifier. A final one is reused as-is; a step-1 catch_all / unknown is
+ * reused as step 1 (no step-1 vendor re-asked) and only BounceBan runs.
+ */
+async function latestHeldVerdict(email: string): Promise<EmailVerification | undefined> {
   const since = new Date(Date.now() - VERDICT_REUSE_DAYS * 24 * 60 * 60 * 1000);
+  const [row] = await db
+    .select()
+    .from(emailVerifications)
+    .where(and(eq(emailVerifications.email, email), isNotNull(emailVerifications.verdict), gt(emailVerifications.verifiedAt, since)))
+    .orderBy(desc(emailVerifications.verifiedAt))
+    .limit(1);
+  return row;
+}
+
+/**
+ * A BounceBan verification submitted earlier that had not finished when the
+ * caller gave up: polled by its id (free) instead of submitted (and paid) again.
+ * BounceBan keeps results 90 days; a day is plenty to resume.
+ */
+async function pendingBounceban(email: string): Promise<EmailVerification | undefined> {
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const [row] = await db
     .select()
     .from(emailVerifications)
     .where(
       and(
         eq(emailVerifications.email, email),
-        isNotNull(emailVerifications.verdict),
-        // A decisive verdict, or an `unknown` WE decided over the vendor's
-        // "no mail domain" invalid (decideVerdict): re-asking the vendor would
-        // pay again for the same wrong answer.
-        or(ne(emailVerifications.verdict, "unknown"), sql`${emailVerifications.rawResult}->>'status' = 'invalid'`),
+        eq(emailVerifications.verifier, SECOND_OPINION_VERIFIER),
+        isNull(emailVerifications.verdict),
+        sql`${emailVerifications.rawResult}->>'id' IS NOT NULL`,
+        sql`${emailVerifications.rawResult}->>'status' IN ('verifying', 'queue')`,
         gt(emailVerifications.verifiedAt, since)
       )
     )
@@ -251,43 +312,176 @@ async function callActorOnce(apifyToken: string, email: string, actorTimeoutS: n
   return { rows: parsed as Array<Record<string, unknown>>, httpStatus: res.status, error: null, durationMs };
 }
 
-/**
- * Verdict for one revealed address: reused when a decisive one is held,
- * otherwise verified now under the full cost protocol (provision → authorize
- * → execute → actualize, hold cancelled). Throws EmailVerificationError on any
- * failure — never returns an unverified address as deliverable.
- */
-export async function verifyRevealedEmail(rawEmail: string, ctx: VerificationContext): Promise<EmailVerificationResult> {
-  const email = normalizeEmail(rawEmail);
-  if (!email) throw new EmailVerificationError("empty email");
+// ─── treg verifiers (step-1 fallbacks, BounceBan step 2) ─────────────────────
 
-  const held = await latestDecisiveVerdict(email);
-  if (held) {
-    // A row stored before decideVerdict existed (or while the domain had no
-    // MX) carries the vendor's "no mail domain" invalid: re-check it now, free,
-    // so an old false invalid never blocks a send.
-    if (held.verdict === "invalid" && vendorClaimsNoMailDomain(held.rawResult)) return recheckHeldInvalid(held, email, ctx);
-    return toResult(held, true);
+interface TregKeys {
+  token: string;
+  org: string;
+}
+
+interface TregAnswer {
+  httpStatus: number | null;
+  body: Record<string, unknown> | null;
+  /** X-Treg-Cost-Micro; null when treg sent none. */
+  chargedMicro: number | null;
+  error: string | null;
+}
+
+async function tregCall(
+  keys: TregKeys,
+  endpoint: string,
+  req: { query?: Record<string, string>; body?: Record<string, unknown>; headers?: Record<string, string> },
+  timeoutMs: number
+): Promise<TregAnswer> {
+  let res: Response;
+  try {
+    const qs = req.query ? `?${new URLSearchParams(req.query).toString()}` : "";
+    res = await fetch(`${TREG_CALL_BASE}${endpoint}${qs}`, {
+      method: req.body ? "POST" : "GET",
+      // Our bronze table is the cache: a verification asked here is a live one.
+      headers: {
+        "X-Treg-Token": keys.token,
+        "X-Treg-Org": keys.org,
+        "Cache-Control": "no-cache",
+        ...(req.body ? { "Content-Type": "application/json" } : {}),
+        ...req.headers,
+      },
+      body: req.body ? JSON.stringify(req.body) : undefined,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (err) {
+    return { httpStatus: null, body: null, chargedMicro: null, error: `treg ${endpoint} unreachable: ${err instanceof Error ? err.message : String(err)}` };
   }
+  const text = await res.text();
+  let body: Record<string, unknown> | null = null;
+  try {
+    const parsed: unknown = text ? JSON.parse(text) : null;
+    body = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : { _raw: text.slice(0, 2000) };
+  } catch {
+    body = { _raw: text.slice(0, 2000) };
+  }
+  const header = res.headers.get("x-treg-cost-micro");
+  const charged = header === null || header.trim() === "" ? null : Number(header);
+  const chargedMicro = charged !== null && Number.isFinite(charged) && charged >= 0 ? charged : null;
+  if (!res.ok) {
+    // treg relays a provider's 4xx/5xx unchanged and charges nothing for it.
+    return { httpStatus: res.status, body, chargedMicro: chargedMicro ?? 0, error: `treg ${endpoint} responded ${res.status}: ${text.slice(0, 300)}` };
+  }
+  if (chargedMicro === null) {
+    return { httpStatus: res.status, body, chargedMicro: null, error: `treg ${endpoint} answered ${res.status} without X-Treg-Cost-Micro: the charge cannot be declared` };
+  }
+  return { httpStatus: res.status, body, chargedMicro, error: null };
+}
 
+/**
+ * A step-1 verifier's own word → our verdict (ContactOut `data.status`:
+ * `accept_all`; TryKitt `validity`; MillionVerifier `result`: `ok` /
+ * `catch_all`). Anything else is not a verdict.
+ */
+export function mapVerifierWord(status: unknown): EmailVerdict | null {
+  switch (typeof status === "string" ? status.trim().toLowerCase() : "") {
+    case "valid":
+    case "ok":
+    case "deliverable":
+      return "valid";
+    case "invalid":
+    case "undeliverable":
+      return "invalid";
+    case "accept_all":
+    case "catch_all":
+    case "catchall":
+      return "catch_all";
+    case "risky":
+    case "disposable":
+      return "risky";
+    case "unknown":
+    case "unverified":
+      return "unknown";
+    default:
+      return null;
+  }
+}
+
+/** BounceBan's `result` word → our verdict. `deliverable` on an accept-all domain is BounceBan's whole point: valid. */
+export function mapBounceBanResult(body: Record<string, unknown> | null): EmailVerdict | null {
+  const result = typeof body?.result === "string" ? body.result.trim().toLowerCase() : "";
+  switch (result) {
+    case "deliverable":
+      return "valid";
+    case "undeliverable":
+      return "invalid";
+    case "risky":
+      return body?.is_accept_all === true ? "catch_all" : "risky";
+    case "unknown":
+      return "unknown";
+    default:
+      return null;
+  }
+}
+
+function isBounceBanInProgress(body: Record<string, unknown> | null): boolean {
+  return typeof body?.status === "string" && BOUNCEBAN_IN_PROGRESS.has(body.status);
+}
+
+// ─── One metered vendor call ─────────────────────────────────────────────────
+
+/** What one vendor call left behind, before it is stored. */
+interface VendorOutcome {
+  verdict: EmailVerdict | null;
+  rawResult: object | null;
+  httpStatus: number | null;
+  error: string | null;
+  /** In the cost's unit; 0 = nothing billed. Declared as `actual` before anything else. */
+  charged: number;
+  durationMs: number;
+}
+
+interface VendorPlan {
+  verifier: Verifier;
+  taskName: string;
+  costName: string;
+  /** Worst case, held (and authorized on a platform key) before the call. */
+  holdQuantity: number;
+  /** key-service providers; the first one's keySource decides who pays. */
+  keyProviders: readonly string[];
+  description: string;
+}
+
+/**
+ * key → authorize (platform key) → run → PROVISION hold → EXECUTE → bronze row
+ * → ACTUALIZE what the vendor charged → hold cancelled → run closed. A VENDOR
+ * failure comes back as a stored row with `error` (the caller decides between
+ * a fallback and a loud failure); a failure of OUR side (key, billing, runs)
+ * throws EmailVerificationError.
+ */
+async function meteredVerification(
+  email: string,
+  ctx: VerificationContext,
+  plan: VendorPlan,
+  execute: (keys: string[]) => Promise<VendorOutcome>
+): Promise<EmailVerification> {
   const { identity, tracking } = ctx;
   if (!identity.userId) throw new EmailVerificationError("x-user-id is required to bill the verification");
 
-  let apifyToken: string;
-  let keySource: "org" | "platform";
-  try {
-    const resolved = await decryptKey(identity.orgId, identity.userId, "apify", { callerMethod: "POST", callerPath: "/verify-email" }, tracking);
-    if (!resolved.key) throw new Error("key-service returned an empty key");
-    apifyToken = resolved.key;
-    keySource = resolved.keySource;
-  } catch (err) {
-    throw new EmailVerificationError(`no usable "apify" key in key-service: ${err instanceof Error ? err.message : String(err)}`);
+  const keys: string[] = [];
+  let keySource: "org" | "platform" | undefined;
+  for (const provider of plan.keyProviders) {
+    try {
+      const resolved = await decryptKey(identity.orgId, identity.userId, provider, { callerMethod: "POST", callerPath: "/verify-email" }, tracking);
+      if (!resolved.key) throw new Error("key-service returned an empty key");
+      keys.push(resolved.key);
+      keySource ??= resolved.keySource;
+    } catch (err) {
+      throw new EmailVerificationError(`no usable "${provider}" key in key-service: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
+  const source = keySource!;
 
-  if (keySource === "platform") {
+  // A zero hold (resuming a BounceBan task already paid for: polling is free) needs neither.
+  if (source === "platform" && plan.holdQuantity > 0) {
     const auth = await authorizeCredit({
-      items: [{ costName: VERIFY_EMAIL_COST_NAME, quantity: 1 }],
-      description: "pre-serve email verification",
+      items: [{ costName: plan.costName, quantity: plan.holdQuantity }],
+      description: plan.description,
       orgId: identity.orgId,
       userId: identity.userId,
       runId: ctx.runId,
@@ -309,79 +503,49 @@ export async function verifyRevealedEmail(rawEmail: string, ctx: VerificationCon
     featureSlug: tracking.featureSlug,
     workflowSlug: tracking.workflowSlug,
     serviceName: "apollo-service",
-    taskName: "verify-email",
+    taskName: plan.taskName,
     parentRunId: ctx.runId,
   });
 
   let holdId: string | null = null;
   try {
-    const provisioned = await addCosts(
-      run.id,
-      [{ costName: VERIFY_EMAIL_COST_NAME, costSource: keySource, quantity: 1, status: "provisioned" }],
-      identity
-    );
-    holdId = provisioned.costs?.[0]?.id ?? null;
-    if (!holdId) throw new EmailVerificationError(`runs-service returned no cost id for the ${VERIFY_EMAIL_COST_NAME} hold`);
-
-    const call = await callActor(apifyToken, email);
-    const row = call.rows?.find((r) => typeof r.email === "string" && normalizeEmail(r.email) === email);
-    // BounceVerify charges only a DECISIVE result of ITS OWN; `unknown` is free.
-    const billed = !call.error && mapVerdict(row) !== "unknown";
-    let verdict: EmailVerdict | null = null;
-    let lookupError: string | null = null;
-    if (!call.error) {
-      try {
-        verdict = await decideVerdict(row, email);
-      } catch (err) {
-        if (!(err instanceof MailDomainLookupError)) throw err;
-        lookupError = err.message;
-      }
+    if (plan.holdQuantity > 0) {
+      const provisioned = await addCosts(run.id, [{ costName: plan.costName, costSource: source, quantity: plan.holdQuantity, status: "provisioned" }], identity);
+      holdId = provisioned.costs?.[0]?.id ?? null;
+      if (!holdId) throw new EmailVerificationError(`runs-service returned no cost id for the ${plan.costName} hold`);
     }
+
+    const outcome = await execute(keys);
 
     const [stored] = await db
       .insert(emailVerifications)
       .values({
         email,
-        verifier: VERIFIER,
-        verdict,
-        rawResult: (row ?? (call.rows ? { rows: call.rows } : null)) as object | null,
-        httpStatus: call.httpStatus,
-        error: call.error ?? lookupError,
+        verifier: plan.verifier,
+        verdict: outcome.verdict,
+        rawResult: outcome.rawResult,
+        httpStatus: outcome.httpStatus,
+        error: outcome.error,
         orgId: identity.orgId,
         userId: identity.userId,
         runId: ctx.runId,
         verifyRunId: run.id,
         source: ctx.source,
-        keySource,
-        billed,
-        durationMs: call.durationMs,
+        keySource: source,
+        billed: outcome.charged > 0,
+        costName: plan.costName,
+        costQuantity: outcome.charged,
+        durationMs: outcome.durationMs,
       })
       .returning();
 
-    if (call.error && looksLikeApifyCreditExhaustion(call.httpStatus, call.error)) {
-      reportProviderCreditsExhausted("apify", { ...identity, runId: ctx.runId }, {
-        operation: "bounceverify",
-        reason: "Apify refused the email-verification actor: the account's usage limit is reached",
-        upstreamStatus: call.httpStatus ?? undefined,
-        upstreamBody: call.error,
-      });
-      throw new EmailVerificationError(call.error, apifyCreditsExhausted());
+    if (outcome.charged > 0) {
+      await addCosts(run.id, [{ costName: plan.costName, costSource: source, quantity: outcome.charged, status: "actual" }], identity);
     }
-    if (lookupError) {
-      // The vendor answered (and charged); only our DNS check could not. Declare
-      // the charge, then fail loud: no verdict is better than a false one.
-      await addCosts(run.id, [{ costName: VERIFY_EMAIL_COST_NAME, costSource: keySource, quantity: 1, status: "actual" }], identity);
-      throw new EmailVerificationError(lookupError);
-    }
-    if (call.error || verdict === null) throw new EmailVerificationError(call.error ?? "no verdict");
-
-    if (billed) {
-      await addCosts(run.id, [{ costName: VERIFY_EMAIL_COST_NAME, costSource: keySource, quantity: 1, status: "actual" }], identity);
-    }
-    await updateCostStatus(run.id, holdId, "cancelled", identity);
+    if (holdId) await updateCostStatus(run.id, holdId, "cancelled", identity);
     holdId = null;
-    await updateRun(run.id, "completed", identity);
-    return toResult(stored, false);
+    await updateRun(run.id, outcome.error || outcome.verdict === null ? "failed" : "completed", identity);
+    return stored;
   } catch (err) {
     // Release the hold (nothing was bought) and fail the run, then surface the
     // ORIGINAL error. A cleanup failure is logged, never swallowed in its place.
@@ -396,19 +560,288 @@ export async function verifyRevealedEmail(rawEmail: string, ctx: VerificationCon
   }
 }
 
+function failLoud(row: EmailVerification, providerError?: ProviderErrorDetail): never {
+  throw new EmailVerificationError(`${row.verifier}: ${row.error ?? "no verdict"}`, providerError);
+}
+
+// ─── Step 1: the cheapest verifier that ANSWERS ──────────────────────────────
+
+/** A step-1 verifier reached through treg (its catalog endpoint, called directly). */
+interface TregStep {
+  verifier: string;
+  endpoint: string;
+  /** Held (and authorized on a platform key) before the call, in treg micro-USD. */
+  holdMicro: number;
+  request: (email: string) => { query?: Record<string, string>; body?: Record<string, unknown> };
+  /** The vendor's own word → verdict, or a vendor-reported error. */
+  read: (body: Record<string, unknown> | null) => { verdict: EmailVerdict | null; word: unknown; vendorError?: string | null };
+  timeoutMs: number;
+}
+
+/** Free under ContactOut's current terms (catalog 2026-10-17); answers `{data: {status}}`, often 429s. */
+export const CONTACTOUT_STEP: TregStep = {
+  verifier: "contactout",
+  endpoint: "contactout.people.email.verify",
+  holdMicro: 0,
+  request: (email) => ({ query: { email } }),
+  read: (body) => {
+    const word = (body?.data as { status?: unknown } | undefined)?.status;
+    return { verdict: mapVerifierWord(word), word };
+  },
+  timeoutMs: 30_000,
+};
+
+/** $0.0015 per completed verification, every result; `realtime: true` is required on treg (live 2026-10-17). */
+export const TRYKITT_STEP: TregStep = {
+  verifier: "trykitt",
+  endpoint: "trykitt.people.email.verify",
+  holdMicro: 2_000,
+  request: (email) => ({ body: { email, realtime: true } }),
+  read: (body) => ({ verdict: mapVerifierWord(body?.validity), word: body?.validity }),
+  timeoutMs: 60_000,
+};
+
+/** $0.00178 per success; answers `{result, error}` (live 2026-10-16). */
+export const MILLIONVERIFIER_STEP: TregStep = {
+  verifier: "millionverifier",
+  endpoint: "millionverifier.people.email.verify",
+  holdMicro: 2_000,
+  request: (email) => ({ query: { email, timeout: "20" } }),
+  read: (body) => ({
+    verdict: mapVerifierWord(body?.result),
+    word: body?.result,
+    vendorError: typeof body?.error === "string" && body.error.trim() ? body.error : null,
+  }),
+  timeoutMs: 45_000,
+};
+
+async function bounceVerifyPass(email: string, ctx: VerificationContext): Promise<EmailVerification> {
+  return meteredVerification(
+    email,
+    ctx,
+    { verifier: "bounceverify", taskName: "verify-email", costName: VERIFY_EMAIL_COST_NAME, holdQuantity: 1, keyProviders: ["apify"], description: "pre-serve email verification" },
+    async ([apifyToken]) => {
+      const call = await callActor(apifyToken, email);
+      const row = call.rows?.find((r) => typeof r.email === "string" && normalizeEmail(r.email) === email);
+      // BounceVerify charges only a DECISIVE result of ITS OWN; `unknown` is free.
+      const billed = !call.error && mapVerdict(row) !== "unknown";
+      let verdict: EmailVerdict | null = null;
+      let lookupError: string | null = null;
+      if (!call.error) {
+        try {
+          verdict = await decideVerdict(row, email);
+        } catch (err) {
+          if (!(err instanceof MailDomainLookupError)) throw err;
+          // The vendor answered (and charged); only our DNS check could not:
+          // no verdict is better than a false one, the charge is still declared.
+          lookupError = err.message;
+        }
+      }
+      return {
+        verdict,
+        rawResult: (row ?? (call.rows ? { rows: call.rows } : null)) as object | null,
+        httpStatus: call.httpStatus,
+        error: call.error ?? lookupError,
+        charged: billed ? 1 : 0,
+        durationMs: call.durationMs,
+      };
+    }
+  );
+}
+
+async function tregVerifierPass(email: string, ctx: VerificationContext, step: TregStep): Promise<EmailVerification> {
+  return meteredVerification(
+    email,
+    ctx,
+    {
+      verifier: step.verifier,
+      taskName: `verify-email-${step.verifier}`,
+      costName: TREG_COST_NAME,
+      holdQuantity: step.holdMicro,
+      keyProviders: ["treg", "treg-org"],
+      description: `pre-serve email verification (${step.verifier})`,
+    },
+    async ([token, org]) => {
+      const started = Date.now();
+      const answer = await tregCall({ token, org }, step.endpoint, step.request(email), step.timeoutMs);
+      let error = answer.error;
+      let verdict: EmailVerdict | null = null;
+      if (!error) {
+        const read = step.read(answer.body);
+        if (read.vendorError) error = `${step.verifier}: ${read.vendorError}`;
+        else if (read.verdict === null) error = `${step.verifier} returned no known verdict (${JSON.stringify(read.word)})`;
+        else verdict = read.verdict;
+      }
+      return { verdict, rawResult: answer.body, httpStatus: answer.httpStatus, error, charged: answer.chargedMicro ?? 0, durationMs: Date.now() - started };
+    }
+  );
+}
+
+async function bounceBanPass(email: string, ctx: VerificationContext, resumeId: string | null): Promise<EmailVerification> {
+  return meteredVerification(
+    email,
+    ctx,
+    {
+      verifier: SECOND_OPINION_VERIFIER,
+      taskName: "verify-email-bounceban",
+      costName: TREG_COST_NAME,
+      // Resuming an earlier submission only polls (free); a submission is paid.
+      holdQuantity: resumeId ? 0 : BOUNCEBAN_MAX_COST_MICRO,
+      keyProviders: ["treg", "treg-org"],
+      description: "pre-serve email verification (BounceBan second opinion)",
+    },
+    async ([token, org]) => {
+      const keys = { token, org };
+      const started = Date.now();
+      let charged = 0;
+      let answer: TregAnswer;
+      if (resumeId) {
+        answer = await tregCall(keys, BOUNCEBAN_STATUS_ENDPOINT, { query: { id: resumeId } }, BOUNCEBAN_CALL_TIMEOUT_MS);
+      } else {
+        answer = await tregCall(keys, BOUNCEBAN_ENDPOINT, { query: { email, mode: "regular" } }, BOUNCEBAN_CALL_TIMEOUT_MS);
+      }
+      charged += answer.chargedMicro ?? 0;
+      // BounceBan answers `verifying` / `queue` when it needs longer than its
+      // 15s wait (the charge is already final, treg says so); poll the status
+      // endpoint (free) by the task id.
+      const taskId = typeof answer.body?.id === "string" ? answer.body.id : resumeId;
+      while (!answer.error && isBounceBanInProgress(answer.body) && taskId && Date.now() - started < BOUNCEBAN_POLL_BUDGET_MS) {
+        await new Promise((resolve) => setTimeout(resolve, BOUNCEBAN_POLL_INTERVAL_MS));
+        const polled = await tregCall(keys, BOUNCEBAN_STATUS_ENDPOINT, { query: { id: taskId } }, BOUNCEBAN_CALL_TIMEOUT_MS);
+        charged += polled.chargedMicro ?? 0;
+        // A failed poll keeps the submission's body (and its id) so a later ask resumes it.
+        if (polled.error) {
+          answer = { ...polled, body: answer.body };
+          break;
+        }
+        answer = polled;
+      }
+      let error = answer.error;
+      let verdict: EmailVerdict | null = null;
+      if (!error) {
+        if (isBounceBanInProgress(answer.body)) {
+          error = `bounceban still ${String(answer.body?.status)} after ${Math.round((Date.now() - started) / 1000)}s (task ${taskId}); the next ask resumes it`;
+        } else if (answer.body?.status !== "success") {
+          error = `bounceban task ended with status ${JSON.stringify(answer.body?.status)}`;
+        } else {
+          verdict = mapBounceBanResult(answer.body);
+          if (verdict === null) error = `bounceban returned no known result (${JSON.stringify(answer.body?.result)})`;
+        }
+      }
+      return { verdict, rawResult: answer.body, httpStatus: answer.httpStatus, error, charged, durationMs: Date.now() - started };
+    }
+  );
+}
+
+// ─── Apify out of usage → skipped for a while ────────────────────────────────
+
+let apifyOutUntil = 0;
+
+/** Tests only. */
+export function resetApifyFallback(): void {
+  apifyOutUntil = 0;
+}
+
+export function apifyOut(now: number = Date.now()): boolean {
+  return now < apifyOutUntil;
+}
+
+/** Step 1, in price order. Each one is tried only when the previous one FAILED to answer. */
+export const STEP_ONE_ORDER = ["contactout", "bounceverify", "trykitt", "millionverifier"] as const;
+
+/**
+ * STEP 1 — ONE verdict, from the cheapest verifier that ANSWERS (owner,
+ * 2026-10-16: « Les 4 ne sont que des fallback de la même étape 1. Dès qu'on a
+ * un résultat, soit on garde, soit on passe à l'étape 2 (BounceBan) »):
+ * ContactOut (free) → BounceVerify ($0.00089) → TryKitt ($0.0015) →
+ * MillionVerifier ($0.00178). The next one is asked ONLY when a verifier fails
+ * to answer (429, out of credit, timeout, error); any verdict, `unknown`
+ * included, ends step 1. Every attempt is a bronze row with its own spend.
+ * After an Apify exhaustion answer, BounceVerify is skipped for
+ * APIFY_OUT_RETRY_MS (staff emailed once), then asked again. Every verifier
+ * failing → loud, never a verdict.
+ */
+async function stepOne(email: string, ctx: VerificationContext): Promise<EmailVerification> {
+  const failures: string[] = [];
+  for (const verifier of STEP_ONE_ORDER) {
+    let row: EmailVerification;
+    if (verifier === "bounceverify") {
+      if (apifyOut()) {
+        failures.push("bounceverify: skipped, Apify out of usage");
+        continue;
+      }
+      row = await bounceVerifyPass(email, ctx);
+      if (row.error && looksLikeApifyCreditExhaustion(row.httpStatus, row.error)) {
+        reportProviderCreditsExhausted("apify", { ...ctx.identity, runId: ctx.runId }, {
+          operation: "bounceverify",
+          reason: "Apify refused the email-verification actor: the account's usage limit is reached (TryKitt / MillionVerifier verify instead)",
+          upstreamStatus: row.httpStatus ?? undefined,
+          upstreamBody: row.error,
+        });
+        apifyOutUntil = Date.now() + APIFY_OUT_RETRY_MS;
+        console.warn(`[Apollo Service] verify_email.apify_out skipped for ${APIFY_OUT_RETRY_MS / 60000}min`);
+      }
+    } else {
+      row = await tregVerifierPass(email, ctx, verifier === "contactout" ? CONTACTOUT_STEP : verifier === "trykitt" ? TRYKITT_STEP : MILLIONVERIFIER_STEP);
+    }
+    if (!row.error && row.verdict !== null) return row;
+    failures.push(`${row.verifier}: ${row.error ?? "no verdict"}`);
+    console.warn(`[Apollo Service] verify_email.step1_failed verifier=${row.verifier} next=${STEP_ONE_ORDER[STEP_ONE_ORDER.indexOf(verifier) + 1] ?? "none"} error=${(row.error ?? "").slice(0, 200)}`);
+  }
+  throw new EmailVerificationError(`every step-1 verifier failed — ${failures.join("; ")}`, apifyOut() ? apifyCreditsExhausted() : undefined);
+}
+
+/** STEP 2 — BounceBan decides a step-1 catch_all / unknown. A failure is loud: the step-1 verdict alone is never served. */
+async function secondOpinion(email: string, ctx: VerificationContext): Promise<EmailVerificationResult> {
+  // An earlier BounceBan task still running for this address is resumed (polled, free), not paid again.
+  const pending = await pendingBounceban(email);
+  const row = await bounceBanPass(email, ctx, pending ? String((pending.rawResult as { id: string }).id) : null);
+  if (row.error || row.verdict === null) failLoud(row);
+  return toResult(row, false);
+}
+
+/**
+ * Verdict for one revealed address. A held FINAL verdict is reused; otherwise
+ * step 1 runs (the cheapest verifier that answers) and
+ * a step-1 catch_all / unknown goes to BounceBan, whose verdict decides.
+ * Every vendor call runs the full cost protocol (provision → authorize →
+ * execute → actualize, hold cancelled). Throws EmailVerificationError on any
+ * failure — never returns an unverified address as deliverable.
+ */
+export async function verifyRevealedEmail(rawEmail: string, ctx: VerificationContext): Promise<EmailVerificationResult> {
+  const email = normalizeEmail(rawEmail);
+  if (!email) throw new EmailVerificationError("empty email");
+
+  let first = await latestHeldVerdict(email);
+  if (first) {
+    // A row stored before decideVerdict existed (or while the domain had no
+    // MX) carries the vendor's "no mail domain" invalid: re-check it now, free,
+    // so an old false invalid never blocks a send.
+    if (first.verifier === "bounceverify" && first.verdict === "invalid" && vendorClaimsNoMailDomain(first.rawResult)) {
+      first = await recheckHeldInvalid(first, email, ctx);
+    }
+    if (!needsSecondOpinion(first)) return toResult(first, true);
+  } else {
+    first = await stepOne(email, ctx);
+    if (!needsSecondOpinion(first)) return toResult(first, false);
+  }
+  return secondOpinion(email, ctx);
+}
+
 /**
  * A held "no mail domain" invalid, re-judged against today's DNS. MX found →
  * a NEW bronze row with verdict `unknown` (same vendor row, nothing called,
- * nothing billed), which later asks reuse. No MX → the held invalid stands.
+ * nothing billed), which then goes to the second opinion. No MX → the held
+ * invalid stands.
  */
-async function recheckHeldInvalid(held: EmailVerification, email: string, ctx: VerificationContext): Promise<EmailVerificationResult> {
+async function recheckHeldInvalid(held: EmailVerification, email: string, ctx: VerificationContext): Promise<EmailVerification> {
   let hasMx: boolean;
   try {
     hasMx = await domainHasMx(email.split("@")[1] ?? "");
   } catch (err) {
     throw new EmailVerificationError(err instanceof Error ? err.message : String(err));
   }
-  if (!hasMx) return toResult(held, true);
+  if (!hasMx) return held;
   const [corrected] = await db
     .insert(emailVerifications)
     .values({
@@ -429,7 +862,7 @@ async function recheckHeldInvalid(held: EmailVerification, email: string, ctx: V
     })
     .returning();
   console.warn(`[Apollo Service] verify_email.dne_overruled email=${email} held=${held.id} corrected=${corrected.id}`);
-  return toResult(corrected, true);
+  return corrected;
 }
 
 /** Most addresses one batch call may carry. A slice of a paced release is far smaller. */
