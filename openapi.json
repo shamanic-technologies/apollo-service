@@ -8641,6 +8641,16 @@
               }
             }
           },
+          "413": {
+            "description": "Body over the 5mb limit of this route (5000 served leads is ~1.25 MB)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Internal server error (DB or runs-service unreachable)",
             "content": {

@@ -1077,6 +1077,10 @@ campaign. features-service prices workflows from runs, so it read 11x ROI.
   `servedAt`, `apolloPersonId` and/or `email`, ≤5000 per call, any mix of
   campaigns): serves are lead-service's fact, never reconstructed here
   (`apollo_people_searches` holds teasers OFFERED, ~20x the served set).
+- **Its own 5mb JSON limit** (`src/lib/body-limits.ts`, mounted before the
+  100kb default every other route keeps): 5000 leads ≈ 1.25 MB. A body over a
+  limit is a named 413 `{type:"validation"}`, never the fallback 500 (prod
+  2026-10-17: batches of 536/770/5,100 leads all 500'd on the 100kb default).
 - **Acquisitions = every PAID row of that person in our tables, any org**:
   `apollo_people_enrichments.enrichment_run_id` (reveal), `email_findings.find_run_id`
   (treg/Explee), `email_verifications.verify_run_id` where `billed`. Matched by
