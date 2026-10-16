@@ -527,13 +527,50 @@ pre-serve verification moved here from human-service. `/enrich`, `/match` and
   delivered prod addresses: valid 3/36, catch_all 41/46, unknown 32/15,
   invalid 24/3. The PERSON still comes back when not deliverable, so a
   consumer can suppress them (the reveal credit is spent; never re-reveal).
-- **Verifier: BounceVerify Apify actor** (`bounceverify~bounceverify-email-verifier`,
-  run-sync, ~3s), key-service `apify` key, cost `apify-bounceverify-email`,
-  billed only on a DECISIVE verdict (`unknown` is free). Provision → authorize
-  → execute → actualize, hold cancelled — `src/lib/email-verification.ts`.
-- **Bronze = `email_verifications`**, one row per call, actor row verbatim,
-  failures included. A decisive verdict under `VERDICT_REUSE_DAYS` (30) is
-  REUSED (`reused: true`, nothing billed) — cache hits reuse it too.
+- **TWO STEPS, owner's rule (2026-10-16, verbatim: « Les 4 ne sont que des
+  fallback de la même étape 1. Dès qu'on a un résultat, soit on garde, soit on
+  passe à l'étape 2 (BounceBan) si c'est un unknown », then « I meant catchall
+  or unknown »).** `src/lib/email-verification.ts`.
+  - **Step 1 = ONE verdict from the cheapest verifier that ANSWERS**, in price
+    order: ContactOut (treg, free, often 429) → BounceVerify (Apify actor
+    `bounceverify~bounceverify-email-verifier`, key `apify`, cost
+    `apify-bounceverify-email`, billed only on a DECISIVE verdict) → TryKitt
+    (treg, $0.0015, body needs `realtime: true`) → MillionVerifier (treg,
+    $0.00178). The NEXT one is asked ONLY when a verifier FAILS to answer (429,
+    out of credit, timeout, error, unreadable word). Any verdict, `unknown`
+    included, ends step 1 — do NOT walk on to a dearer verifier on an unknown.
+    Every one failing = loud 502 (with `providerError` apify when Apify is out).
+  - **Step 2: a step-1 `catch_all` or `unknown` → BounceBan** (treg
+    `bounceban.people.email.verify`, $0.004 charged at submission), whose
+    verdict DECIDES. valid / invalid / risky from step 1 are kept. BounceBan
+    may answer `verifying`: polled free (`.status?id=`) every 10s for 90s; still
+    running = loud, and the next ask RESUMES that task (pending bronze row with
+    `raw_result.id`) instead of paying again. A BounceBan failure is loud: a
+    step-1 catch_all/unknown is NEVER served alone. Why: ~4,700 of 5,079
+    BounceVerify unknowns in 30 days were blocks on its own probing IP; on a
+    live sample BounceBan called 8 of 10 of them deliverable and agreed 100%
+    on valid/invalid (2026-10-16).
+  - **Apify out of usage** (`looksLikeApifyCreditExhaustion`): staff email as
+    before, then BounceVerify is SKIPPED for `APIFY_OUT_RETRY_MS` (1h, in
+    memory) and step 1 goes on to TryKitt; asked again after, so recovery is
+    automatic. 2026-10-16 15:12 UTC: 431 verifications failed on the 403.
+  - **Spend per vendor call**: each call is its own child run
+    (`verify-email` for BounceVerify, `verify-email-<vendor>` for treg ones)
+    with PROVISION → AUTHORIZE (platform key, skipped for a zero hold:
+    ContactOut, a BounceBan resume) → EXECUTE → ACTUALIZE treg's own
+    `X-Treg-Cost-Micro` as `treg-micro-usd` → hold cancelled. The bronze row
+    carries `cost_name` + `cost_quantity` (migration 0041); the hold
+    reconciler replaces a stranded treg hold with that recorded charge.
+  - `verifier` on the response / bronze row names WHO decided:
+    contactout | bounceverify | trykitt | millionverifier | bounceban.
+- **Bronze = `email_verifications`**, one row per vendor call, vendor's raw
+  answer verbatim, failures included. Reuse: the latest verdict under
+  `VERDICT_REUSE_DAYS` (30), any verifier, is reused when FINAL (a BounceBan
+  row, or a step-1 valid/invalid/risky); a held step-1 catch_all/unknown is
+  reused as step 1 and only BounceBan runs. Cache hits reuse it too.
+- **Reveal domain gate reads FINAL verdicts only**: a step-1 catch_all/unknown
+  no longer marks a domain bad (BounceBan confirms mailboxes on exactly those
+  domains); a gate probe goes through both steps like any verification.
 - **Fail loud: 502 `{type:"email_verification"}`.** Never an unverified email
   labelled deliverable. The reveal / finding is already stored, so a retry is
   a cache hit that re-runs only the verification.

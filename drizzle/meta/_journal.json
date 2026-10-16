@@ -288,6 +288,13 @@
       "when": 1780876800000,
       "tag": "0040_email_verifications_seq",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1780963200000,
+      "tag": "0041_email_verifications_cost",
+      "breakpoints": true
     }
   ]
 }

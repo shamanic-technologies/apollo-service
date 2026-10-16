@@ -77,7 +77,14 @@ beforeEach(() => {
   mockUpdateCostStatus.mockResolvedValue({});
   mockAuthorizeCredit.mockResolvedValue({ sufficient: true, balance_cents: 100, required_cents: 1 });
   mockDecryptKey.mockResolvedValue({ key: "apify-token", keySource: "platform" });
-  fetchMock.mockImplementation(async (_url: string, init: any) => actorFor(init));
+  fetchMock.mockImplementation(async (url: string, init: any) =>
+    String(url).includes("contactout")
+      ? new Response("<html>Too Many Requests</html>", { status: 429, headers: { "x-treg-cost-micro": "0" } })
+      : String(url).includes("bounceban")
+      ? // BounceBan's second opinion on the catch_all: still accept-all, can't confirm.
+        new Response(JSON.stringify({ id: "bb-1", status: "success", result: "risky", is_accept_all: true }), { status: 200, headers: { "x-treg-cost-micro": "4000" } })
+      : actorFor(init)
+  );
   vi.stubGlobal("fetch", fetchMock);
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -96,9 +103,11 @@ describe("POST /email-verifications", () => {
       ["bad@example.com", "invalid", false],
       ["all@example.com", "catch_all", false],
     ]);
-    // duplicate verified once
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(inserted.map((r) => r.source)).toEqual(["verify:transactional-email-service", "verify:transactional-email-service", "verify:transactional-email-service"]);
+    // duplicate verified once (ContactOut 429 → BounceVerify); the catch_all got BounceBan's opinion
+    expect(fetchMock.mock.calls.filter(([u]) => String(u).includes("api.apify.com"))).toHaveLength(3);
+    expect(fetchMock.mock.calls.filter(([u]) => String(u).includes("bounceban"))).toHaveLength(1);
+    expect(inserted).toHaveLength(7);
+    expect(inserted.every((r) => r.source === "verify:transactional-email-service")).toBe(true);
     expect(inserted.every((r) => r.orgId === "org-1" && r.runId === "run-1")).toBe(true);
     expect(mockCreateRun).toHaveBeenCalledWith(expect.objectContaining({ orgId: "org-1", userId: "user-1", parentRunId: "run-1", taskName: "verify-email", brandIds: ["b-1"] }));
     expect(mockAuthorizeCredit).toHaveBeenCalledWith(expect.objectContaining({ orgId: "org-1", items: [{ costName: "apify-bounceverify-email", quantity: 1 }] }));
@@ -128,7 +137,8 @@ describe("POST /email-verifications", () => {
     const app = await buildApp();
     const res = await request(app).post("/email-verifications").set(HEADERS).send({ emails: ["good@example.com"] });
     expect(res.status).toBe(502);
-    expect(fetchMock).not.toHaveBeenCalled();
+    // Only the free ContactOut was asked; nothing paid was called.
+    expect(fetchMock.mock.calls.filter(([u]) => !String(u).includes("contactout"))).toHaveLength(0);
   });
 
   it("400s without x-run-id, on an empty list, and above the batch ceiling", async () => {

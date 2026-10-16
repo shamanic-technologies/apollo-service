@@ -56,6 +56,8 @@ export interface HoldEvidence {
   ageMs: number;
   /** verify-email: our bronze row for this run says BounceVerify billed. */
   verificationBilled?: boolean;
+  /** verify-email-<treg vendor>: the charge our bronze row recorded for this run (treg micro-USD), null when none. */
+  verificationCharged?: number | null;
   /** email-find: the largest charge the vendor reported on this run's calls, in the cost's unit. */
   findCharged?: number | null;
   /** phone-reveal: the reveal row holding this hold, if any. */
@@ -88,6 +90,12 @@ export function decideHold(hold: Pick<CostHold, "costId" | "costName">, ev: Hold
     return ev.verificationBilled
       ? { kind: "actualize", reason: "BounceVerify returned a decisive (billed) verdict" }
       : { kind: "cancel", reason: "no billed BounceVerify verdict for this run" };
+  }
+
+  if (ev.runTaskName.startsWith("verify-email-")) {
+    return ev.verificationCharged && ev.verificationCharged > 0
+      ? { kind: "replace", quantity: ev.verificationCharged, reason: `treg reported a charge of ${ev.verificationCharged} for the verification` }
+      : { kind: "cancel", reason: "no charge recorded for this verification run" };
   }
 
   if (ev.runTaskName.startsWith("email-find-")) {
@@ -125,6 +133,13 @@ async function gatherEvidence(hold: CostHold, taskName: string, runCosts: RunCos
       .where(and(eq(emailVerifications.verifyRunId, hold.runId), eq(emailVerifications.billed, true)))
       .limit(1);
     ev.verificationBilled = !!row;
+  } else if (taskName.startsWith("verify-email-")) {
+    const [row] = await db
+      .select({ charged: emailVerifications.costQuantity })
+      .from(emailVerifications)
+      .where(and(eq(emailVerifications.verifyRunId, hold.runId), gt(emailVerifications.costQuantity, 0)))
+      .limit(1);
+    ev.verificationCharged = row?.charged ?? null;
   } else if (taskName.startsWith("email-find-")) {
     const [row] = await db
       .select({ charged: emailFinderCalls.chargedQuantity })
