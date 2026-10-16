@@ -26,7 +26,8 @@ import { toApolloSearchParams } from "../lib/transform.js";
 import { apolloOrganizations } from "../db/schema.js";
 import { advisoryXactLock } from "../lib/advisory-lock.js";
 import { createRun, updateRun, addCosts, updateCostStatus, type IdentityHeaders } from "../lib/runs-client.js";
-import { authorizeCredit } from "../lib/billing-client.js";
+import { authorizeCredit, type AuthorizeCreditResult } from "../lib/billing-client.js";
+import { creditRefusalBody } from "../lib/credit-refusal.js";
 import { assertKeySource } from "../lib/validators.js";
 import { toCreditAlertIdentity } from "../lib/credit-alert.js";
 import { SuggestFromSegmentRequestSchema, ApolloNativeSearchFiltersSchema, AudienceCompaniesQuerySchema } from "../schemas.js";
@@ -272,7 +273,7 @@ router.get("/audiences/:apolloAudienceId/preview", serviceAuth, async (req: Auth
 
 type EnrichOutcome =
   | { kind: "ok"; orgs: Map<string, ApolloOrganization>; creditsCharged: number }
-  | { kind: "insufficient"; balance_cents: number; required_cents: number };
+  | { kind: "insufficient"; auth: AuthorizeCreditResult };
 
 /**
  * The full organization record for each id: served from the global cache when
@@ -351,7 +352,7 @@ async function enrichOrganizations(args: {
       });
       if (!auth.sufficient) {
         await releaseHold("failed");
-        return { kind: "insufficient" as const, balance_cents: auth.balance_cents, required_cents: auth.required_cents };
+        return { kind: "insufficient" as const, auth };
       }
     }
 
@@ -469,12 +470,7 @@ router.get("/audiences/:apolloAudienceId/companies", serviceAuth, async (req: Au
 
     const enriched = await enrichOrganizations({ ids, domains, audienceRowId: row.id, apolloApiKey, keySource, identity, runId: req.runId, req });
     if (enriched.kind === "insufficient") {
-      return res.status(402).json({
-        type: "credit_insufficient",
-        error: "Insufficient credits",
-        balance_cents: enriched.balance_cents,
-        required_cents: enriched.required_cents,
-      });
+      return res.status(402).json(creditRefusalBody(enriched.auth));
     }
 
     const companies = chunk.map((e, i) => {

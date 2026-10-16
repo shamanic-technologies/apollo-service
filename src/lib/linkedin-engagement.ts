@@ -45,7 +45,8 @@ import {
   linkedinTregCalls,
 } from "../db/schema.js";
 import { advisoryXactLock } from "./advisory-lock.js";
-import { authorizeCredit } from "./billing-client.js";
+import { authorizeCredit, type AuthorizeCreditResult } from "./billing-client.js";
+import { describeCreditRefusal } from "./credit-refusal.js";
 import { decryptKey, type TrackingContext } from "./keys-client.js";
 import { addCosts, createRun, updateCostStatus, updateRun, type IdentityHeaders } from "./runs-client.js";
 import { assertKeySource } from "./validators.js";
@@ -141,9 +142,14 @@ export class LinkedinTregTransientError extends Error {
 }
 
 export class LinkedinEngagementInsufficientCreditError extends Error {
-  constructor(public readonly balanceCents: number, public readonly requiredCents: number) {
-    super("Insufficient credits to read LinkedIn engagement");
+  readonly balanceCents: number;
+  readonly requiredCents: number;
+  /** billing's refusal, verbatim: `reason` set = a sales funnel max budget, not the balance. */
+  constructor(readonly auth: AuthorizeCreditResult) {
+    super(auth.reason ? describeCreditRefusal(auth) : "Insufficient credits to read LinkedIn engagement");
     this.name = "LinkedinEngagementInsufficientCreditError";
+    this.balanceCents = auth.balance_cents;
+    this.requiredCents = auth.required_cents;
   }
 }
 
@@ -329,7 +335,7 @@ export class EngagementMeter {
       });
       if (!auth.sufficient) {
         await updateCostStatus(runId, holdId, "cancelled", identity);
-        throw new LinkedinEngagementInsufficientCreditError(auth.balance_cents, auth.required_cents);
+        throw new LinkedinEngagementInsufficientCreditError(auth);
       }
     }
 

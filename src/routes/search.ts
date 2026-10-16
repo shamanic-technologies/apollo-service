@@ -16,12 +16,14 @@ import { advisoryXactLock, enrichLockKey } from "../lib/advisory-lock.js";
 import { decryptKey } from "../lib/keys-client.js";
 import { createRun, updateRun, addCosts, failOpenRun, type IdentityHeaders } from "../lib/runs-client.js";
 import { authorizeCredit } from "../lib/billing-client.js";
+import { creditRefusalBody } from "../lib/credit-refusal.js";
 import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment, toApolloSearchParams } from "../lib/transform.js";
 import { assertKeySource } from "../lib/validators.js";
 import { SearchNextRequestSchema, SearchDryRunRequestSchema, EnrichRequestSchema, StatsRequestSchema, ApolloNativeSearchFiltersSchema } from "../schemas.js";
 import { buildFiltersPrompt, computeFiltersPromptVersion, APOLLO_UNDOCUMENTED_FILTERS_ENCART } from "../lib/filters-prompt.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { verificationFor, EmailVerificationError } from "../lib/email-verification.js";
+import { emailVerificationErrorResponse } from "../lib/email-verification-response.js";
 import { toCreditAlertIdentity } from "../lib/credit-alert.js";
 import { planQuickenrich, parseQuickenrichPersonId, quickenrichToPerson, canonicalLinkedinUrl } from "../lib/quickenrich.js";
 import { findQuickenrichAudience, serveQuickenrichPage, loadQuickenrichPerson } from "../lib/quickenrich-serve.js";
@@ -381,12 +383,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
         workflowSlug,
       });
       if (!auth.sufficient) {
-        return res.status(402).json({
-          type: "credit_insufficient",
-          error: "Insufficient credits",
-          balance_cents: auth.balance_cents,
-          required_cents: auth.required_cents,
-        });
+        return res.status(402).json(creditRefusalBody(auth));
       }
     }
 
@@ -504,13 +501,14 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       traceEvent(req.runId, { service: "apollo-service", event: "enrich-error", detail: error instanceof Error ? error.message : "Unknown error", level: "error" }, req.headers).catch(() => {});
     }
     if (error instanceof EmailVerificationError) {
-      return res.status(502).json({ type: "email_verification", source: "email-verification", error: error.message, ...providerErrorFields(error) });
+      const answer = emailVerificationErrorResponse(error);
+      return res.status(answer.status).json(answer.body);
     }
     if (error instanceof BuyingSignalInsufficientCreditError) {
-      return res.status(402).json({ type: "credit_insufficient", source: "buying-signal", error: error.message, balance_cents: error.balanceCents, required_cents: error.requiredCents });
+      return res.status(402).json({ ...creditRefusalBody(error.auth), source: "buying-signal", error: error.message });
     }
     if (error instanceof LinkedinEngagementInsufficientCreditError) {
-      return res.status(402).json({ type: "credit_insufficient", source: "linkedin-engagement", error: error.message, balance_cents: error.balanceCents, required_cents: error.requiredCents });
+      return res.status(402).json({ ...creditRefusalBody(error.auth), source: "linkedin-engagement", error: error.message });
     }
     if (error instanceof BuyingSignalConflictError) {
       return res.status(400).json({ type: "validation", error: error.message, fields: error.fields });
@@ -890,7 +888,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
       traceEvent(req.runId, { service: "apollo-service", event: "search-next-error", detail: error instanceof Error ? error.message : "Unknown error", level: "error" }, req.headers).catch(() => {});
     }
     if (error instanceof LinkedinEngagementInsufficientCreditError) {
-      return res.status(402).json({ type: "credit_insufficient", source: "linkedin-engagement", error: error.message, balance_cents: error.balanceCents, required_cents: error.requiredCents });
+      return res.status(402).json({ ...creditRefusalBody(error.auth), source: "linkedin-engagement", error: error.message });
     }
     if (error instanceof LinkedinCompetitorPagesUnreadableError) {
       return res.status(error.permanent ? 422 : 502).json({ type: "competitor_pages_unreadable", source: "linkedin-engagement", error: error.message, pages: error.pages, retryable: !error.permanent });

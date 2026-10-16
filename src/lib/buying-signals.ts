@@ -38,7 +38,8 @@ import { advisoryXactLock } from "./advisory-lock.js";
 import { decryptKey } from "./keys-client.js";
 import { assertKeySource } from "./validators.js";
 import { addCosts, createRun, updateCostStatus, updateRun, type IdentityHeaders } from "./runs-client.js";
-import { authorizeCredit } from "./billing-client.js";
+import { authorizeCredit, type AuthorizeCreditResult } from "./billing-client.js";
+import { describeCreditRefusal } from "./credit-refusal.js";
 import type { CreditAlertIdentity } from "./credit-alert.js";
 
 export interface BuyingSignalEvidence {
@@ -54,9 +55,14 @@ export const JOB_POSTINGS_CACHE_DAYS = 7;
 const JOB_CHANGE_MONTH_SLACK_DAYS = 31;
 
 export class BuyingSignalInsufficientCreditError extends Error {
-  constructor(public readonly balanceCents: number, public readonly requiredCents: number) {
-    super("Insufficient credits to buy buying-signal evidence");
+  readonly balanceCents: number;
+  readonly requiredCents: number;
+  /** billing's refusal, verbatim: `reason` set = a sales funnel max budget, not the balance. */
+  constructor(readonly auth: AuthorizeCreditResult) {
+    super(auth.reason ? describeCreditRefusal(auth) : "Insufficient credits to buy buying-signal evidence");
     this.name = "BuyingSignalInsufficientCreditError";
+    this.balanceCents = auth.balance_cents;
+    this.requiredCents = auth.required_cents;
   }
 }
 
@@ -375,7 +381,7 @@ async function loadJobPostings(apolloOrganizationId: string, ctx: EvidenceContex
       });
       if (!auth.sufficient) {
         await releaseHold("failed");
-        throw new BuyingSignalInsufficientCreditError(auth.balance_cents, auth.required_cents);
+        throw new BuyingSignalInsufficientCreditError(auth);
       }
     }
 
