@@ -15,7 +15,15 @@ const KEY = "unit-test-apollo-key";
 process.env.APOLLO_SERVICE_API_KEY = KEY;
 
 import routes from "../../src/routes/acquisition-costs.js";
-import { attributeAcquisitions } from "../../src/lib/acquisition-costs.js";
+import {
+  attributeAcquisitions,
+  priceRuns,
+  mapWithConcurrency,
+  __resetRunCostCache,
+  RUNS_BATCH_CHUNK,
+  RUNS_BATCH_CONCURRENCY,
+  type AcquisitionRow,
+} from "../../src/lib/acquisition-costs.js";
 import type { BatchRunCost } from "../../src/lib/runs-client.js";
 
 const ORG = "308f528f-03ad-44b1-9cbc-623a6af9ba0e";
@@ -127,5 +135,100 @@ describe("POST /internal/acquisition-costs", () => {
       { campaignId: SERVING, servedLeads: 2, reusedLeads: 1, earlierAcquisitionCostInUsdCents: "8.8000000000", paidByOtherOrgsCostInUsdCents: "0.0000000000" },
     ]);
     expect(res.body.people[0].ref).toBe("a");
+  });
+});
+
+describe("priceRuns (chunked, bounded concurrency, cached)", () => {
+  const runId = (n: number) => `00000000-0000-4000-8000-${n.toString(16).padStart(12, "0")}`;
+  const rowsFor = (orgId: string, from: number, count: number): AcquisitionRow[] =>
+    Array.from({ length: count }, (_, i) => ({ idx: i, kind: "apollo_reveal" as const, runId: runId(from + i), orgId }));
+
+  beforeEach(() => {
+    mockRunsBatch.mockReset();
+    __resetRunCostCache();
+  });
+
+  it("dedupes ids, splits each org into chunks, never more than the limit in flight", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    mockRunsBatch.mockImplementation(async (_org: string, ids: string[]) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight -= 1;
+      return ids.map((id) => run(id, EARLIER, "2026-09-01T00:00:00Z", "1"));
+    });
+    const big = rowsFor(ORG, 1, RUNS_BATCH_CHUNK * 5 + 7);
+    const rows = [...big, ...big.slice(0, 100), ...rowsFor(OTHER_ORG, 100_000, 3)];
+    const out = await priceRuns(rows);
+
+    expect(out.size).toBe(RUNS_BATCH_CHUNK * 5 + 7 + 3);
+    expect(mockRunsBatch).toHaveBeenCalledTimes(6 + 1);
+    for (const [org, ids] of mockRunsBatch.mock.calls as Array<[string, string[]]>) {
+      expect(ids.length).toBeLessThanOrEqual(RUNS_BATCH_CHUNK);
+      expect(new Set(ids).size).toBe(ids.length);
+      expect([ORG, OTHER_ORG]).toContain(org);
+    }
+    expect(peak).toBe(RUNS_BATCH_CONCURRENCY);
+  });
+
+  it("a run priced recently is not asked again", async () => {
+    mockRunsBatch.mockImplementation(async (_org: string, ids: string[]) => ids.map((id) => run(id, EARLIER, "2026-09-01T00:00:00Z", "2")));
+    await priceRuns(rowsFor(ORG, 1, 10));
+    mockRunsBatch.mockClear();
+    const out = await priceRuns(rowsFor(ORG, 1, 12));
+    expect(out.size).toBe(12);
+    expect(mockRunsBatch).toHaveBeenCalledTimes(1);
+    expect((mockRunsBatch.mock.calls[0] as [string, string[]])[1]).toEqual([runId(11), runId(12)]);
+  });
+
+  it("an unknown run is not cached as known: asked again next time, still unpriced", async () => {
+    mockRunsBatch.mockResolvedValue([]);
+    expect((await priceRuns(rowsFor(ORG, 1, 1))).size).toBe(0);
+    await priceRuns(rowsFor(ORG, 1, 1));
+    expect(mockRunsBatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails loud when one chunk fails, and caches nothing from that read", async () => {
+    mockRunsBatch.mockImplementation(async (_org: string, ids: string[]) => {
+      if (ids.includes(runId(RUNS_BATCH_CHUNK + 1))) throw new Error("runs-service POST /v1/runs/batch timed out after 20000ms");
+      return ids.map((id) => run(id, EARLIER, "2026-09-01T00:00:00Z", "1"));
+    });
+    await expect(priceRuns(rowsFor(ORG, 1, RUNS_BATCH_CHUNK * 2))).rejects.toThrow(/timed out/);
+    mockRunsBatch.mockReset();
+    mockRunsBatch.mockImplementation(async (_org: string, ids: string[]) => ids.map((id) => run(id, EARLIER, "2026-09-01T00:00:00Z", "1")));
+    await priceRuns(rowsFor(ORG, 1, RUNS_BATCH_CHUNK * 2));
+    expect(mockRunsBatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("the route answers 500 with the named error when runs-service fails", async () => {
+    mockExecute.mockResolvedValue([{ idx: 0, kind: "apollo_reveal", run_id: R1, org_id: ORG }]);
+    mockRunsBatch.mockRejectedValue(new Error("runs-service POST /v1/runs/batch timed out after 20000ms"));
+    const res = await request(app())
+      .post("/internal/acquisition-costs")
+      .set("x-api-key", KEY)
+      .send({ orgId: ORG, servedLeads: [{ servedCampaignId: SERVING, servedAt: "2026-10-15T00:00:00Z", apolloPersonId: "p1" }] });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/timed out/);
+  });
+});
+
+describe("mapWithConcurrency", () => {
+  it("keeps order and caps in-flight jobs", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const out = await mapWithConcurrency([5, 1, 4, 2, 3], 2, async (n) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, n));
+      inFlight -= 1;
+      return n * 10;
+    });
+    expect(out).toEqual([50, 10, 40, 20, 30]);
+    expect(peak).toBe(2);
+  });
+
+  it("an empty list resolves at once", async () => {
+    expect(await mapWithConcurrency([], 4, async () => 1)).toEqual([]);
   });
 });

@@ -21,7 +21,6 @@ import { getRunCostsBatch, type BatchRunCost } from "./runs-client.js";
  */
 
 export const ACQUISITION_MAX_PEOPLE = 5000;
-const RUNS_BATCH_CHUNK = 500;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type AcquisitionKind = "apollo_reveal" | "email_find" | "email_verification";
@@ -215,20 +214,81 @@ export async function findAcquisitionRows(people: ServedLead[]): Promise<Acquisi
   return rows.map((r) => ({ idx: Number(r.idx), kind: r.kind, runId: r.run_id, orgId: r.org_id }));
 }
 
-/** Prices every run, one runs-service batch per org (chunked). */
+/**
+ * Pricing a 5,000-lead read means ~5,400 runs over ~15 orgs. Asked one 500-id
+ * chunk after the other it took ~30s and, under box load, a chunk passed the
+ * runs-service timeout and the whole read 500'd (2026-10-17, orgs f0420eb5 and
+ * 91e76989): lead-service then priced their campaigns nothing and the figure
+ * flapped. Every (org, chunk) is now one job, RUNS_BATCH_CONCURRENCY at a time
+ * (a call costs ~1.3s fixed + little per id, so wider chunks beat more calls),
+ * and a run priced in the last RUN_COST_TTL_MS is not asked again (the runs
+ * paying for an EARLIER acquisition are long settled). Fail loud stays: any
+ * chunk failing after its retries fails the read.
+ */
+export const RUNS_BATCH_CHUNK = 500;
+export const RUNS_BATCH_CONCURRENCY = 4;
+export const RUN_COST_TTL_MS = 10 * 60_000;
+const RUN_COST_CACHE_MAX = 100_000;
+
+const runCostCache = new Map<string, { run: BatchRunCost; until: number }>();
+const cacheKey = (orgId: string, runId: string) => `${orgId}:${runId}`;
+
+/** Test seam. */
+export function __resetRunCostCache(): void {
+  runCostCache.clear();
+}
+
+/** Runs `jobs` with at most `limit` in flight; the first rejection rejects the whole. */
+export async function mapWithConcurrency<T, R>(jobs: T[], limit: number, fn: (job: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(jobs.length);
+  let next = 0;
+  let failed = false;
+  const worker = async () => {
+    while (!failed && next < jobs.length) {
+      const i = next++;
+      try {
+        out[i] = await fn(jobs[i]);
+      } catch (err) {
+        failed = true;
+        throw err;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, jobs.length) }, worker));
+  return out;
+}
+
+/** Prices every run: deduped per org, cached, chunked, a few runs-service batches at a time. */
 export async function priceRuns(rows: AcquisitionRow[]): Promise<Map<string, BatchRunCost>> {
+  const now = Date.now();
+  const out = new Map<string, BatchRunCost>();
   const byOrg = new Map<string, Set<string>>();
   for (const r of rows) {
     if (!UUID_RE.test(r.runId) || !UUID_RE.test(r.orgId)) continue;
+    const hit = runCostCache.get(cacheKey(r.orgId, r.runId));
+    if (hit && hit.until > now) {
+      out.set(r.runId, hit.run);
+      continue;
+    }
     const set = byOrg.get(r.orgId) ?? new Set<string>();
     set.add(r.runId);
     byOrg.set(r.orgId, set);
   }
-  const out = new Map<string, BatchRunCost>();
+  const jobs: Array<{ orgId: string; ids: string[] }> = [];
   for (const [orgId, ids] of byOrg) {
     const list = [...ids];
-    for (let i = 0; i < list.length; i += RUNS_BATCH_CHUNK) {
-      for (const run of await getRunCostsBatch(orgId, list.slice(i, i + RUNS_BATCH_CHUNK))) out.set(run.id, run);
+    for (let i = 0; i < list.length; i += RUNS_BATCH_CHUNK) jobs.push({ orgId, ids: list.slice(i, i + RUNS_BATCH_CHUNK) });
+  }
+  const answers = await mapWithConcurrency(jobs, RUNS_BATCH_CONCURRENCY, async (job) => ({
+    orgId: job.orgId,
+    runs: await getRunCostsBatch(job.orgId, job.ids),
+  }));
+  const until = Date.now() + RUN_COST_TTL_MS;
+  if (runCostCache.size > RUN_COST_CACHE_MAX) runCostCache.clear();
+  for (const { orgId, runs } of answers) {
+    for (const run of runs) {
+      out.set(run.id, run);
+      runCostCache.set(cacheKey(orgId, run.id), { run, until });
     }
   }
   return out;
