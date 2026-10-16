@@ -31,7 +31,8 @@ import { db } from "../db/index.js";
 import { emailVerifications, type EmailVerification } from "../db/schema.js";
 import { decryptKey, type TrackingContext } from "./keys-client.js";
 import { createRun, updateRun, addCosts, updateCostStatus, type IdentityHeaders } from "./runs-client.js";
-import { authorizeCredit } from "./billing-client.js";
+import { authorizeCredit, type AuthorizeCreditResult } from "./billing-client.js";
+import { describeCreditRefusal } from "./credit-refusal.js";
 import { apifyCreditsExhausted, type ProviderErrorDetail } from "./provider-error.js";
 import { reportProviderCreditsExhausted } from "./credit-alert.js";
 import { domainHasMx, MailDomainLookupError } from "./mail-domain.js";
@@ -65,6 +66,8 @@ export const DELIVERABLE_VERDICTS: ReadonlySet<EmailVerdict> = new Set<EmailVerd
 export class EmailVerificationError extends Error {
   /** Set when the verifier itself is out of credits (callers read it via providerErrorFields). */
   readonly providerError?: ProviderErrorDetail;
+  /** Set when billing refused the verification spend (balance or a sales funnel max budget). */
+  creditRefusal?: AuthorizeCreditResult;
   constructor(message: string, providerError?: ProviderErrorDetail) {
     super(`email verification failed: ${message}`);
     this.name = "EmailVerificationError";
@@ -291,7 +294,9 @@ export async function verifyRevealedEmail(rawEmail: string, ctx: VerificationCon
       ...tracking,
     });
     if (!auth.sufficient) {
-      throw new EmailVerificationError(`insufficient balance (balance=${auth.balance_cents}¢, required=${auth.required_cents}¢)`);
+      const refusal = new EmailVerificationError(describeCreditRefusal(auth));
+      refusal.creditRefusal = auth;
+      throw refusal;
     }
   }
 
@@ -463,6 +468,7 @@ export async function verifyEmailBatch(rawEmails: string[], ctx: VerificationCon
   const results = new Array<EmailVerificationResult | undefined>(emails.length);
   const failures: string[] = [];
   let providerError: ProviderErrorDetail | undefined;
+  let creditRefusal: AuthorizeCreditResult | undefined;
   let next = 0;
   const worker = async () => {
     while (next < emails.length) {
@@ -472,13 +478,16 @@ export async function verifyEmailBatch(rawEmails: string[], ctx: VerificationCon
       } catch (err) {
         failures.push(`${emails[i]}: ${err instanceof Error ? err.message : String(err)}`);
         if (err instanceof EmailVerificationError && err.providerError) providerError = err.providerError;
+        if (err instanceof EmailVerificationError && err.creditRefusal) creditRefusal = err.creditRefusal;
       }
     }
   };
   await Promise.all(Array.from({ length: Math.min(VERIFY_BATCH_CONCURRENCY, emails.length) }, worker));
 
   if (failures.length > 0) {
-    throw new EmailVerificationError(`${failures.length} of ${emails.length} address(es) could not be verified — ${failures.slice(0, 5).join("; ")}`, providerError);
+    const failed = new EmailVerificationError(`${failures.length} of ${emails.length} address(es) could not be verified — ${failures.slice(0, 5).join("; ")}`, providerError);
+    if (creditRefusal) failed.creditRefusal = creditRefusal;
+    throw failed;
   }
   return results as EmailVerificationResult[];
 }

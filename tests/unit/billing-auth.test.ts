@@ -209,6 +209,33 @@ describe("Billing credit authorization", () => {
     expect(mockEnrichPerson).not.toHaveBeenCalled();
   });
 
+  it("a SALES FUNNEL MAX BUDGET refusal names its cause on POST /enrich, billing's reason + cap verbatim", async () => {
+    const cap = { salesFunnelId: "sf-1", salesFunnelCampaignId: "bf99ff60", amountCents: "500", period: "total", consumedCents: "498", reservedCents: "0" };
+    mockAuthorizeCredit.mockResolvedValueOnce({ sufficient: false, balance_cents: 2000, required_cents: 6, reason: "sales_funnel_max_budget_reached", sales_funnel_cap: cap });
+
+    const res = await request(app)
+      .post("/enrich")
+      .set(HEADERS)
+      .send({ apolloPersonId: "p-1" })
+      .expect(402);
+
+    expect(res.body).toEqual({
+      type: "credit_insufficient",
+      error: "Sales funnel max budget reached",
+      reason: "sales_funnel_max_budget_reached",
+      sales_funnel_cap: cap,
+      balance_cents: 2000,
+      required_cents: 6,
+    });
+    expect(mockEnrichPerson).not.toHaveBeenCalled();
+  });
+
+  it("a balance refusal (no reason) keeps the exact body callers already parse", async () => {
+    mockAuthorizeCredit.mockResolvedValueOnce({ sufficient: false, balance_cents: 0, required_cents: 50 });
+    const res = await request(app).post("/enrich").set(HEADERS).send({ apolloPersonId: "p-1" }).expect(402);
+    expect(res.body).toEqual({ type: "credit_insufficient", error: "Insufficient credits", balance_cents: 0, required_cents: 50 });
+  });
+
   it("should authorize the direct Apollo cost (1 credit) on POST /enrich", async () => {
     await request(app)
       .post("/enrich")

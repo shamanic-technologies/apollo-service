@@ -981,6 +981,21 @@ contract that fixes it lives in `src/lib/provider-error.ts`:
   still returns 200 with a null email (making it throw would be breaking). Only
   a REJECTED Apollo response carries `providerError`.
 
+## A SALES FUNNEL MAX BUDGET refusal is named, never "Insufficient credits"
+
+billing-service refuses an authorize for two causes calling for opposite
+actions: a real balance shortfall (add credit) or a sales funnel MAX BUDGET
+the customer set (raise that campaign's max budget). billing says which:
+`reason` (`sales_funnel_max_budget_reached` / `_unreadable`) + `sales_funnel_cap`
+are present ONLY on a cap refusal. Every refusal body comes from
+`creditRefusalBody` (`src/lib/credit-refusal.ts`): a shortfall keeps the
+legacy body byte for byte; a cap refusal keeps status 402 and
+`type: "credit_insufficient"` (callers stop on it) but says
+`error: "Sales funnel max budget reached"` and passes `reason` +
+`sales_funnel_cap` verbatim. A verification refused by a cap answers that 402
+too (`emailVerificationErrorResponse`), never a retryable 502. Do not build a
+refusal body by hand (FUNNEL-CAP-REACHED-AT-2PCT-1015).
+
 ## Every provisioned hold is in `cost_holds`, and a reconciler settles the ones nobody closed
 
 A hold (`status:"provisioned"`) counts against the customer's balance until it

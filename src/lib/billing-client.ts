@@ -19,10 +19,32 @@ export interface AuthorizeCreditParams {
   workflowSlug?: string;
 }
 
+/**
+ * billing-service refuses a spend for one of TWO causes, and they call for
+ * opposite actions: a real balance shortfall ("add credit") or a SALES FUNNEL
+ * MAX BUDGET the customer set ("raise the campaign's max budget"). billing says
+ * which: `reason` + `sales_funnel_cap` are present ONLY on a funnel-cap refusal.
+ * Never flatten one into the other (FUNNEL-CAP-REACHED-AT-2PCT-1015).
+ */
+export type FunnelCapRefusalReason =
+  | "sales_funnel_max_budget_reached"
+  | "sales_funnel_max_budget_unreadable";
+
+export interface SalesFunnelCap {
+  salesFunnelId: string;
+  salesFunnelCampaignId: string | null;
+  amountCents: string;
+  period: string;
+  consumedCents: string | null;
+  reservedCents: string;
+}
+
 export interface AuthorizeCreditResult {
   sufficient: boolean;
   balance_cents: number;
   required_cents: number;
+  reason?: FunnelCapRefusalReason | string;
+  sales_funnel_cap?: SalesFunnelCap;
 }
 
 export async function authorizeCredit(

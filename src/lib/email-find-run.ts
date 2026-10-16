@@ -9,10 +9,11 @@ import { emailFinderCalls, emailFindings, type EmailFinding } from "../db/schema
 import { decryptKey } from "./keys-client.js";
 import { createRun, updateRun, addCosts, updateCostStatus, type IdentityHeaders } from "./runs-client.js";
 import { authorizeCredit } from "./billing-client.js";
+import { creditRefusalBody } from "./credit-refusal.js";
 import { assertKeySource } from "./validators.js";
 import { traceEvent } from "./trace-event.js";
 import { verificationFor, EmailVerificationError } from "./email-verification.js";
-import { providerErrorFields } from "./provider-error.js";
+import { emailVerificationErrorResponse } from "./email-verification-response.js";
 import {
   EXPLEE_COST_NAME,
   EXPLEE_PRESET_CREDITS,
@@ -248,12 +249,7 @@ export async function executeEmailFind(
         ...tracking,
       });
       if (!auth.sufficient) {
-        return { status: 402, body: {
-          type: "credit_insufficient",
-          error: "Insufficient credits",
-          balance_cents: auth.balance_cents,
-          required_cents: auth.required_cents,
-        } };
+        return { status: 402, body: creditRefusalBody(auth) };
       }
     }
 
@@ -437,7 +433,7 @@ export async function executeEmailFind(
     // The find itself succeeded and is stored; only its verdict is missing. A
     // re-request serves the finding (no vendor call) and retries the verify.
     if (error instanceof EmailVerificationError) {
-      return { status: 502, body: { type: "email_verification", source: "email-verification", error: message, ...providerErrorFields(error) } };
+      return emailVerificationErrorResponse(error);
     }
 
     // Release what we reserved, unless the vendor may have billed us anyway.

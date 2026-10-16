@@ -294,7 +294,7 @@ describe("linkedin_engagement serve path", () => {
 
   it("an org that cannot pay gets a 402", async () => {
     const { LinkedinEngagementInsufficientCreditError } = await import("../../src/lib/linkedin-engagement.js");
-    mockServeLinkedinEngagers.mockRejectedValue(new LinkedinEngagementInsufficientCreditError(0, 1));
+    mockServeLinkedinEngagers.mockRejectedValue(new LinkedinEngagementInsufficientCreditError({ sufficient: false, balance_cents: 0, required_cents: 1 }));
     const res = await post("/search/next", { searchParams: LI_PARAMS }).expect(402);
     expect(res.body).toMatchObject({ type: "credit_insufficient", source: "linkedin-engagement" });
   });

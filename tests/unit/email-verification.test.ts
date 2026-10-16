@@ -193,6 +193,30 @@ describe("verifyRevealedEmail", () => {
     expect(mockAddCosts).not.toHaveBeenCalled();
   });
 
+  it("a sales funnel max budget refusal answers 402 naming the cap, never a retryable 502", async () => {
+    const cap = { salesFunnelId: "sf-1", salesFunnelCampaignId: null, amountCents: "500", period: "total", consumedCents: "500", reservedCents: "0" };
+    mockAuthorizeCredit.mockResolvedValue({ sufficient: false, balance_cents: 900, required_cents: 3, reason: "sales_funnel_max_budget_reached", sales_funnel_cap: cap });
+    const { verifyRevealedEmail, EmailVerificationError } = await import("../../src/lib/email-verification.js");
+    const { emailVerificationErrorResponse } = await import("../../src/lib/email-verification-response.js");
+    const err = await verifyRevealedEmail("ada@example.com", CTX).catch((e) => e);
+    expect(err).toBeInstanceOf(EmailVerificationError);
+    expect(emailVerificationErrorResponse(err)).toEqual({
+      status: 402,
+      body: { type: "credit_insufficient", source: "email-verification", error: "Sales funnel max budget reached", reason: "sales_funnel_max_budget_reached", sales_funnel_cap: cap, balance_cents: 900, required_cents: 3 },
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("a balance refusal keeps its 502 email_verification answer", async () => {
+    mockAuthorizeCredit.mockResolvedValue({ sufficient: false, balance_cents: 0, required_cents: 1 });
+    const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
+    const { emailVerificationErrorResponse } = await import("../../src/lib/email-verification-response.js");
+    const err = await verifyRevealedEmail("ada@example.com", CTX).catch((e) => e);
+    const answer = emailVerificationErrorResponse(err);
+    expect(answer.status).toBe(502);
+    expect(answer.body.type).toBe("email_verification");
+  });
+
   it("a missing apify key throws a legible error", async () => {
     mockDecryptKey.mockRejectedValue(new Error("apify key not configured for this organization"));
     const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");

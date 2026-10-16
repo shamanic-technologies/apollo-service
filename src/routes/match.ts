@@ -10,10 +10,12 @@ import { advisoryXactLock, matchLockKey } from "../lib/advisory-lock.js";
 import { decryptKey } from "../lib/keys-client.js";
 import { createRun, updateRun, addCosts, failOpenRun, type IdentityHeaders } from "../lib/runs-client.js";
 import { authorizeCredit } from "../lib/billing-client.js";
+import { creditRefusalBody } from "../lib/credit-refusal.js";
 import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment } from "../lib/transform.js";
 import { MatchRequestSchema } from "../schemas.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { verificationFor, EmailVerificationError } from "../lib/email-verification.js";
+import { emailVerificationErrorResponse } from "../lib/email-verification-response.js";
 import { toCreditAlertIdentity } from "../lib/credit-alert.js";
 import { assertKeySource } from "../lib/validators.js";
 // Waterfall disabled 2026-05-28 — see src/lib/waterfall.ts header for revive.
@@ -182,12 +184,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
         workflowSlug,
       });
       if (!auth.sufficient) {
-        return res.status(402).json({
-          type: "credit_insufficient",
-          error: "Insufficient credits",
-          balance_cents: auth.balance_cents,
-          required_cents: auth.required_cents,
-        });
+        return res.status(402).json(creditRefusalBody(auth));
       }
     }
 
@@ -317,7 +314,8 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
       traceEvent(req.runId, { service: "apollo-service", event: "match-error", detail: error instanceof Error ? error.message : "Unknown error", level: "error" }, req.headers).catch(() => {});
     }
     if (error instanceof EmailVerificationError) {
-      return res.status(502).json({ type: "email_verification", source: "email-verification", error: error.message, ...providerErrorFields(error) });
+      const answer = emailVerificationErrorResponse(error);
+      return res.status(answer.status).json(answer.body);
     }
     res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
   }
