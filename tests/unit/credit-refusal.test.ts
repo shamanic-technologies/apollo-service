@@ -12,7 +12,7 @@ describe("creditRefusalBody (FUNNEL-CAP-REACHED-AT-2PCT-1015)", () => {
 
   it("unreadable max budget: named, reason + cap verbatim, type kept so callers still stop", () => {
     const body = creditRefusalBody({ sufficient: false, balance_cents: 100, required_cents: 5, reason: "sales_funnel_max_budget_unreadable", sales_funnel_cap: cap });
-    expect(body).toMatchObject({ type: "credit_insufficient", error: "Sales funnel max budget could not be measured", reason: "sales_funnel_max_budget_unreadable", sales_funnel_cap: cap });
+    expect(body).toMatchObject({ type: "credit_insufficient", error: "Sales funnel max budget unreadable", reason: "sales_funnel_max_budget_unreadable", sales_funnel_cap: cap });
   });
 
   it("an unknown future reason is still passed through, never read as a shortfall", () => {
