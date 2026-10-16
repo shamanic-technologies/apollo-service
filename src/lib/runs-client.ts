@@ -409,6 +409,37 @@ export async function getRunsBatch(
   return new Map(results.map((r) => [r.id, r]));
 }
 
+/** One run as `POST /v1/runs/batch` serves it, reduced to what a cost attribution reads. */
+export interface BatchRunCost {
+  id: string;
+  campaignId: string | null;
+  workflowSlug: string | null;
+  startedAt: string;
+  /** Rolled up over the run and its descendants, `actual` costs only. */
+  actualCostInUsdCents: string;
+}
+
+/**
+ * Many runs of ONE org in one call (runs-service `POST /v1/runs/batch`, ≤ 10,000
+ * ids, org-scoped by x-org-id). A run of another org, or an unknown id, is
+ * simply absent from the answer.
+ */
+export async function getRunCostsBatch(orgId: string, runIds: string[]): Promise<BatchRunCost[]> {
+  if (runIds.length === 0) return [];
+  const { runs } = await runsRequest<{ runs: BatchRunCost[] }>("/v1/runs/batch", {
+    method: "POST",
+    identity: { orgId },
+    body: { runIds },
+  });
+  return runs.map((r) => ({
+    id: r.id,
+    campaignId: r.campaignId ?? null,
+    workflowSlug: r.workflowSlug ?? null,
+    startedAt: r.startedAt,
+    actualCostInUsdCents: r.actualCostInUsdCents,
+  }));
+}
+
 // ─── Platform runs (org-less spend) ─────────────────────────────────────────
 //
 // For a caller with no org (a platform job such as the distribute.you visit

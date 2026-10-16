@@ -1027,6 +1027,34 @@ marks it settled on every `updateCostStatus`. No call site can forget.
   all were cancelled. The rest were treg / BounceVerify holds orphaned by the
   2026-09-25 container swaps.
 
+## Reused acquisition cost (`POST /internal/acquisition-costs`) — a lead keeps the price paid to find it
+
+Owner rule 2026-10-17. lead-service serves leads from its own stock (people this
+service revealed for an EARLIER campaign), so the serving campaign's runs carry
+no acquisition cost: `lead-sourcing-aldhanab` served 382 leads at $0.0034 each
+while their reveals had cost $33 ($0.09/lead) under the same org's earlier
+campaign. features-service prices workflows from runs, so it read 11x ROI.
+`src/lib/acquisition-costs.ts`, read-only, x-api-key = `APOLLO_SERVICE_API_KEY`.
+
+- **The caller says who was served** (`servedLeads[]`: `servedCampaignId`,
+  `servedAt`, `apolloPersonId` and/or `email`, ≤5000 per call, any mix of
+  campaigns): serves are lead-service's fact, never reconstructed here
+  (`apollo_people_searches` holds teasers OFFERED, ~20x the served set).
+- **Acquisitions = every PAID row of that person in our tables, any org**:
+  `apollo_people_enrichments.enrichment_run_id` (reveal), `email_findings.find_run_id`
+  (treg/Explee), `email_verifications.verify_run_id` where `billed`. Matched by
+  apollo person id and by lower-cased email, deduped per run.
+- **Earlier = the paying run is NOT of the serving campaign and started before
+  the serve.** A campaign that bought a lead itself reports 0 reused. Priced from
+  runs-service `POST /v1/runs/batch` (per paying org, chunks of 500): the run's
+  `actualCostInUsdCents`, descendants included. Other-org spend counts (the
+  reveal cache is fleet-wide) and is split out as `paidByOtherOrgsCostInUsdCents`.
+  A paying run runs-service does not return lands in `unpricedRunIds`, never as 0.
+- **Nothing is billed, declared or moved.** Declaring the cost again on the
+  serving run would bill the org twice; the earlier payer stays the payer.
+- Prod replay 2026-10-17 (aldhanab campaigns a41c4e52 + 3de6bdb2): 382 served,
+  372 reused, 3,317 cents (reveals 3,315 + verifications 2).
+
 ## Brand transfer (`POST /internal/transfer-brand`) moves EVERY table, in one transaction
 
 Fleet contract (brand-service fans it out): `{sourceBrandId, sourceOrgId,

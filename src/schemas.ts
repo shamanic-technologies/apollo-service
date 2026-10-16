@@ -2288,3 +2288,79 @@ registry.registerPath({
     500: { description: "Internal server error", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
+
+// ─── POST /internal/acquisition-costs ────────────────────────────────────
+
+const ServedLeadSchema = z
+  .object({
+    ref: z.string().max(200).optional().openapi({ description: "Caller's own id for this serve (e.g. lead-service leads_campaigns id), echoed back." }),
+    servedCampaignId: z.string().min(1).openapi({ description: "The campaign that served the lead. Acquisitions paid by a run of THIS campaign are its own spend, not reused." }),
+    servedAt: z.string().datetime({ offset: true }).openapi({ description: "When the lead was served (ISO). Only acquisitions whose run started before it count." }),
+    apolloPersonId: z.string().min(1).optional().openapi({ description: "Apollo person id of the lead, when known." }),
+    email: z.string().min(3).optional().openapi({ description: "The served email address (matched case-insensitively)." }),
+  })
+  .refine((v) => !!v.apolloPersonId || !!v.email, { message: "apolloPersonId or email is required" })
+  .openapi("ServedLead");
+
+export const AcquisitionCostsRequestSchema = z
+  .object({
+    orgId: z.string().uuid().openapi({ description: "The org whose campaigns served the leads (internal org UUID). Used only to split spend paid by OTHER orgs." }),
+    servedLeads: z.array(ServedLeadSchema).min(1).max(5000).openapi({ description: "1-5000 served leads, any mix of campaigns of this org." }),
+  })
+  .openapi("AcquisitionCostsRequest");
+
+const AcquisitionSchema = z
+  .object({
+    kind: z.enum(["apollo_reveal", "email_find", "email_verification"]).openapi({ description: "apollo_reveal = Apollo people/match (apollo-credit); email_find = treg/Explee find; email_verification = a billed BounceVerify check." }),
+    runId: z.string().openapi({ description: "runs-service run that paid it." }),
+    orgId: z.string().openapi({ description: "Org that paid it." }),
+    campaignId: z.string().nullable().openapi({ description: "Campaign of the paying run (null = outside any campaign)." }),
+    workflowSlug: z.string().nullable(),
+    paidAt: z.string().openapi({ description: "Start of the paying run (ISO)." }),
+    costInUsdCents: z.string().openapi({ description: "The paying run's ACTUAL cost (descendants included), gross, in USD cents." }),
+  })
+  .openapi("EarlierAcquisition");
+
+const AcquisitionCostsResponseSchema = z
+  .object({
+    people: z.array(
+      z.object({
+        ref: z.string().nullable(),
+        servedCampaignId: z.string(),
+        servedAt: z.string(),
+        apolloPersonId: z.string().nullable(),
+        email: z.string().nullable(),
+        earlierAcquisitions: z.array(AcquisitionSchema).openapi({ description: "Empty = the serve reused nothing (the campaign paid for it itself, or nobody did)." }),
+        earlierAcquisitionCostInUsdCents: z.string(),
+      }),
+    ).openapi({ description: "One entry per served lead, in request order." }),
+    campaigns: z.array(
+      z.object({
+        campaignId: z.string(),
+        servedLeads: z.number().int().openapi({ description: "Served leads sent for this campaign." }),
+        reusedLeads: z.number().int().openapi({ description: "Of them, leads with at least one earlier acquisition." }),
+        earlierAcquisitionCostInUsdCents: z.string().openapi({ description: "Sum of what earlier runs paid to find those leads, USD cents. Add it to the campaign's own spend to price its leads." }),
+        paidByOtherOrgsCostInUsdCents: z.string().openapi({ description: "Part of that sum paid by OTHER orgs (the reveal cache is fleet-wide)." }),
+      }),
+    ).openapi({ description: "Totals per servedCampaignId." }),
+    unpricedRunIds: z.array(z.string()).openapi({ description: "Paying runs runs-service did not return (deleted org): left OUT of every sum. Expected empty." }),
+  })
+  .openapi("AcquisitionCostsResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/acquisition-costs",
+  summary: "What earlier runs paid to find the leads a campaign served",
+  description:
+    "A lead keeps the price paid to find it. When a campaign serves a lead that an EARLIER run already revealed (Apollo), found (treg/Explee) or verified (BounceVerify), the campaign's own runs carry no acquisition cost for it. This read returns, per served lead and totalled per campaign, the actual cost of every such earlier acquisition: paid by a run that is NOT of the serving campaign (another campaign, or none) and started before the serve. Any org's payment counts (the reveal cache is fleet-wide); the other-org part is split out. The caller says who was served (lead-service owns serves). One call for up to 5000 leads, any mix of campaigns. Read-only: nothing is billed, declared or moved; the earlier payer stays the payer. Requires x-api-key = APOLLO_SERVICE_API_KEY.",
+  request: {
+    headers: z.object({ "x-api-key": z.string() }),
+    body: { content: { "application/json": { schema: AcquisitionCostsRequestSchema } } },
+  },
+  responses: {
+    200: { description: "Earlier acquisitions per lead and per campaign", content: { "application/json": { schema: AcquisitionCostsResponseSchema } } },
+    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponseSchema } } },
+    401: { description: "Missing or invalid x-api-key", content: { "application/json": { schema: ErrorResponseSchema } } },
+    500: { description: "Internal server error (DB or runs-service unreachable)", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
