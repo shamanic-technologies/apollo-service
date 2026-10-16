@@ -136,9 +136,25 @@ export const ErrorResponseSchema = z
     z
       .object({
         type: z.literal("credit_insufficient"),
-        error: z.string(),
+        error: z.string().describe('"Insufficient credits" for a balance shortfall; "Sales funnel max budget reached" (or "... could not be measured") when a campaign max budget refused the spend.'),
         balance_cents: z.number().int(),
         required_cents: z.number().int(),
+        reason: z
+          .string()
+          .optional()
+          .describe("billing-service's reason, verbatim. Present ONLY when a sales funnel MAX BUDGET refused the spend (sales_funnel_max_budget_reached | sales_funnel_max_budget_unreadable): raise that campaign's max budget, adding credit changes nothing. Absent on a balance shortfall."),
+        sales_funnel_cap: z
+          .object({
+            salesFunnelId: z.string(),
+            salesFunnelCampaignId: z.string().nullable(),
+            amountCents: z.string(),
+            period: z.string(),
+            consumedCents: z.string().nullable(),
+            reservedCents: z.string(),
+          })
+          .optional()
+          .describe("The max budget that refused the spend, verbatim from billing-service; present only with `reason`."),
+        source: z.string().optional(),
       })
       .openapi("CreditInsufficientError"),
     // Waterfall disabled 2026-05-28 — 504 waterfall_timeout no longer

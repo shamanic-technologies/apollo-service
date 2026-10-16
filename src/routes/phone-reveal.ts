@@ -10,6 +10,7 @@ import { advisoryXactLock } from "../lib/advisory-lock.js";
 import { decryptKey } from "../lib/keys-client.js";
 import { createRun, updateRun, addCosts, updateCostStatus, type IdentityHeaders } from "../lib/runs-client.js";
 import { authorizeCredit } from "../lib/billing-client.js";
+import { creditRefusalBody } from "../lib/credit-refusal.js";
 import { assertKeySource } from "../lib/validators.js";
 import { toCreditAlertIdentity } from "../lib/credit-alert.js";
 import { traceEvent } from "../lib/trace-event.js";
@@ -132,12 +133,7 @@ router.post("/people/:apolloPersonId/phone-reveal", serviceAuth, async (req: Aut
         workflowSlug,
       });
       if (!auth.sufficient) {
-        return res.status(402).json({
-          type: "credit_insufficient",
-          error: "Insufficient credits",
-          balance_cents: auth.balance_cents,
-          required_cents: auth.required_cents,
-        });
+        return res.status(402).json(creditRefusalBody(auth));
       }
     }
 

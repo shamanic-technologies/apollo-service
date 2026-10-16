@@ -2,8 +2,8 @@ import { Router } from "express";
 import { z } from "zod";
 import { serviceAuth, type AuthenticatedRequest } from "../middleware/auth.js";
 import { verifyEmailBatch, EmailVerificationError, MAX_VERIFY_BATCH } from "../lib/email-verification.js";
+import { emailVerificationErrorResponse } from "../lib/email-verification-response.js";
 import type { IdentityHeaders } from "../lib/runs-client.js";
-import { providerErrorFields } from "../lib/provider-error.js";
 
 const router = Router();
 
@@ -39,7 +39,8 @@ router.post("/email-verifications", serviceAuth, async (req: AuthenticatedReques
   } catch (error) {
     console.error(`[Apollo Service][POST /email-verifications] org=${req.orgId} run=${runId} ERROR:`, error);
     if (error instanceof EmailVerificationError) {
-      return res.status(502).json({ type: "email_verification", source: "email-verification", error: error.message, ...providerErrorFields(error) });
+      const answer = emailVerificationErrorResponse(error);
+      return res.status(answer.status).json(answer.body);
     }
     return res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error" });
   }
