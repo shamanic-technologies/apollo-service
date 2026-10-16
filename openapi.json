@@ -5786,6 +5786,209 @@
           "verifiedAt",
           "cursor"
         ]
+      },
+      "AcquisitionCostsResponse": {
+        "type": "object",
+        "properties": {
+          "people": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "ref": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "servedCampaignId": {
+                  "type": "string"
+                },
+                "servedAt": {
+                  "type": "string"
+                },
+                "apolloPersonId": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "email": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "earlierAcquisitions": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EarlierAcquisition"
+                  },
+                  "description": "Empty = the serve reused nothing (the campaign paid for it itself, or nobody did)."
+                },
+                "earlierAcquisitionCostInUsdCents": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "ref",
+                "servedCampaignId",
+                "servedAt",
+                "apolloPersonId",
+                "email",
+                "earlierAcquisitions",
+                "earlierAcquisitionCostInUsdCents"
+              ]
+            },
+            "description": "One entry per served lead, in request order."
+          },
+          "campaigns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "campaignId": {
+                  "type": "string"
+                },
+                "servedLeads": {
+                  "type": "integer",
+                  "description": "Served leads sent for this campaign."
+                },
+                "reusedLeads": {
+                  "type": "integer",
+                  "description": "Of them, leads with at least one earlier acquisition."
+                },
+                "earlierAcquisitionCostInUsdCents": {
+                  "type": "string",
+                  "description": "Sum of what earlier runs paid to find those leads, USD cents. Add it to the campaign's own spend to price its leads."
+                },
+                "paidByOtherOrgsCostInUsdCents": {
+                  "type": "string",
+                  "description": "Part of that sum paid by OTHER orgs (the reveal cache is fleet-wide)."
+                }
+              },
+              "required": [
+                "campaignId",
+                "servedLeads",
+                "reusedLeads",
+                "earlierAcquisitionCostInUsdCents",
+                "paidByOtherOrgsCostInUsdCents"
+              ]
+            },
+            "description": "Totals per servedCampaignId."
+          },
+          "unpricedRunIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Paying runs runs-service did not return (deleted org): left OUT of every sum. Expected empty."
+          }
+        },
+        "required": [
+          "people",
+          "campaigns",
+          "unpricedRunIds"
+        ]
+      },
+      "EarlierAcquisition": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "apollo_reveal",
+              "email_find",
+              "email_verification"
+            ],
+            "description": "apollo_reveal = Apollo people/match (apollo-credit); email_find = treg/Explee find; email_verification = a billed BounceVerify check."
+          },
+          "runId": {
+            "type": "string",
+            "description": "runs-service run that paid it."
+          },
+          "orgId": {
+            "type": "string",
+            "description": "Org that paid it."
+          },
+          "campaignId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Campaign of the paying run (null = outside any campaign)."
+          },
+          "workflowSlug": {
+            "type": "string",
+            "nullable": true
+          },
+          "paidAt": {
+            "type": "string",
+            "description": "Start of the paying run (ISO)."
+          },
+          "costInUsdCents": {
+            "type": "string",
+            "description": "The paying run's ACTUAL cost (descendants included), gross, in USD cents."
+          }
+        },
+        "required": [
+          "kind",
+          "runId",
+          "orgId",
+          "campaignId",
+          "workflowSlug",
+          "paidAt",
+          "costInUsdCents"
+        ]
+      },
+      "AcquisitionCostsRequest": {
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The org whose campaigns served the leads (internal org UUID). Used only to split spend paid by OTHER orgs."
+          },
+          "servedLeads": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServedLead"
+            },
+            "minItems": 1,
+            "maxItems": 5000,
+            "description": "1-5000 served leads, any mix of campaigns of this org."
+          }
+        },
+        "required": [
+          "orgId",
+          "servedLeads"
+        ]
+      },
+      "ServedLead": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Caller's own id for this serve (e.g. lead-service leads_campaigns id), echoed back."
+          },
+          "servedCampaignId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The campaign that served the lead. Acquisitions paid by a run of THIS campaign are its own spend, not reused."
+          },
+          "servedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the lead was served (ISO). Only acquisitions whose run started before it count."
+          },
+          "apolloPersonId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Apollo person id of the lead, when known."
+          },
+          "email": {
+            "type": "string",
+            "minLength": 3,
+            "description": "The served email address (matched case-insensitively)."
+          }
+        },
+        "required": [
+          "servedCampaignId",
+          "servedAt"
+        ]
       }
     },
     "parameters": {
@@ -8373,6 +8576,73 @@
           },
           "500": {
             "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/acquisition-costs": {
+      "post": {
+        "summary": "What earlier runs paid to find the leads a campaign served",
+        "description": "A lead keeps the price paid to find it. When a campaign serves a lead that an EARLIER run already revealed (Apollo), found (treg/Explee) or verified (BounceVerify), the campaign's own runs carry no acquisition cost for it. This read returns, per served lead and totalled per campaign, the actual cost of every such earlier acquisition: paid by a run that is NOT of the serving campaign (another campaign, or none) and started before the serve. Any org's payment counts (the reveal cache is fleet-wide); the other-org part is split out. The caller says who was served (lead-service owns serves). One call for up to 5000 leads, any mix of campaigns. Read-only: nothing is billed, declared or moved; the earlier payer stays the payer. Requires x-api-key = APOLLO_SERVICE_API_KEY.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcquisitionCostsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Earlier acquisitions per lead and per campaign",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcquisitionCostsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid x-api-key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error (DB or runs-service unreachable)",
             "content": {
               "application/json": {
                 "schema": {
