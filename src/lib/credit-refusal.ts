@@ -2,7 +2,7 @@ import type { AuthorizeCreditResult } from "./billing-client.js";
 
 const FUNNEL_CAP_ERRORS: Record<string, string> = {
   sales_funnel_max_budget_reached: "Sales funnel max budget reached",
-  sales_funnel_max_budget_unreadable: "Sales funnel max budget could not be measured",
+  sales_funnel_max_budget_unreadable: "Sales funnel max budget unreadable",
 };
 
 /**

@@ -129,7 +129,7 @@
           },
           "error": {
             "type": "string",
-            "description": "\"Insufficient credits\" for a balance shortfall; \"Sales funnel max budget reached\" (or \"... could not be measured\") when a campaign max budget refused the spend."
+            "description": "\"Insufficient credits\" for a balance shortfall; \"Sales funnel max budget reached\" (or \"Sales funnel max budget unreadable\") when a campaign max budget refused the spend."
           },
           "balance_cents": {
             "type": "integer"

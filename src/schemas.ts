@@ -136,7 +136,7 @@ export const ErrorResponseSchema = z
     z
       .object({
         type: z.literal("credit_insufficient"),
-        error: z.string().describe('"Insufficient credits" for a balance shortfall; "Sales funnel max budget reached" (or "... could not be measured") when a campaign max budget refused the spend.'),
+        error: z.string().describe('"Insufficient credits" for a balance shortfall; "Sales funnel max budget reached" (or "Sales funnel max budget unreadable") when a campaign max budget refused the spend.'),
         balance_cents: z.number().int(),
         required_cents: z.number().int(),
         reason: z
