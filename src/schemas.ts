@@ -2363,6 +2363,7 @@ registry.registerPath({
     200: { description: "Earlier acquisitions per lead and per campaign", content: { "application/json": { schema: AcquisitionCostsResponseSchema } } },
     400: { description: "Validation error", content: { "application/json": { schema: ErrorResponseSchema } } },
     401: { description: "Missing or invalid x-api-key", content: { "application/json": { schema: ErrorResponseSchema } } },
+    413: { description: "Body over the 5mb limit of this route (5000 served leads is ~1.25 MB)", content: { "application/json": { schema: ErrorResponseSchema } } },
     500: { description: "Internal server error (DB or runs-service unreachable)", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });

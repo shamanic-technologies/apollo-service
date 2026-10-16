@@ -24,6 +24,12 @@ import costHoldRoutes from "./routes/cost-holds.js";
 import companyFirmographicsRoutes from "./routes/company-firmographics.js";
 import { startHoldReconciler } from "./lib/hold-reconciler.js";
 import { stripNulReplacer } from "./lib/nul-strip.js";
+import {
+  ACQUISITION_COSTS_PATH,
+  acquisitionCostsJsonParser,
+  defaultJsonParser,
+  bodyTooLargeHandler,
+} from "./lib/body-limits.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -37,12 +43,8 @@ app.set("json replacer", stripNulReplacer);
 
 // Middleware
 app.use(cors());
-app.use(express.json({
-  verify: (req, _res, buf) => {
-    // Preserve raw body for webhook request_id precision handling
-    (req as any).rawBody = buf.toString();
-  },
-}));
+app.use(ACQUISITION_COSTS_PATH, acquisitionCostsJsonParser);
+app.use(defaultJsonParser);
 
 // OpenAPI spec endpoint
 app.get("/openapi.json", (_req, res) => {
@@ -80,6 +82,9 @@ app.use((req, res) => {
 
 // Sentry error handler must be before any other error middleware
 Sentry.setupExpressErrorHandler(app);
+
+// A body over the parser limit: named 413, not the fallback 500
+app.use(bodyTooLargeHandler);
 
 // Fallback error handler
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
