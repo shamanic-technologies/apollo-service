@@ -806,15 +806,17 @@ export const EmailVerificationObjectSchema = z
   .object({
     email: z.string().openapi({ description: "The verified address, lower-cased." }),
     verdict: z.enum(["valid", "invalid", "catch_all", "risky", "unknown"]).openapi({
-      description: "BounceVerify's verdict (real SMTP + catch-all detection).",
+      description: "The FINAL verdict. Step 1 = ONE verdict from the cheapest verifier that ANSWERS: ContactOut (free) → BounceVerify (Apify) → TryKitt → MillionVerifier, the next asked only when one fails to answer. Step 2 = a step-1 catch_all or unknown goes to BounceBan, whose verdict decides.",
     }),
     deliverable: z.boolean().openapi({
       description: "THE switch: true only for verdict `valid`. false = revealed but not deliverable — do not send; the person is still returned so the caller can suppress them.",
     }),
-    verifier: z.literal("bounceverify"),
+    verifier: z.string().openapi({
+      description: "Who decided the verdict: the step-1 verifier that answered (\"contactout\", \"bounceverify\", \"trykitt\", \"millionverifier\") or \"bounceban\" (step 2).",
+    }),
     verificationId: z.string().uuid(),
     verifiedAt: z.string(),
-    reused: z.boolean().openapi({ description: "true = a decisive verdict under 30 days old was reused; nothing billed." }),
+    reused: z.boolean().openapi({ description: "true = a final verdict under 30 days old was reused; nothing billed." }),
   })
   .openapi("EmailVerificationVerdict");
 
@@ -822,7 +824,7 @@ export const EmailVerificationSchema = EmailVerificationObjectSchema
   .nullable()
   .openapi("EmailVerification", {
     description:
-      "Pre-serve verification of the revealed email. null when there is no email. Billed as apify-bounceverify-email (decisive verdicts only). A verification that fails answers 502 {type: \"email_verification\"} — an unverified email is never returned as deliverable.",
+      "Pre-serve verification of the revealed email. null when there is no email. Billed per vendor: apify-bounceverify-email (decisive BounceVerify verdicts only) and treg-micro-usd (ContactOut, TryKitt, MillionVerifier, BounceBan), each at the vendor's own charge. A verification that fails answers 502 {type: \"email_verification\"} — an unverified email is never returned as deliverable.",
   });
 
 export const BuyingSignalEvidenceSchema = z
@@ -2198,7 +2200,7 @@ registry.registerPath({
   path: "/email-verifications",
   summary: "Verify a batch of email addresses the caller already holds (billed to the caller's org)",
   description:
-    "Verdicts from BounceVerify (real SMTP + catch-all detection) for up to 50 addresses, verified 10 at a time (~3s each). Same guarantees as the reveal paths: every call is recorded in email_verifications (bronze, raw actor row verbatim); a decisive verdict under 30 days old is reused (reused: true, nothing billed); each fresh verification is a child run of x-run-id with cost apify-bounceverify-email provisioned, authorized against the caller's org (platform key), actualized on a decisive verdict (unknown is free) and the hold cancelled. `deliverable` is true ONLY for verdict `valid`. Duplicates (case-insensitive) are verified once; results come back in first-seen order, one per distinct address. ALL OR NOTHING: if any address cannot be verified the whole call answers 502 {type: \"email_verification\"} and no verdict is returned — a retry reuses whatever was already decided.",
+    "Verdicts for up to 50 addresses, verified 10 at a time. Step 1 = ONE verdict from the cheapest verifier that ANSWERS: ContactOut (free) → BounceVerify (Apify) → TryKitt → MillionVerifier, the next asked only when one fails to answer. Step 2 = a step-1 catch_all or unknown goes to BounceBan, whose verdict decides. treg vendors are billed as treg-micro-usd at treg's own charge (BounceBan can take ~1 min). Same guarantees as the reveal paths: every call is recorded in email_verifications (bronze, raw actor row verbatim); a decisive verdict under 30 days old is reused (reused: true, nothing billed); each fresh verification is a child run of x-run-id with cost apify-bounceverify-email provisioned, authorized against the caller's org (platform key), actualized on a decisive verdict (unknown is free) and the hold cancelled. `deliverable` is true ONLY for verdict `valid`. Duplicates (case-insensitive) are verified once; results come back in first-seen order, one per distinct address. ALL OR NOTHING: if any address cannot be verified the whole call answers 502 {type: \"email_verification\"} and no verdict is returned — a retry reuses whatever was already decided.",
   request: {
     headers: emailFindHeaders,
     body: {
@@ -2250,11 +2252,11 @@ const VerificationHistoryRowSchema = z
   .object({
     id: z.string().uuid().openapi({ description: "Stable id of the verification (email_verifications.id)." }),
     email: z.string().openapi({ description: "The verified address, lower-cased and trimmed." }),
-    verifier: z.string().openapi({ description: "Always \"bounceverify\" today." }),
+    verifier: z.string().openapi({ description: "The vendor of THIS call: a step-1 verifier (\"contactout\", \"bounceverify\", \"trykitt\", \"millionverifier\") or \"bounceban\" (step 2, on a step-1 catch_all/unknown)." }),
     verdict: z
       .enum(["valid", "invalid", "catch_all", "risky", "unknown"])
       .nullable()
-      .openapi({ description: "BounceVerify's verdict. null = the call returned NO verdict (actor failed, timed out, Apify refused); never an invented one." }),
+      .openapi({ description: "This call's verdict. null = the call returned NO verdict (vendor failed, timed out, refused); never an invented one. A step-1 catch_all/unknown (or a step-1 failure) is followed, seconds later, by the next row; the BounceBan row decides a catch_all/unknown: the latest row of an address is its verdict." }),
     verifiedAt: z.string().openapi({ description: "ISO timestamp the verification was recorded." }),
     cursor: z.string().openapi({ description: "This row's position in the feed (insertion order). Resuming with after=<cursor> returns the rows after it." }),
   })

@@ -431,7 +431,7 @@ export const emailVerifications = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     // Lower-cased, trimmed.
     email: text("email").notNull(),
-    verifier: text("verifier").notNull(), // "bounceverify"
+    verifier: text("verifier").notNull(), // "bounceverify" | "millionverifier" (Apify out) | "bounceban" (second opinion)
     // "valid" | "invalid" | "catch_all" | "risky" | "unknown"; null when the call failed.
     verdict: text("verdict"),
     // The actor's own row for this address, verbatim.
@@ -446,6 +446,10 @@ export const emailVerifications = pgTable(
     source: text("source"),
     keySource: text("key_source"),
     billed: boolean("billed").notNull().default(false),
+    // The charge this call carried: cost name declared + quantity in its unit
+    // (apify-bounceverify-email → 1, treg-micro-usd → treg's X-Treg-Cost-Micro). Migration 0041.
+    costName: text("cost_name"),
+    costQuantity: integer("cost_quantity"),
     durationMs: integer("duration_ms"),
     verifiedAt: timestamp("verified_at", { withTimezone: true }).notNull().defaultNow(),
     // Insertion order (migration 0040): the cursor of GET /internal/email-verifications/history.

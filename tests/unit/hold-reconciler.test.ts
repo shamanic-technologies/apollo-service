@@ -47,6 +47,12 @@ describe("decideHold — one open hold, decided from what the call did", () => {
     expect(decideHold({ costId: "h", costName: "apify-bounceverify-email" }, { ...ev({ runTaskName: "verify-email", hold }), verificationBilled: false }).kind).toBe("cancel");
   });
 
+  it("verify-email-<treg vendor>: the charge our bronze recorded replaces the hold; none recorded → cancel", () => {
+    const hold = cost("h", "treg-micro-usd", "provisioned", "4000");
+    expect(decideHold({ costId: "h", costName: "treg-micro-usd" }, { ...ev({ runTaskName: "verify-email-bounceban", hold }), verificationCharged: 4000 })).toMatchObject({ kind: "replace", quantity: 4000 });
+    expect(decideHold({ costId: "h", costName: "treg-micro-usd" }, { ...ev({ runTaskName: "verify-email-trykitt", hold }), verificationCharged: null }).kind).toBe("cancel");
+  });
+
   it("email-find: the vendor's reported charge is posted as actual, the hold released", () => {
     const hold = cost("h", "treg-micro-usd", "provisioned", "10000");
     expect(decideHold({ costId: "h", costName: "treg-micro-usd" }, { ...ev({ runTaskName: "email-find-treg", hold }), findCharged: 5000 })).toMatchObject({
