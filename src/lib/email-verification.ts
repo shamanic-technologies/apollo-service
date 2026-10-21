@@ -106,6 +106,21 @@ export class EmailVerificationError extends Error {
 }
 
 /**
+ * BounceBan had not finished when its poll budget ran out. The task is paid and
+ * still running: the next ask for the SAME address resumes it (free). Loud for a
+ * real person's address like any failure; a caller that can live without the
+ * verdict (the reveal domain gate's probe) reads this subclass as "no evidence".
+ */
+export class SecondOpinionPendingError extends EmailVerificationError {
+  readonly taskId: string | null;
+  constructor(message: string, taskId: string | null) {
+    super(message);
+    this.name = "SecondOpinionPendingError";
+    this.taskId = taskId;
+  }
+}
+
+/**
  * Apify out of usage, read from the rejected response. Measured in prod
  * 2026-09-29: 403 `{"error":{"type":"platform-feature-disabled","message":
  * "Monthly usage hard limit exceeded"}}` for 20 hours, 4,801 failed
@@ -796,6 +811,10 @@ async function secondOpinion(email: string, ctx: VerificationContext): Promise<E
   // An earlier BounceBan task still running for this address is resumed (polled, free), not paid again.
   const pending = await pendingBounceban(email);
   const row = await bounceBanPass(email, ctx, pending ? String((pending.rawResult as { id: string }).id) : null);
+  if (row.error && isBounceBanInProgress(row.rawResult as Record<string, unknown> | null)) {
+    const id = (row.rawResult as { id?: unknown } | null)?.id;
+    throw new SecondOpinionPendingError(`${row.verifier}: ${row.error}`, typeof id === "string" ? id : null);
+  }
   if (row.error || row.verdict === null) failLoud(row);
   return toResult(row, false);
 }
