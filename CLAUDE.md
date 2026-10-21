@@ -619,6 +619,11 @@ pre-serve verification moved here from human-service. `/enrich`, `/match` and
   on a domain with MX. `decideVerdict` (`src/lib/mail-domain.ts` `domainHasMx`):
   MX found → `unknown` (never `valid`: no mailbox evidence; instantly-service sends
   unknown at ×3), no MX / null MX → `invalid`, DNS timeout → no verdict (502).
+  **SERVFAIL on the domain while our resolver answers gmail.com/outlook.com = the
+  domain's OWN DNS is broken → no MX → `invalid`** (APOLLO-SERVFAIL-POISON-1021:
+  teamquickenlends.com SERVFAILed for days and its one address 502'd every
+  newsletter slice it sat in). SERVFAIL on the controls too, or any timeout,
+  stays a loud 502: that is our resolver, not the domain.
   Billing follows the VENDOR's verdict (it charged a decisive invalid). A stored
   such invalid is re-checked at reuse time and, on MX, a free `unknown` row is
   appended; an `unknown` whose raw status is `invalid` is REUSED (re-asking pays
