@@ -42,6 +42,30 @@ describe("domainHasMx", () => {
     expect(await domainHasMx("web-only.example")).toBe(false);
   });
 
+  it("SERVFAIL on the domain while the control domains resolve → the domain's DNS is broken → false", async () => {
+    resolveMx = async (d) => {
+      if (d === "teamquickenlends.com") throw Object.assign(new Error("queryMx ESERVFAIL"), { code: "ESERVFAIL" });
+      return [{ exchange: `mx.${d}`, priority: 5 }];
+    };
+    const { domainHasMx } = await import("../../src/lib/mail-domain.js");
+    expect(await domainHasMx("teamquickenlends.com")).toBe(false);
+  });
+
+  it("SERVFAIL on everything (our resolver is down) throws", async () => {
+    resolveMx = failWith("ESERVFAIL");
+    const { domainHasMx, MailDomainLookupError } = await import("../../src/lib/mail-domain.js");
+    await expect(domainHasMx("teamquickenlends.com")).rejects.toBeInstanceOf(MailDomainLookupError);
+  });
+
+  it("a timeout on the domain throws even when the control domains resolve", async () => {
+    resolveMx = async (d) => {
+      if (d === "slow.example") throw Object.assign(new Error("queryMx ETIMEOUT"), { code: "ETIMEOUT" });
+      return [{ exchange: `mx.${d}`, priority: 5 }];
+    };
+    const { domainHasMx, MailDomainLookupError } = await import("../../src/lib/mail-domain.js");
+    await expect(domainHasMx("slow.example")).rejects.toBeInstanceOf(MailDomainLookupError);
+  });
+
   it("a lookup that cannot answer throws, never reads as 'no MX'", async () => {
     resolveMx = failWith("ETIMEOUT");
     const { domainHasMx, MailDomainLookupError } = await import("../../src/lib/mail-domain.js");

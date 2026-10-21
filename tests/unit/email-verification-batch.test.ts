@@ -42,11 +42,27 @@ vi.mock("../../src/db/schema.js", () => ({
   emailVerifications: { email: "email", verdict: "verdict", verifiedAt: "verified_at" },
 }));
 
+// The real mail-domain module runs; only the resolver underneath is scripted.
+// A plain function, not a vi.fn: a rejecting vi.fn is reported as a failure.
+let resolveMx: (domain: string) => Promise<Array<{ exchange: string; priority: number }>>;
+vi.mock("node:dns/promises", () => ({
+  Resolver: class {
+    resolveMx(domain: string) {
+      return resolveMx(domain);
+    }
+  },
+}));
+function dnsFail(code: string) {
+  return Object.assign(new Error(`queryMx ${code}`), { code });
+}
+
 const fetchMock = vi.fn();
 const VERDICTS: Record<string, Record<string, unknown>> = {
   "good@example.com": { status: "valid", is_catch_all: false },
   "bad@example.com": { status: "invalid", is_catch_all: false },
   "all@example.com": { status: "valid", is_catch_all: true },
+  // Prod 2026-10-21: the actor's "no mail domain" invalid on a domain whose DNS SERVFAILs.
+  "cohen.n@teamquickenlends.com": { status: "invalid", is_catch_all: false, domain_exists: false, mx_found: false, reason: "Domain does not exist" },
 };
 
 function actorFor(init: any) {
@@ -70,6 +86,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   heldRows = [];
   inserted.length = 0;
+  resolveMx = async (d) => {
+    if (d === "teamquickenlends.com") throw dnsFail("ESERVFAIL");
+    return [{ exchange: `mx.${d}`, priority: 10 }];
+  };
   let n = 0;
   mockCreateRun.mockImplementation(async () => ({ id: `verify-run-${++n}` }));
   mockUpdateRun.mockResolvedValue({});
@@ -130,6 +150,37 @@ describe("POST /email-verifications", () => {
     expect(res.body.type).toBe("email_verification");
     expect(res.body.error).toContain("down@example.com");
     expect(res.body.results).toBeUndefined();
+  });
+
+  it("an address on a domain whose own DNS is broken (SERVFAIL, resolver healthy) gets invalid; the rest of the batch is served (APOLLO-SERVFAIL-POISON-1021)", async () => {
+    const app = await buildApp();
+    const res = await request(app)
+      .post("/email-verifications")
+      .set(HEADERS)
+      .send({ emails: ["cohen.n@teamquickenlends.com", "good@example.com", "bad@example.com"] });
+    expect(res.status).toBe(200);
+    expect(res.body.results.map((r: any) => [r.email, r.verdict, r.deliverable])).toEqual([
+      ["cohen.n@teamquickenlends.com", "invalid", false],
+      ["good@example.com", "valid", true],
+      ["bad@example.com", "invalid", false],
+    ]);
+  });
+
+  it("a DNS failure that is not the domain's (resolver SERVFAILs everything / times out) still fails the batch loud", async () => {
+    for (const code of ["ESERVFAIL", "ETIMEOUT"]) {
+      resolveMx = async () => {
+        throw dnsFail(code);
+      };
+      const app = await buildApp();
+      const res = await request(app)
+        .post("/email-verifications")
+        .set(HEADERS)
+        .send({ emails: ["cohen.n@teamquickenlends.com", "good@example.com"] });
+      expect(res.status).toBe(502);
+      expect(res.body.type).toBe("email_verification");
+      expect(res.body.error).toContain("teamquickenlends.com");
+      expect(res.body.results).toBeUndefined();
+    }
   });
 
   it("fails loud when the org cannot afford it", async () => {
