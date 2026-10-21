@@ -668,7 +668,12 @@ Prices are re-derived daily by costs-service (2026-10-07: reveal 5.6¢, BounceVe
   only if all bad; `organizationId` = ids comma-joined.
 - **Skip only when EVERY domain is bad**; no employer / no exact org / no domain
   → reveal as before (benefit of the doubt). A probe failure 502s like any
-  verification failure, never a silent pass.
+  verification failure, never a silent pass, EXCEPT BounceBan still verifying
+  past its budget (`SecondOpinionPendingError`) = no evidence → reveal, basis
+  `probe_pending`; the domain's next probe re-asks that SAME address (pending
+  probe row < 24h) so the paid task resumes free (PROBE-BOUNCEBAN-PENDING-1021:
+  ~half of probes ended pending, a random address never resumed, two clients'
+  sources 502'd every serve for days). A person's address pending stays loud.
 - **Where the waste was (prod 2026-10-02..07, 625 paid gate-passes):** ambiguous
   name 344 wasted of 407 (Jump Trading alone 370 `unknown` reveals: Proofpoint
   554s our checker, one fluke `valid` kept it "ok" 30 days), domain-judged 120 of

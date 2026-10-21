@@ -59,16 +59,30 @@
  * basis `org_lookup_rate_limited`, like any other "no positive evidence" case:
  * a free pre-check must never turn a customer's paid serve into a 500
  * (2026-10-08, Shockwave: two /enrich 500s on a 429 a background fill caused).
+ *
+ * A PROBE BounceBan cannot settle within its poll budget is NO EVIDENCE: the
+ * reveal goes through (basis `probe_pending`) and the domain's next probe
+ * re-asks the SAME address, so the paid task is resumed (free) instead of a new
+ * random address paying, and waiting, again (2026-10-21: ~half of all probes
+ * ended "still verifying"; a probe address is random, so the resume never came,
+ * and every serve of two clients' sources 502'd for days).
  */
 
 import { randomBytes } from "node:crypto";
-import { and, desc, eq, gt, isNotNull, sql } from "drizzle-orm";
+import { and, desc, eq, gt, isNotNull, isNull, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloPeopleEnrichments, apolloTeaserPeople, emailVerifications, revealSkips } from "../db/schema.js";
 import { ApolloRateLimitedError, lookupOrganizationsByName, type ApolloOrganizationCandidate } from "./apollo-client.js";
 import type { CreditAlertIdentity } from "./credit-alert.js";
 import { exactOrganizationIds, normalizeDomain, normalizeEmployerName } from "./teaser-employer-domains.js";
-import { verifyRevealedEmail, VERDICT_REUSE_DAYS, SECOND_OPINION_VERIFIER, type EmailVerdict, type VerificationContext } from "./email-verification.js";
+import {
+  verifyRevealedEmail,
+  SecondOpinionPendingError,
+  VERDICT_REUSE_DAYS,
+  SECOND_OPINION_VERIFIER,
+  type EmailVerdict,
+  type VerificationContext,
+} from "./email-verification.js";
 
 /** A catch-all verdict condemns its domain as long as a verdict is reused at all. */
 export const CATCH_ALL_TTL_DAYS = VERDICT_REUSE_DAYS;
@@ -146,7 +160,7 @@ export type GateDecision =
   | {
       action: "reveal";
       /** Why the gate let it through — for the trace, never a silent default. */
-      basis: "domain_ok" | "no_employer" | "org_lookup_rate_limited" | "no_exact_org_match" | "ambiguous_org_name" | "no_domain";
+      basis: "domain_ok" | "probe_pending" | "no_employer" | "org_lookup_rate_limited" | "no_exact_org_match" | "ambiguous_org_name" | "no_domain";
       organizationName?: string;
       organizationId?: string;
       evidence?: DomainEvidence[];
@@ -199,14 +213,25 @@ export function candidateMailDomains(orgs: Array<{ website: string | null; revea
   return [...new Set(out)];
 }
 
+/** A probe whose verdict did not come in time (BounceBan still verifying): no evidence either way. */
+export interface ProbePending {
+  pending: true;
+  address: string;
+  taskId: string | null;
+}
+
+export function isProbePending(r: DomainVerdictRow | ProbePending): r is ProbePending {
+  return (r as ProbePending).pending === true;
+}
+
 /** Everything the gate reads or calls, so the decision is testable without a DB or Apollo. */
 export interface GateDeps {
   employerOf(apolloPersonId: string): Promise<string | null>;
   lookupOrganizations(name: string): Promise<ApolloOrganizationCandidate[]>;
   revealedEmailDomains(organizationId: string): Promise<RevealedDomain[]>;
   domainVerdicts(domain: string): Promise<DomainVerdictRow[]>;
-  /** Verify one random address at the domain; returns the stored verdict row. */
-  probe(domain: string): Promise<DomainVerdictRow>;
+  /** Verify one random address at the domain; returns the stored verdict row, or `pending` when no verdict came in time. */
+  probe(domain: string): Promise<DomainVerdictRow | ProbePending>;
   now?: () => Date;
 }
 
@@ -269,6 +294,10 @@ export async function decideReveal(apolloPersonId: string, deps: GateDeps): Prom
 
   for (const domain of unjudged) {
     const row = await deps.probe(domain);
+    // No verdict in time is no evidence: not EVERY domain is bad, so the reveal goes through.
+    if (isProbePending(row)) {
+      return { action: "reveal", basis: "probe_pending", organizationName, organizationId, evidence: [...evidence, toEvidence(domain, null, true)] };
+    }
     const judged = judgeDomain([row], now());
     if (judged.state !== "bad") {
       return { action: "reveal", basis: "domain_ok", organizationName, organizationId, evidence: [...evidence, toEvidence(domain, row, true)] };
@@ -334,6 +363,56 @@ export function probeAddress(domain: string): string {
   return `zz-probe-${randomBytes(6).toString("hex")}@${domain}`;
 }
 
+/** How long a domain's unfinished probe is resumed instead of a new one paid (same window as pendingBounceban). */
+export const PROBE_RESUME_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The address of the domain's latest probe BounceBan was still verifying,
+ * within PROBE_RESUME_MS. Probing it again resumes that paid task (free) rather
+ * than paying a new random address.
+ */
+async function pendingProbeAddress(domain: string): Promise<string | null> {
+  const since = new Date(Date.now() - PROBE_RESUME_MS);
+  const [row] = await db
+    .select({ email: emailVerifications.email })
+    .from(emailVerifications)
+    .where(
+      and(
+        eq(emailVerifications.source, PROBE_SOURCE),
+        eq(emailVerifications.verifier, SECOND_OPINION_VERIFIER),
+        isNull(emailVerifications.verdict),
+        sql`split_part(${emailVerifications.email}, '@', 2) = ${domain}`,
+        sql`${emailVerifications.rawResult}->>'id' IS NOT NULL`,
+        sql`${emailVerifications.rawResult}->>'status' IN ('verifying', 'queue')`,
+        gt(emailVerifications.verifiedAt, since)
+      )
+    )
+    .orderBy(desc(emailVerifications.verifiedAt))
+    .limit(1);
+  return row?.email ?? null;
+}
+
+/**
+ * Production probe: resume the domain's unfinished probe when one exists, else
+ * a fresh random address. BounceBan still verifying → `pending` (no evidence),
+ * never a failed serve. Every other failure stays loud.
+ */
+export async function runProbe(
+  domain: string,
+  verify: (address: string) => Promise<{ verdict: EmailVerdict; verificationId: string; verifiedAt: string }>,
+  pendingAddress: (domain: string) => Promise<string | null> = pendingProbeAddress
+): Promise<DomainVerdictRow | ProbePending> {
+  const address = (await pendingAddress(domain)) ?? probeAddress(domain);
+  try {
+    const result = await verify(address);
+    return { verdict: result.verdict, verificationId: result.verificationId, verifiedAt: new Date(result.verifiedAt), probe: true };
+  } catch (error) {
+    if (!(error instanceof SecondOpinionPendingError)) throw error;
+    console.warn(`[Apollo Service][reveal-domain-gate] probe ${address} not settled (task ${error.taskId ?? "?"}), revealing without the gate; the next probe of ${domain} resumes it`);
+    return { pending: true, address, taskId: error.taskId };
+  }
+}
+
 /**
  * A name's org lookup reused for LOOKUP_MEMO_MS, keyed on the normalized name
  * (insertion-ordered Map, oldest evicted past `max`). Failures are not stored.
@@ -367,10 +446,7 @@ export function productionDeps(ctx: GateContext): GateDeps {
     lookupOrganizations: (name) => gateLookupMemo.get(name, (n) => lookupOrganizationsByName(ctx.apolloApiKey, n, LOOKUP_PER_PAGE, ctx.alertIdentity)),
     revealedEmailDomains,
     domainVerdicts,
-    probe: async (domain) => {
-      const result = await verifyRevealedEmail(probeAddress(domain), { ...ctx.verify, source: PROBE_SOURCE });
-      return { verdict: result.verdict, verificationId: result.verificationId, verifiedAt: new Date(result.verifiedAt), probe: true };
-    },
+    probe: (domain) => runProbe(domain, (address) => verifyRevealedEmail(address, { ...ctx.verify, source: PROBE_SOURCE })),
   };
 }
 

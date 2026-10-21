@@ -2,12 +2,14 @@ import { describe, it, expect, vi } from "vitest";
 
 vi.mock("../../src/db/index.js", () => ({ db: {} }));
 
+import { EmailVerificationError, SecondOpinionPendingError } from "../../src/lib/email-verification.js";
 import {
   candidateMailDomains,
   decideReveal,
   judgeDomain,
   normalizeDomain,
   probeAddress,
+  runProbe,
   CHECKER_BLOCKED_TTL_DAYS,
   type DomainVerdictRow,
   type GateDeps,
@@ -233,5 +235,41 @@ describe("helpers", () => {
     const a = probeAddress("x.com");
     expect(a).toMatch(/^zz-probe-[0-9a-f]{12}@x\.com$/);
     expect(probeAddress("x.com")).not.toBe(a);
+  });
+});
+
+describe("a probe BounceBan cannot settle in time (PROBE-BOUNCEBAN-PENDING-1021)", () => {
+  it("probe pending → the reveal goes through (no evidence), never a failed serve", async () => {
+    const { d } = deps({ probe: vi.fn(async () => ({ pending: true as const, address: "zz-probe-aa@dugasdental.com", taskId: "bb-1" })) });
+    expect(await decideReveal("p1", d)).toEqual({
+      action: "reveal",
+      basis: "probe_pending",
+      organizationName: "Dugas Dental",
+      organizationId: "org-1",
+      evidence: [{ domain: "dugasdental.com", verdict: null, verificationId: null, verifiedAt: null, probed: true }],
+    });
+  });
+
+  it("runProbe: BounceBan still verifying → pending, not thrown", async () => {
+    const verify = vi.fn(async () => {
+      throw new SecondOpinionPendingError("bounceban: bounceban still verifying after 99s (task bb-7); the next ask resumes it", "bb-7");
+    });
+    const r = await runProbe("cisog.net", verify, async () => null);
+    expect(r).toMatchObject({ pending: true, taskId: "bb-7" });
+    expect(verify.mock.calls[0][0]).toMatch(/^zz-probe-[0-9a-f]{12}@cisog\.net$/);
+  });
+
+  it("runProbe: the domain's unfinished probe address is asked again (its paid task resumes), not a new random one", async () => {
+    const verify = vi.fn(async () => ({ verdict: "invalid" as const, verificationId: "ver-9", verifiedAt: NOW.toISOString() }));
+    const r = await runProbe("cisog.net", verify, async () => "zz-probe-d73fd64bf2ca@cisog.net");
+    expect(verify).toHaveBeenCalledWith("zz-probe-d73fd64bf2ca@cisog.net");
+    expect(r).toEqual({ verdict: "invalid", verificationId: "ver-9", verifiedAt: NOW, probe: true });
+  });
+
+  it("runProbe: any other verification failure stays loud", async () => {
+    const verify = vi.fn(async () => {
+      throw new EmailVerificationError("every step-1 verifier failed");
+    });
+    await expect(runProbe("cisog.net", verify, async () => null)).rejects.toThrow(/every step-1 verifier failed/);
   });
 });
