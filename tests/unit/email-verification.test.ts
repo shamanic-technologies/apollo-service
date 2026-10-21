@@ -215,11 +215,14 @@ describe("verifyRevealedEmail", () => {
       answers.apify = [() => actor([{ email: "ada@example.com", status: "unknown" }])];
       answers.bounceban = [() => treg({ id: "bb-9", status: "verifying", email: "ada@example.com" })];
       answers.status = [() => treg({ id: "bb-9", status: "verifying" }, 200, "0")];
-      const { verifyRevealedEmail, EmailVerificationError, BOUNCEBAN_POLL_BUDGET_MS } = await import("../../src/lib/email-verification.js");
+      const { verifyRevealedEmail, EmailVerificationError, SecondOpinionPendingError, BOUNCEBAN_POLL_BUDGET_MS } = await import("../../src/lib/email-verification.js");
       const p = verifyRevealedEmail("ada@example.com", CTX).catch((e) => e);
       for (let i = 0; i < BOUNCEBAN_POLL_BUDGET_MS / 10_000 + 2; i++) await vi.advanceTimersByTimeAsync(10_000);
       const err = await p;
       expect(err).toBeInstanceOf(EmailVerificationError);
+      // The pending subclass: still loud for a person's address, readable as "no evidence" by the domain gate's probe.
+      expect(err).toBeInstanceOf(SecondOpinionPendingError);
+      expect(err.taskId).toBe("bb-9");
       expect(err.message).toMatch(/still verifying/);
       const pendingRow = rows()[1];
       expect(pendingRow).toMatchObject({ verifier: "bounceban", verdict: null, billed: true, costQuantity: 4000, rawResult: { id: "bb-9", status: "verifying" } });
