@@ -1,3 +1,4 @@
+import { errorMessage } from "../lib/db-error.js";
 import { Router } from "express";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
@@ -262,7 +263,7 @@ router.post("/people/:apolloPersonId/phone-reveal", serviceAuth, async (req: Aut
           .update(apolloPhoneReveals)
           .set({
             status: "failed",
-            failureReason: apolloError instanceof Error ? apolloError.message : "Apollo phone reveal failed",
+            failureReason: apolloError instanceof Error ? errorMessage(apolloError) : "Apollo phone reveal failed",
             costReconciledAt: new Date(),
             completedAt: new Date(),
             updatedAt: new Date(),
@@ -289,13 +290,13 @@ router.post("/people/:apolloPersonId/phone-reveal", serviceAuth, async (req: Aut
     if (req.runId) {
       traceEvent(
         req.runId,
-        { service: "apollo-service", event: "phone-reveal-error", detail: error instanceof Error ? error.message : "Unknown error", level: "error" },
+        { service: "apollo-service", event: "phone-reveal-error", detail: error instanceof Error ? errorMessage(error) : "Unknown error", level: "error" },
         req.headers
       ).catch(() => {});
     }
     res.status(500).json({
       type: "internal",
-      error: error instanceof Error ? error.message : "Internal server error",
+      error: error instanceof Error ? errorMessage(error) : "Internal server error",
       ...providerErrorFields(error),
     });
   }
@@ -323,7 +324,7 @@ router.get("/people/:apolloPersonId/phone-reveal", orgAuth, async (req: Authenti
     return res.json(toRevealResponse(row));
   } catch (error) {
     console.error("[Apollo Service][GET /people/:apolloPersonId/phone-reveal] ERROR:", error);
-    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error" });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? errorMessage(error) : "Internal server error" });
   }
 });
 

@@ -3,6 +3,7 @@
  * and the QuickEnrich branch of POST /enrich. Lives outside the route module
  * so /enrich reuses it without importing a router.
  */
+import { errorMessage, messageOf } from "./db-error.js";
 import { and, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { emailFinderCalls, emailFindings, type EmailFinding } from "../db/schema.js";
@@ -154,7 +155,7 @@ async function resolveKey(orgId: string, userId: string, provider: string, track
     return resolved;
   } catch (err) {
     throw new ProviderKeyMissingError(
-      `No usable "${provider}" key in key-service (platform provider "${provider}"): ${err instanceof Error ? err.message : String(err)}`
+      `No usable "${provider}" key in key-service (platform provider "${provider}"): ${errorMessage(err)}`
     );
   }
 }
@@ -349,7 +350,7 @@ export async function executeEmailFind(
             underlyingProvider: null,
             chargedQuantity: null,
             chargedUnit: plan.chargedUnit,
-            error: err.message,
+            error: messageOf(err),
           });
           await db.update(emailFindings).set({ lastCallId: callId }).where(eq(emailFindings.id, claimed.id));
           if (attempt < VENDOR_UNAVAILABLE_MAX_ATTEMPTS && isVendorUnavailable(err)) {
@@ -428,7 +429,7 @@ export async function executeEmailFind(
     return await respond(done, false);
   } catch (error) {
     console.error("[Apollo Service][POST /email-finder/find] ERROR:", error);
-    const message = error instanceof Error ? error.message : "Internal server error";
+    const message = error instanceof Error ? errorMessage(error) : "Internal server error";
 
     // The find itself succeeded and is stored; only its verdict is missing. A
     // re-request serves the finding (no vendor call) and retries the verify.

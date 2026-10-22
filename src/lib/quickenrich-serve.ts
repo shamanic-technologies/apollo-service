@@ -4,6 +4,7 @@
  * an email find. Pure rules live in ./quickenrich.ts.
  */
 
+import { errorMessage } from "./db-error.js";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloAudiences, apolloSearchCursors, quickenrichPeople, quickenrichSearches } from "../db/schema.js";
@@ -127,7 +128,7 @@ async function searchPage(
     page = { rows: parsed.data as QuickenrichRow[], nextCursor, hasMore: parsed.meta?.has_more === true && nextCursor !== null };
     return page;
   } catch (err) {
-    error = err instanceof Error ? err.message : String(err);
+    error = errorMessage(err);
     throw err instanceof QuickenrichSearchError ? err : new QuickenrichSearchError(error);
   } finally {
     await db.insert(quickenrichSearches).values({

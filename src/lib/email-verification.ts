@@ -34,6 +34,7 @@
  * deliverable.
  */
 
+import { errorMessage, messageOf } from "./db-error.js";
 import { and, desc, eq, gt, isNotNull, isNull, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { emailVerifications, type EmailVerification } from "../db/schema.js";
@@ -312,7 +313,7 @@ async function callActorOnce(apifyToken: string, email: string, actorTimeoutS: n
       signal: AbortSignal.timeout(actorTimeoutS * 1000 + FETCH_GRACE_MS),
     });
   } catch (err) {
-    return { rows: null, httpStatus: null, error: `apify unreachable: ${err instanceof Error ? err.message : String(err)}`, durationMs: Date.now() - started };
+    return { rows: null, httpStatus: null, error: `apify unreachable: ${errorMessage(err)}`, durationMs: Date.now() - started };
   }
   const text = await res.text();
   const durationMs = Date.now() - started;
@@ -365,7 +366,7 @@ async function tregCall(
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
-    return { httpStatus: null, body: null, chargedMicro: null, error: `treg ${endpoint} unreachable: ${err instanceof Error ? err.message : String(err)}` };
+    return { httpStatus: null, body: null, chargedMicro: null, error: `treg ${endpoint} unreachable: ${errorMessage(err)}` };
   }
   const text = await res.text();
   let body: Record<string, unknown> | null = null;
@@ -487,7 +488,7 @@ async function meteredVerification(
       keys.push(resolved.key);
       keySource ??= resolved.keySource;
     } catch (err) {
-      throw new EmailVerificationError(`no usable "${provider}" key in key-service: ${err instanceof Error ? err.message : String(err)}`);
+      throw new EmailVerificationError(`no usable "${provider}" key in key-service: ${errorMessage(err)}`);
     }
   }
   const source = keySource!;
@@ -571,7 +572,7 @@ async function meteredVerification(
     }
     await updateRun(run.id, "failed", identity).catch((e) => console.error(`[Apollo Service] verify_email.mark_failed_failed run=${run.id}`, e));
     if (err instanceof EmailVerificationError) throw err;
-    throw new EmailVerificationError(err instanceof Error ? err.message : String(err));
+    throw new EmailVerificationError(errorMessage(err));
   }
 }
 
@@ -649,7 +650,7 @@ async function bounceVerifyPass(email: string, ctx: VerificationContext): Promis
           if (!(err instanceof MailDomainLookupError)) throw err;
           // The vendor answered (and charged); only our DNS check could not:
           // no verdict is better than a false one, the charge is still declared.
-          lookupError = err.message;
+          lookupError = messageOf(err);
         }
       }
       return {
@@ -858,7 +859,7 @@ async function recheckHeldInvalid(held: EmailVerification, email: string, ctx: V
   try {
     hasMx = await domainHasMx(email.split("@")[1] ?? "");
   } catch (err) {
-    throw new EmailVerificationError(err instanceof Error ? err.message : String(err));
+    throw new EmailVerificationError(errorMessage(err));
   }
   if (!hasMx) return held;
   const [corrected] = await db
@@ -928,7 +929,7 @@ export async function verifyEmailBatch(rawEmails: string[], ctx: VerificationCon
       try {
         results[i] = await verifyRevealedEmail(emails[i], ctx);
       } catch (err) {
-        failures.push(`${emails[i]}: ${err instanceof Error ? err.message : String(err)}`);
+        failures.push(`${emails[i]}: ${errorMessage(err)}`);
         if (err instanceof EmailVerificationError && err.providerError) providerError = err.providerError;
         if (err instanceof EmailVerificationError && err.creditRefusal) creditRefusal = err.creditRefusal;
       }

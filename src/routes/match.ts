@@ -1,3 +1,4 @@
+import { errorMessage } from "../lib/db-error.js";
 import { Router } from "express";
 import { and, gt, eq, isNotNull, desc, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
@@ -311,13 +312,13 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
     console.error("[Apollo Service][POST /match] ERROR:", error);
     await failOpenRun(openRun, "match");
     if (req.runId) {
-      traceEvent(req.runId, { service: "apollo-service", event: "match-error", detail: error instanceof Error ? error.message : "Unknown error", level: "error" }, req.headers).catch(() => {});
+      traceEvent(req.runId, { service: "apollo-service", event: "match-error", detail: error instanceof Error ? errorMessage(error) : "Unknown error", level: "error" }, req.headers).catch(() => {});
     }
     if (error instanceof EmailVerificationError) {
       const answer = emailVerificationErrorResponse(error);
       return res.status(answer.status).json(answer.body);
     }
-    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? errorMessage(error) : "Internal server error", ...providerErrorFields(error) });
   }
 });
 

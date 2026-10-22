@@ -46,6 +46,7 @@
  * exclusions are suspect and nothing in this file acts on the numbers.
  */
 
+import { errorMessage } from "./db-error.js";
 import { z } from "zod";
 import { chatComplete, type ChatTrackingHeaders } from "./chat-client.js";
 import { toApolloSearchParams } from "./transform.js";
@@ -784,7 +785,7 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
         filters: null,
         count: null,
         reasoning: "chat-service did not return a usable model response",
-        validationErrors: [error instanceof Error ? error.message : String(error)],
+        validationErrors: [errorMessage(error)],
       });
       if (invalidRetries > MAX_INVALID_RETRIES) {
         stoppedReason = "invalid_budget_exhausted";

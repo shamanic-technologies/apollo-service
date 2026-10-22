@@ -1,3 +1,4 @@
+import { errorMessage } from "../lib/db-error.js";
 import { Router } from "express";
 import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
 import { validateBatch } from "../lib/validators.js";
@@ -23,7 +24,7 @@ router.post("/validate", serviceAuth, async (req: AuthenticatedRequest, res) => 
     console.error("[Apollo Service] Validation error:", error);
     res.status(500).json({
       type: "internal",
-      error: error instanceof Error ? error.message : "Internal server error",
+      error: error instanceof Error ? errorMessage(error) : "Internal server error",
     });
   }
 });

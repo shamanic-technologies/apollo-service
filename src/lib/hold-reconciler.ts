@@ -26,6 +26,7 @@
  * charge, failed otherwise. Runs in one pass run sequentially; a failure on one
  * hold is logged and left for the next pass, never marked settled.
  */
+import { errorMessage } from "./db-error.js";
 import { and, asc, desc, eq, gt, isNull, lt } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloPhoneReveals, costHolds, emailFinderCalls, emailVerifications, type CostHold } from "../db/schema.js";
@@ -257,7 +258,7 @@ async function runPass({ dryRun = false, olderThanMs = HOLD_STALE_AFTER_MS, limi
       }
       items.push(item);
     } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
+      const reason = errorMessage(err);
       console.error(`[Apollo Service] hold_reconciler.failed cost=${hold.costId} run=${hold.runId}: ${reason}`);
       items.push({ ...base, taskName: null, decision: { kind: "error", reason } });
     }

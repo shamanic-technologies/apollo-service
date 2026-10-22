@@ -1,3 +1,4 @@
+import { errorMessage, messageOf } from "../lib/db-error.js";
 import { Router } from "express";
 import { eq, and, gt, isNotNull, desc, inArray, count, sum, sql, arrayOverlaps } from "drizzle-orm";
 import { db } from "../db/index.js";
@@ -114,12 +115,12 @@ router.post("/search/dry-run", serviceAuth, async (req: AuthenticatedRequest, re
   } catch (error) {
     console.error("[Apollo Service][POST /search/dry-run] ERROR:", error);
     if (error instanceof BuyingSignalConflictError) {
-      return res.status(400).json({ type: "validation", error: error.message, fields: error.fields });
+      return res.status(400).json({ type: "validation", error: messageOf(error), fields: error.fields });
     }
     if (error instanceof SignalNotApolloSearchableError) {
-      return res.status(400).json({ totalEntries: 0, validationErrors: [error.message] });
+      return res.status(400).json({ totalEntries: 0, validationErrors: [messageOf(error)] });
     }
-    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? errorMessage(error) : "Internal server error", ...providerErrorFields(error) });
   }
 });
 
@@ -498,22 +499,22 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
     console.error("[Apollo Service][POST /enrich] ERROR:", error);
     await failOpenRun(openRun, "enrich");
     if (req.runId) {
-      traceEvent(req.runId, { service: "apollo-service", event: "enrich-error", detail: error instanceof Error ? error.message : "Unknown error", level: "error" }, req.headers).catch(() => {});
+      traceEvent(req.runId, { service: "apollo-service", event: "enrich-error", detail: error instanceof Error ? errorMessage(error) : "Unknown error", level: "error" }, req.headers).catch(() => {});
     }
     if (error instanceof EmailVerificationError) {
       const answer = emailVerificationErrorResponse(error);
       return res.status(answer.status).json(answer.body);
     }
     if (error instanceof BuyingSignalInsufficientCreditError) {
-      return res.status(402).json({ ...creditRefusalBody(error.auth), source: "buying-signal", error: error.message });
+      return res.status(402).json({ ...creditRefusalBody(error.auth), source: "buying-signal", error: messageOf(error) });
     }
     if (error instanceof LinkedinEngagementInsufficientCreditError) {
-      return res.status(402).json({ ...creditRefusalBody(error.auth), source: "linkedin-engagement", error: error.message });
+      return res.status(402).json({ ...creditRefusalBody(error.auth), source: "linkedin-engagement", error: messageOf(error) });
     }
     if (error instanceof BuyingSignalConflictError) {
-      return res.status(400).json({ type: "validation", error: error.message, fields: error.fields });
+      return res.status(400).json({ type: "validation", error: messageOf(error), fields: error.fields });
     }
-    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? errorMessage(error) : "Internal server error", ...providerErrorFields(error) });
   }
 });
 
@@ -885,18 +886,18 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     console.error("[Apollo Service][POST /search/next] ERROR:", error);
     await failOpenRun(openRun, "search/next");
     if (req.runId) {
-      traceEvent(req.runId, { service: "apollo-service", event: "search-next-error", detail: error instanceof Error ? error.message : "Unknown error", level: "error" }, req.headers).catch(() => {});
+      traceEvent(req.runId, { service: "apollo-service", event: "search-next-error", detail: error instanceof Error ? errorMessage(error) : "Unknown error", level: "error" }, req.headers).catch(() => {});
     }
     if (error instanceof LinkedinEngagementInsufficientCreditError) {
-      return res.status(402).json({ ...creditRefusalBody(error.auth), source: "linkedin-engagement", error: error.message });
+      return res.status(402).json({ ...creditRefusalBody(error.auth), source: "linkedin-engagement", error: messageOf(error) });
     }
     if (error instanceof LinkedinCompetitorPagesUnreadableError) {
-      return res.status(error.permanent ? 422 : 502).json({ type: "competitor_pages_unreadable", source: "linkedin-engagement", error: error.message, pages: error.pages, retryable: !error.permanent });
+      return res.status(error.permanent ? 422 : 502).json({ type: "competitor_pages_unreadable", source: "linkedin-engagement", error: messageOf(error), pages: error.pages, retryable: !error.permanent });
     }
     if (error instanceof BuyingSignalConflictError) {
-      return res.status(400).json({ type: "validation", error: error.message, fields: error.fields });
+      return res.status(400).json({ type: "validation", error: messageOf(error), fields: error.fields });
     }
-    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? errorMessage(error) : "Internal server error", ...providerErrorFields(error) });
   }
 });
 

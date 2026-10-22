@@ -1,3 +1,4 @@
+import { errorMessage } from "../lib/db-error.js";
 import { Router } from "express";
 import { requireServiceApiKey } from "./transfer-brand.js";
 import { AcquisitionCostsRequestSchema } from "../schemas.js";
@@ -20,7 +21,7 @@ router.post("/internal/acquisition-costs", requireServiceApiKey, async (req, res
     res.json(await readAcquisitionCosts(parsed.data.orgId, parsed.data.servedLeads));
   } catch (error) {
     console.error("[Apollo Service][POST /internal/acquisition-costs] ERROR:", error);
-    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error" });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? errorMessage(error) : "Internal server error" });
   }
 });
 

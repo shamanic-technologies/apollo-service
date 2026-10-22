@@ -3,6 +3,7 @@
  * Centralized run tracking and cost management
  */
 
+import { errorMessage } from "./db-error.js";
 import { randomUUID } from "node:crypto";
 import { recordOpenedHolds, recordSettledHold } from "./cost-hold-ledger.js";
 
@@ -187,7 +188,7 @@ async function runsRequest<T>(
         err instanceof RunsServiceError &&
         (err.kind !== "http" || (err.status !== undefined && (err.status >= 500 || err.status === 429)));
       if (!retryable || attempt >= RUNS_RETRY_DELAYS_MS.length) throw err;
-      console.warn(`[Apollo Service] runs-service retry ${attempt + 1}/${RUNS_RETRY_DELAYS_MS.length}: ${(err as Error).message}`);
+      console.warn(`[Apollo Service] runs-service retry ${attempt + 1}/${RUNS_RETRY_DELAYS_MS.length}: ${errorMessage(err)}`);
       await new Promise((resolve) => setTimeout(resolve, RUNS_RETRY_DELAYS_MS[attempt]));
     }
   }
@@ -224,7 +225,7 @@ async function runsAttempt<T>(
       kind: "network",
       path,
       method,
-      message: `runs-service ${method} ${path} network error: ${(err as Error).message}`,
+      message: `runs-service ${method} ${path} network error: ${errorMessage(err)}`,
     });
   } finally {
     clearTimeout(timer);

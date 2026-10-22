@@ -1,3 +1,4 @@
+import { errorString } from "./db-error.js";
 /**
  * Email finders other than Apollo: treg.to (a routed hub over ~20 providers)
  * and Explee. Each call is recorded verbatim (bronze) and normalised into one
@@ -298,7 +299,7 @@ async function post(url: string, headers: Record<string, string>, body: Record<s
   } catch (err) {
     return {
       response: null,
-      networkError: err instanceof Error ? err : new Error(String(err)),
+      networkError: err instanceof Error ? err : new Error(errorString(err)),
       exchange: {
         requestUrl: url,
         requestHeaders,

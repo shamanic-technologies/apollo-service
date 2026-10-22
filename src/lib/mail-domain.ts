@@ -11,6 +11,7 @@
  * is not evidence that mail cannot be delivered.
  */
 
+import { errorMessage } from "./db-error.js";
 import { Resolver } from "node:dns/promises";
 
 /** DNS codes that mean "no MX here", a real answer (the domain or the record set does not exist). */
@@ -34,7 +35,7 @@ export const CONTROL_MX_DOMAINS = ["gmail.com", "outlook.com"] as const;
 
 export class MailDomainLookupError extends Error {
   constructor(domain: string, cause: unknown) {
-    super(`MX lookup for ${domain} failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+    super(`MX lookup for ${domain} failed: ${errorMessage(cause)}`);
     this.name = "MailDomainLookupError";
   }
 }
