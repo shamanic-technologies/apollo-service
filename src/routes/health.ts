@@ -1,3 +1,4 @@
+import { messageOf } from "../lib/db-error.js";
 import { Router } from "express";
 import { sql } from "drizzle-orm";
 
@@ -18,7 +19,7 @@ router.get("/health/debug", async (req, res) => {
       await db.execute(sql`SELECT 1`);
       dbStatus = "connected";
     } catch (e: any) {
-      dbStatus = `error: ${e.message}`;
+      dbStatus = `error: ${messageOf(e)}`;
     }
   } else {
     dbStatus = "not configured";
@@ -29,7 +30,7 @@ router.get("/health/debug", async (req, res) => {
     const resp = await fetch(`${keyServiceUrl}/health`);
     keyServiceStatus = resp.ok ? "connected" : `status: ${resp.status}`;
   } catch (e: any) {
-    keyServiceStatus = `error: ${e.message}`;
+    keyServiceStatus = `error: ${messageOf(e)}`;
   }
 
   res.json({

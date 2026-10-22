@@ -34,6 +34,7 @@
  * email find. Silver is global, so a page or post already read today, or a
  * profile resolved in the last 30 days, is never paid again, whoever asks.
  */
+import { errorMessage, messageOf } from "./db-error.js";
 import { and, desc, eq, gte, inArray, isNotNull, lt, max, notExists, or, isNull, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
@@ -362,7 +363,7 @@ export class EngagementMeter {
         response = await fetch(url, { method: req.method, headers, body: req.body ? JSON.stringify(req.body) : undefined, signal: AbortSignal.timeout(req.timeoutMs ?? CALL_TIMEOUT_MS) });
       } catch (err) {
         // The call may have reached treg and been billed: the hold stays for the reconciler.
-        error = err instanceof Error ? err.message : String(err);
+        error = errorMessage(err);
         throw new LinkedinTregTransientError(`${endpoint} call failed: ${error}`);
       }
       status = response.status;
@@ -434,7 +435,7 @@ async function readPosts(meter: EngagementMeter, page: CompetitorPage, providers
       answer = await meter.call(provider.endpoint, { method: "GET", query: provider.query(page), maxMicro: provider.maxMicro, routed: false });
     } catch (err) {
       if (!(err instanceof LinkedinTregTransientError)) throw err;
-      skipped.push(err.message);
+      skipped.push(messageOf(err));
       continue;
     }
     const verdict = postsVerdict(provider, answer.status, answer.body);

@@ -1,3 +1,4 @@
+import { errorMessage, messageOf } from "../lib/db-error.js";
 import { Router, type Response } from "express";
 import { eq, and, inArray, gt } from "drizzle-orm";
 import { db } from "../db/index.js";
@@ -146,8 +147,8 @@ router.post("/audiences/suggest-from-segment", serviceAuth, async (req: Authenti
     });
   } catch (error) {
     console.error("[Apollo Service][POST /audiences/suggest-from-segment] ERROR:", error);
-    if (error instanceof SignalNotApolloSearchableError) return res.status(400).json({ type: "validation", error: error.message });
-    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
+    if (error instanceof SignalNotApolloSearchableError) return res.status(400).json({ type: "validation", error: messageOf(error) });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? errorMessage(error) : "Internal server error", ...providerErrorFields(error) });
   }
 });
 
@@ -178,7 +179,7 @@ router.get("/audiences/:apolloAudienceId", orgAuth, async (req: AuthenticatedReq
     });
   } catch (error) {
     console.error("[Apollo Service][GET /audiences/:id] ERROR:", error);
-    if (error instanceof SignalNotApolloSearchableError) return res.status(400).json({ type: "validation", error: error.message });
+    if (error instanceof SignalNotApolloSearchableError) return res.status(400).json({ type: "validation", error: messageOf(error) });
     res.status(500).json({ type: "internal", error: "Internal server error" });
   }
 });
@@ -226,8 +227,8 @@ router.patch("/audiences/:apolloAudienceId/serve-source", orgAuth, async (req: A
     res.json({ apolloAudienceId: row.id, ...serveSourceFields(serveSource, filters) });
   } catch (error) {
     console.error("[Apollo Service][PATCH /audiences/:id/serve-source] ERROR:", error);
-    if (error instanceof SignalNotApolloSearchableError) return res.status(400).json({ type: "validation", error: error.message });
-    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error" });
+    if (error instanceof SignalNotApolloSearchableError) return res.status(400).json({ type: "validation", error: messageOf(error) });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? errorMessage(error) : "Internal server error" });
   }
 });
 
@@ -266,8 +267,8 @@ router.get("/audiences/:apolloAudienceId/preview", serviceAuth, async (req: Auth
     res.json({ apolloAudienceId: row.id, ...preview });
   } catch (error) {
     console.error("[Apollo Service][GET /audiences/:id/preview] ERROR:", error);
-    if (error instanceof SignalNotApolloSearchableError) return res.status(400).json({ type: "validation", error: error.message });
-    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
+    if (error instanceof SignalNotApolloSearchableError) return res.status(400).json({ type: "validation", error: messageOf(error) });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? errorMessage(error) : "Internal server error", ...providerErrorFields(error) });
   }
 });
 
@@ -490,8 +491,8 @@ router.get("/audiences/:apolloAudienceId/companies", serviceAuth, async (req: Au
     });
   } catch (error) {
     console.error("[Apollo Service][GET /audiences/:id/companies] ERROR:", error);
-    if (error instanceof SignalNotApolloSearchableError) return res.status(400).json({ type: "validation", error: error.message });
-    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
+    if (error instanceof SignalNotApolloSearchableError) return res.status(400).json({ type: "validation", error: messageOf(error) });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? errorMessage(error) : "Internal server error", ...providerErrorFields(error) });
   }
 });
 
@@ -531,8 +532,8 @@ router.post("/audiences/:apolloAudienceId/dry-run", serviceAuth, async (req: Aut
     res.json({ count });
   } catch (error) {
     console.error("[Apollo Service][POST /audiences/:id/dry-run] ERROR:", error);
-    if (error instanceof SignalNotApolloSearchableError) return res.status(400).json({ type: "validation", error: error.message });
-    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
+    if (error instanceof SignalNotApolloSearchableError) return res.status(400).json({ type: "validation", error: messageOf(error) });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? errorMessage(error) : "Internal server error", ...providerErrorFields(error) });
   }
 });
 
@@ -640,8 +641,8 @@ router.post("/audiences/signal-coverage", serviceAuth, async (req: Authenticated
     res.json({ measuredOn: utcDay(new Date()), baseCount, signals });
   } catch (error) {
     console.error("[Apollo Service][POST /audiences/signal-coverage] ERROR:", error);
-    if (error instanceof SignalNotApolloSearchableError) return res.status(400).json({ type: "validation", error: error.message });
-    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
+    if (error instanceof SignalNotApolloSearchableError) return res.status(400).json({ type: "validation", error: messageOf(error) });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? errorMessage(error) : "Internal server error", ...providerErrorFields(error) });
   }
 });
 
@@ -708,8 +709,8 @@ router.post("/audiences/signal", serviceAuth, async (req: AuthenticatedRequest, 
     res.json({ apolloAudienceId: row.id, name, description, filters, count, window });
   } catch (error) {
     console.error("[Apollo Service][POST /audiences/signal] ERROR:", error);
-    if (error instanceof SignalNotApolloSearchableError) return res.status(400).json({ type: "validation", error: error.message });
-    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error", ...providerErrorFields(error) });
+    if (error instanceof SignalNotApolloSearchableError) return res.status(400).json({ type: "validation", error: messageOf(error) });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? errorMessage(error) : "Internal server error", ...providerErrorFields(error) });
   }
 });
 

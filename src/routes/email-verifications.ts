@@ -1,3 +1,4 @@
+import { errorMessage } from "../lib/db-error.js";
 import { Router } from "express";
 import { z } from "zod";
 import { serviceAuth, type AuthenticatedRequest } from "../middleware/auth.js";
@@ -42,7 +43,7 @@ router.post("/email-verifications", serviceAuth, async (req: AuthenticatedReques
       const answer = emailVerificationErrorResponse(error);
       return res.status(answer.status).json(answer.body);
     }
-    return res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error" });
+    return res.status(500).json({ type: "internal", error: error instanceof Error ? errorMessage(error) : "Internal server error" });
   }
 });
 

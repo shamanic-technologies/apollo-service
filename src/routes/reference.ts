@@ -1,3 +1,4 @@
+import { errorMessage } from "../lib/db-error.js";
 import { Router } from "express";
 import { serviceAuth, AuthenticatedRequest } from "../middleware/auth.js";
 import { getIndustries, getEmployeeRanges } from "../lib/reference-cache.js";
@@ -13,7 +14,7 @@ router.get("/reference/industries", serviceAuth, async (req: AuthenticatedReques
     res.json({ industries });
   } catch (error) {
     console.error("[Apollo Service] Get industries error:", error);
-    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error" });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? errorMessage(error) : "Internal server error" });
   }
 });
 

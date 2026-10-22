@@ -32,6 +32,7 @@
  * quota this fill spent (2026-10-08, Shockwave).
  */
 
+import { errorMessage } from "./db-error.js";
 import { and, gt, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloEmployerDomains } from "../db/schema.js";
@@ -137,7 +138,7 @@ export async function resolveEmployerDomains(people: TeaserLike[], deps: Employe
           rateLimited = true;
           continue;
         }
-        console.warn(`[Apollo Service][teaser-employer-domains] lookup failed for "${name}"`, error instanceof Error ? error.message : error);
+        console.warn(`[Apollo Service][teaser-employer-domains] lookup failed for "${name}"`, error instanceof Error ? errorMessage(error) : error);
       }
     }
   };

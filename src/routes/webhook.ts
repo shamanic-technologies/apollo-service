@@ -1,3 +1,4 @@
+import { errorMessage } from "../lib/db-error.js";
 import { Router, Request, Response } from "express";
 import { and, eq, inArray, or } from "drizzle-orm";
 import { db } from "../db/index.js";
@@ -232,7 +233,7 @@ router.post("/webhook/phone-reveal", async (req: Request, res: Response) => {
         await updateRun(row.revealRunId, status === "failed" ? "failed" : "completed", identityFor(row));
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : "cost reconciliation failed";
+      const message = error instanceof Error ? errorMessage(error) : "cost reconciliation failed";
       console.error("[Apollo Service][webhook/phone-reveal] cost reconciliation failed", { revealId: row.id, message });
       reconcileErrors.push(message);
     }

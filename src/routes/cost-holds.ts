@@ -1,3 +1,4 @@
+import { errorMessage } from "../lib/db-error.js";
 import { Router } from "express";
 import { requireServiceApiKey } from "./transfer-brand.js";
 import { reconcileStaleHolds, HOLD_STALE_AFTER_MS } from "../lib/hold-reconciler.js";
@@ -26,7 +27,7 @@ router.post("/internal/cost-holds/reconcile", requireServiceApiKey, async (req, 
     res.json(report);
   } catch (error) {
     console.error("[Apollo Service][POST /internal/cost-holds/reconcile] ERROR:", error);
-    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error" });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? errorMessage(error) : "Internal server error" });
   }
 });
 
