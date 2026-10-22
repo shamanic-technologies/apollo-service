@@ -1,3 +1,4 @@
+import { errorMessage } from "../lib/db-error.js";
 import { Router } from "express";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
@@ -72,7 +73,7 @@ router.get("/email-finder/findings", orgAuth, async (req: AuthenticatedRequest, 
     return res.json({ findings: rows.map(toFindingResponse) });
   } catch (error) {
     console.error("[Apollo Service][GET /email-finder/findings] ERROR:", error);
-    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error" });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? errorMessage(error) : "Internal server error" });
   }
 });
 

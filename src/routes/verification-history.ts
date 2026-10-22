@@ -1,3 +1,4 @@
+import { errorMessage } from "../lib/db-error.js";
 import { Router } from "express";
 import { requireServiceApiKey } from "./transfer-brand.js";
 import { VerificationHistoryQuerySchema } from "../schemas.js";
@@ -20,7 +21,7 @@ router.get("/internal/email-verifications/history", requireServiceApiKey, async 
     res.json(page);
   } catch (error) {
     console.error("[Apollo Service][GET /internal/email-verifications/history] ERROR:", error);
-    res.status(500).json({ type: "internal", error: error instanceof Error ? error.message : "Internal server error" });
+    res.status(500).json({ type: "internal", error: error instanceof Error ? errorMessage(error) : "Internal server error" });
   }
 });
 

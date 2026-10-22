@@ -1,3 +1,4 @@
+import { errorMessage } from "../lib/db-error.js";
 import { Router } from "express";
 import { requireServiceApiKey } from "./transfer-brand.js";
 import { CompanyFirmographicsRequestSchema, PersonIdentityRequestSchema } from "../schemas.js";
@@ -31,7 +32,7 @@ router.post("/internal/company-firmographics", requireServiceApiKey, async (req,
     res.json(answer);
   } catch (error) {
     console.error("[Apollo Service][POST /internal/company-firmographics] ERROR:", error);
-    res.status(502).json({ type: "upstream", error: error instanceof Error ? error.message : "Upstream failure" });
+    res.status(502).json({ type: "upstream", error: error instanceof Error ? errorMessage(error) : "Upstream failure" });
   }
 });
 
@@ -49,7 +50,7 @@ router.post("/internal/person-identity", requireServiceApiKey, async (req, res) 
     res.json(await lookupPersonIdentity(parsed.data.email));
   } catch (error) {
     console.error("[Apollo Service][POST /internal/person-identity] ERROR:", error);
-    res.status(502).json({ type: "upstream", error: error instanceof Error ? error.message : "Upstream failure" });
+    res.status(502).json({ type: "upstream", error: error instanceof Error ? errorMessage(error) : "Upstream failure" });
   }
 });
 
