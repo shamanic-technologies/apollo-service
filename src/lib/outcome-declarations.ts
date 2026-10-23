@@ -58,8 +58,16 @@ export interface OutcomePerson {
   linkedinUrl?: string | null;
 }
 
+/** A subject the CALLER named (its own service and id): declared as is, never resolved through lead-service. */
+export interface NamedSubject {
+  subjectService: string;
+  subjectId: string;
+}
+
 export interface RecordOutcomeInput {
   runId: string;
+  /** Absent = the person's lead in lead-service, resolved later. */
+  subject?: NamedSubject;
   orgId: string;
   brandIds?: string[] | null;
   campaignId?: string | null;
@@ -101,6 +109,8 @@ export async function recordOutcome(input: RecordOutcomeInput): Promise<void> {
     apolloPersonId: input.person.apolloPersonId ?? null,
     email: input.person.email ? input.person.email.trim().toLowerCase() : null,
     linkedinUrl: input.person.linkedinUrl ?? null,
+    subjectService: input.subject?.subjectService ?? null,
+    leadId: input.subject?.subjectId ?? null,
   }));
   if (rows.length === 0) return;
   try {
@@ -155,8 +165,10 @@ export function toResolveItem(row: Pick<OutcomeDeclaration, "orgId" | "brandIds"
 }
 
 /** The runs-service body for one run's rows, all resolved. */
-export function declarationBody(rows: Pick<OutcomeDeclaration, "direction" | "outcomeKey" | "leadId">[]): { produced: OutcomeSubjectItem[]; consumed: OutcomeSubjectItem[] } {
-  const item = (r: (typeof rows)[number]): OutcomeSubjectItem => ({ outcomeKey: r.outcomeKey, subjectService: SUBJECT_SERVICE, subjectId: r.leadId! });
+export function declarationBody(
+  rows: Array<Pick<OutcomeDeclaration, "direction" | "outcomeKey" | "leadId"> & { subjectService?: string | null }>
+): { produced: OutcomeSubjectItem[]; consumed: OutcomeSubjectItem[] } {
+  const item = (r: (typeof rows)[number]): OutcomeSubjectItem => ({ outcomeKey: r.outcomeKey, subjectService: r.subjectService ?? SUBJECT_SERVICE, subjectId: r.leadId! });
   return {
     produced: rows.filter((r) => r.direction === "produced").map(item),
     consumed: rows.filter((r) => r.direction === "consumed").map(item),

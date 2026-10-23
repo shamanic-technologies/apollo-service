@@ -2,7 +2,8 @@ import { errorMessage } from "../lib/db-error.js";
 import { Router } from "express";
 import { z } from "zod";
 import { serviceAuth, type AuthenticatedRequest } from "../middleware/auth.js";
-import { verifyEmailBatch, EmailVerificationError, MAX_VERIFY_BATCH } from "../lib/email-verification.js";
+import { verifyEmailBatch, EmailVerificationError, MAX_VERIFY_BATCH, normalizeEmail } from "../lib/email-verification.js";
+import type { NamedSubject } from "../lib/outcome-declarations.js";
 import { emailVerificationErrorResponse } from "../lib/email-verification-response.js";
 import type { IdentityHeaders } from "../lib/runs-client.js";
 
@@ -11,6 +12,19 @@ const router = Router();
 export const VerifyEmailsRequestSchema = z.object({
   emails: z.array(z.string().trim().min(1).max(320)).min(1).max(MAX_VERIFY_BATCH),
   source: z.string().trim().min(1).max(100).optional(),
+  // COST-ACCOUNTING-1023: who each address IS for the cost ledger, when the caller
+  // owns that subject (a mailing-list subscriber is not a lead). Absent = the
+  // person's lead in lead-service, resolved later.
+  subjects: z
+    .array(
+      z.object({
+        email: z.string().trim().min(1).max(320),
+        subjectService: z.string().trim().min(1).max(100),
+        subjectId: z.string().trim().min(1).max(200),
+      })
+    )
+    .max(MAX_VERIFY_BATCH)
+    .optional(),
 });
 
 /**
@@ -34,8 +48,22 @@ router.post("/email-verifications", serviceAuth, async (req: AuthenticatedReques
   const tracking = { brandIds, campaignId, audienceId, featureSlug, workflowSlug };
   const source = parsed.data.source ? `verify:${parsed.data.source}` : "verify";
 
+  const emails = new Set(parsed.data.emails.map(normalizeEmail));
+  const subjects = new Map<string, NamedSubject>();
+  for (const s of parsed.data.subjects ?? []) {
+    const email = normalizeEmail(s.email);
+    if (!emails.has(email)) {
+      return res.status(400).json({ type: "validation", error: `subjects[].email ${s.email} is not in emails` });
+    }
+    const prior = subjects.get(email);
+    if (prior && (prior.subjectService !== s.subjectService || prior.subjectId !== s.subjectId)) {
+      return res.status(400).json({ type: "validation", error: `two different subjects for ${s.email}` });
+    }
+    subjects.set(email, { subjectService: s.subjectService, subjectId: s.subjectId });
+  }
+
   try {
-    const results = await verifyEmailBatch(parsed.data.emails, { identity, tracking, runId, source });
+    const results = await verifyEmailBatch(parsed.data.emails, { identity, tracking, runId, source, subjects });
     return res.json({ results });
   } catch (error) {
     console.error(`[Apollo Service][POST /email-verifications] org=${req.orgId} run=${runId} ERROR:`, error);

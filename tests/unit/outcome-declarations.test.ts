@@ -105,6 +105,14 @@ describe("what a run produced, per task", () => {
     });
   });
 
+  it("a caller-named subject is parked already resolved and declared on that subject (no lead-service ask)", async () => {
+    await recordOutcome({ runId: "run-v", orgId: "org-1", subject: { subjectService: "transactional-email-service", subjectId: "sub-1" }, produced: ["email_checked"], person: { email: "a@b.c" } });
+    expect(inserts[0][0]).toMatchObject({ subjectService: "transactional-email-service", leadId: "sub-1" });
+    expect(declarationBody([{ direction: "produced", outcomeKey: "email_checked", leadId: "sub-1", subjectService: "transactional-email-service" }]).produced).toEqual([
+      { outcomeKey: "email_checked", subjectService: "transactional-email-service", subjectId: "sub-1" },
+    ]);
+  });
+
   it("a verification is KEPT on valid, catch_all, unknown; invalid / risky / no verdict are losses", () => {
     expect(["valid", "catch_all", "unknown"].map(isKeptVerdict)).toEqual([true, true, true]);
     expect(["invalid", "risky", null, undefined].map(isKeptVerdict)).toEqual([false, false, false, false]);
