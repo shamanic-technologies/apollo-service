@@ -169,7 +169,9 @@ async function resolveLeadIdsOnce(items: LeadResolveItem[]): Promise<(string | n
 
 export function toResolveItem(row: Pick<OutcomeDeclaration, "orgId" | "brandIds" | "apolloPersonId" | "email" | "linkedinUrl">): LeadResolveItem {
   const item: LeadResolveItem = { orgId: row.orgId };
-  if (row.brandIds && row.brandIds.length > 0) item.brandIds = row.brandIds;
+  // Old enrichment rows hold `{""}`: lead-service refuses an empty brand id (400 for the whole call).
+  const brandIds = (row.brandIds ?? []).filter((b) => b.trim().length > 0);
+  if (brandIds.length > 0) item.brandIds = brandIds;
   if (row.apolloPersonId) item.apolloPersonId = row.apolloPersonId;
   if (row.email) item.email = row.email;
   if (row.linkedinUrl) item.linkedinUrl = row.linkedinUrl;

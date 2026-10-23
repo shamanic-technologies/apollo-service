@@ -118,6 +118,11 @@ describe("what a run produced, per task", () => {
     expect(["invalid", "risky", null, undefined].map(isKeptVerdict)).toEqual([false, false, false, false]);
   });
 
+  it("an empty brand id is never sent to lead-service (it refuses the whole call)", () => {
+    expect(toResolveItem({ orgId: "o", brandIds: [""], apolloPersonId: "p", email: null, linkedinUrl: null })).toEqual({ orgId: "o", apolloPersonId: "p" });
+    expect(toResolveItem({ orgId: "o", brandIds: ["", "b"], apolloPersonId: null, email: "a@b.c", linkedinUrl: null })).toEqual({ orgId: "o", brandIds: ["b"], email: "a@b.c" });
+  });
+
   it("one person key: apollo id, else lowercased email, else linkedin url", () => {
     expect(personKeyOf({ apolloPersonId: "p", email: "A@x.com" })).toBe("apollo:p");
     expect(personKeyOf({ email: " A@X.com " })).toBe("email:a@x.com");
