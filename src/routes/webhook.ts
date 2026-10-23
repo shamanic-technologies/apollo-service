@@ -1,5 +1,6 @@
 import { errorMessage } from "../lib/db-error.js";
 import { Router, Request, Response } from "express";
+import { recordOutcomeDetached } from "../lib/outcome-declarations.js";
 import { and, eq, inArray, or } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloPhoneReveals, apolloPeopleEnrichments, type ApolloPhoneReveal } from "../db/schema.js";
@@ -206,6 +207,17 @@ router.post("/webhook/phone-reveal", async (req: Request, res: Response) => {
       })
       .where(eq(apolloPhoneReveals.id, row.id));
     updated += 1;
+
+    if (found && row.revealRunId) {
+      recordOutcomeDetached({
+        runId: row.revealRunId,
+        orgId: row.orgId,
+        brandIds: row.brandIds,
+        campaignId: row.campaignId,
+        produced: ["phone_found"],
+        person: { apolloPersonId: row.apolloPersonId },
+      });
+    }
 
     // Mirror onto the person's enrichment rows so a later enrichment read
     // returns the number too — those phone columns have always been empty

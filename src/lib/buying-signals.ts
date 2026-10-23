@@ -29,6 +29,7 @@
  * what Apollo returned.
  */
 import { and, desc, eq, gt, sql } from "drizzle-orm";
+import { recordOutcomeDetached, type OutcomePerson } from "./outcome-declarations.js";
 import { db } from "../db/index.js";
 import { apolloJobPostingsFetches, apolloSearchCursors, apolloSignalServes, buyingSignals } from "../db/schema.js";
 import { getOrganizationJobPostings, type ApolloJobPosting } from "./apollo-client.js";
@@ -181,6 +182,8 @@ export interface EnrichedPersonLike {
   organizationFundingEvents?: unknown;
   organizationLatestFundingRoundDate?: string | null;
   organizationLatestFundingStage?: string | null;
+  email?: string | null;
+  linkedinUrl?: string | null;
 }
 
 /**
@@ -331,7 +334,7 @@ interface EvidenceContext {
  * → execute → actualize against the caller's org. A per-company advisory lock
  * keeps two concurrent reveals at the same company from paying twice.
  */
-async function loadJobPostings(apolloOrganizationId: string, ctx: EvidenceContext): Promise<ApolloJobPosting[]> {
+async function loadJobPostings(apolloOrganizationId: string, ctx: EvidenceContext, subject: OutcomePerson): Promise<ApolloJobPosting[]> {
   return db.transaction(async (tx) => {
     await advisoryXactLock(tx, `apollo-job-postings:${apolloOrganizationId}`);
     const freshAfter = new Date(Date.now() - JOB_POSTINGS_CACHE_DAYS * 86_400_000);
@@ -410,6 +413,15 @@ async function loadJobPostings(apolloOrganizationId: string, ctx: EvidenceContex
           : [];
     if (costItems.length > 0) {
       await addCosts(run.id, costItems, identity);
+      // Bought for the person being revealed: their buying-signal evidence identifies them as a lead.
+      recordOutcomeDetached({
+        runId: run.id,
+        orgId: identity.orgId,
+        brandIds: identity.brandIds,
+        campaignId: identity.campaignId,
+        produced: ["lead_identified"],
+        person: subject,
+      });
     }
     await releaseHold("completed");
     return postings;
@@ -451,7 +463,11 @@ export async function buyingSignalForEnrich(args: {
   if (spec.type === "hiring") {
     const orgId = str(args.person.organizationId);
     if (!orgId) return null;
-    const postings = await loadJobPostings(orgId, args.ctx);
+    const postings = await loadJobPostings(orgId, args.ctx, {
+      apolloPersonId: args.apolloPersonId,
+      email: str(args.person.email),
+      linkedinUrl: str(args.person.linkedinUrl),
+    });
     const hiring = hiringSignalsFromPostings(orgId, str(args.person.organizationName), postings);
     await upsertSilverSignals(hiring);
     candidates = hiring;

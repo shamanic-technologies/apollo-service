@@ -35,6 +35,7 @@
  * profile resolved in the last 30 days, is never paid again, whoever asks.
  */
 import { errorMessage, messageOf } from "./db-error.js";
+import { recordOutcomeDetached } from "./outcome-declarations.js";
 import { and, desc, eq, gte, inArray, isNotNull, lt, max, notExists, or, isNull, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
@@ -402,6 +403,11 @@ export class EngagementMeter {
         durationMs: Date.now() - started,
       });
     }
+  }
+
+  /** This serve's child run, when a paid call opened one; null when nothing was spent. */
+  async openedRunId(): Promise<string | null> {
+    return this.run ? (await this.run).id : null;
   }
 
   async finish(status: "completed" | "failed"): Promise<void> {
@@ -835,6 +841,21 @@ export async function serveLinkedinEngagers(args: {
     if (result.people.length === 0 && transient.length > 0) throw transient[0];
     if (servedIds.length > 0) {
       await db.update(linkedinEngagementServes).set({ status: "served", reason: null, servedAt: new Date() }).where(inArray(linkedinEngagementServes.id, servedIds));
+    }
+    // Every engager served is what this paid serve produced: lead_identified for
+    // their lead, split equally by runs-service (harvest + lookups ride the kept ones).
+    const servedRunId = result.people.length > 0 ? await meter.openedRunId() : null;
+    if (servedRunId) {
+      for (const person of result.people) {
+        recordOutcomeDetached({
+          runId: servedRunId,
+          orgId: identity.orgId,
+          brandIds: identity.brandIds,
+          campaignId: args.campaignId,
+          produced: ["lead_identified"],
+          person: { linkedinUrl: person.linkedinUrl },
+        });
+      }
     }
 
     const left = await candidates(identity.orgId, audienceKey, pages, args.spec, now, 1);

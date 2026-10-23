@@ -23,6 +23,7 @@ import webhookRoutes from "./routes/webhook.js";
 import costHoldRoutes from "./routes/cost-holds.js";
 import companyFirmographicsRoutes from "./routes/company-firmographics.js";
 import { startHoldReconciler } from "./lib/hold-reconciler.js";
+import { startOutcomeDeclarer } from "./lib/outcome-declarations.js";
 import { stripNulReplacer } from "./lib/nul-strip.js";
 import {
   ACQUISITION_COSTS_PATH,
@@ -100,6 +101,7 @@ if (process.env.NODE_ENV !== "test") {
     app.listen(Number(PORT), "::", () => {
       console.log(`[Apollo Service] running on port ${PORT}`);
       if (dbUrl) startHoldReconciler();
+      if (dbUrl) startOutcomeDeclarer();
     });
   };
 

@@ -1,5 +1,6 @@
 import { errorMessage } from "../lib/db-error.js";
 import { Router } from "express";
+import { recordOutcomeDetached } from "../lib/outcome-declarations.js";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloPhoneReveals, type ApolloPhoneReveal } from "../db/schema.js";
@@ -276,6 +277,17 @@ router.post("/people/:apolloPersonId/phone-reveal", serviceAuth, async (req: Aut
         throw apolloError;
       }
     });
+
+    if (outcome.kind === "found" && outcome.row.revealRunId) {
+      recordOutcomeDetached({
+        runId: outcome.row.revealRunId,
+        orgId: outcome.row.orgId,
+        brandIds: outcome.row.brandIds,
+        campaignId: outcome.row.campaignId,
+        produced: ["phone_found"],
+        person: { apolloPersonId: outcome.row.apolloPersonId },
+      });
+    }
 
     traceEvent(
       runId,

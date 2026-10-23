@@ -295,6 +295,13 @@
       "when": 1780963200000,
       "tag": "0041_email_verifications_cost",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1781049600000,
+      "tag": "0042_outcome_declarations",
+      "breakpoints": true
     }
   ]
 }
