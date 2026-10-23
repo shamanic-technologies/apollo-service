@@ -53,7 +53,7 @@ describe("instrument", () => {
     expect(setTagSpy).toHaveBeenCalledWith("service", "apollo-service");
   });
 
-  it("should exclude drizzle-orm from ESM loader hooks to prevent named-export breakage", async () => {
+  it("should leave ESM loader hooks on the SDK default, which only wraps instrumented modules (drizzle-orm stays unwrapped)", async () => {
     process.env.SENTRY_DSN = "https://fake@sentry.io/123";
 
     const initSpy = vi.fn();
@@ -66,13 +66,8 @@ describe("instrument", () => {
     await import("../../src/instrument.js");
 
     const config = initSpy.mock.calls[0][0];
-    expect(config.registerEsmLoaderHooks).toBeDefined();
-    expect(config.registerEsmLoaderHooks.exclude).toBeDefined();
-
-    const excludePatterns: RegExp[] = config.registerEsmLoaderHooks.exclude;
-    expect(excludePatterns.some((re: RegExp) => re.test("drizzle-orm"))).toBe(
-      true
-    );
+    expect(config.registerEsmLoaderHooks).toBeUndefined();
+    expect(config.sendDefaultPii).toBe(true);
   });
 
   it("index.ts should not statically import instrument", async () => {
