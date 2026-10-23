@@ -1178,7 +1178,9 @@ consumed `email_found` (before BounceBan's first row the step-1 verdict WAS fina
   x-org-id, `occurredAt: "run_started_at"`, ≤500 runs / ≤1000 occurrences); never the live per-run door, which
   would date a past outcome today. The declarer drains it after each live pass (≤20 × 500 rows per tick, same
   single flight). A run the door refuses (422 `invalid_runs`, 409 conflict) is abandoned with the reason, the
-  rest re-sent. A person who is no lead of the org after 3 days never will be: abandoned at the first ask.
+  rest re-sent; a `409 run_marked_support` (a staff-probe run runs-service marked SUPPORT) names no run, so the call
+  is halved until the marked run stands alone, then that run is abandoned. A person who is no lead of the org
+  after 3 days never will be: abandoned at the first ask.
 - **Not backfilled, by design**: mailing-list verifications (subscribers, transactional-email-service declares
   on its own run), probes, buying-signal evidence and linkedin-engagement (our rows do not say which person a
   past paid run was for: no guess), audience-companies (onboarding preview), org-less lookups, retired

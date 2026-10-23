@@ -401,48 +401,73 @@ export async function declareBackfillPass(now: Date = new Date()): Promise<Backf
   }
 
   for (const chunk of backfillChunks(due)) {
-    let runs = chunk.runs;
-    let rows = chunk.rows;
-    // A refused run is abandoned with its reason and the rest re-sent: the door is all or nothing.
-    for (let attempt = 0; runs.length > 0 && attempt < 3; attempt++) {
-      try {
-        await declareOutcomesBatch(runs);
-        await db
-          .update(outcomeDeclarations)
-          .set({ status: "declared", declaredAt: now, lastError: null })
-          .where(inArray(outcomeDeclarations.id, rows.map((r) => r.id)));
-        result.declared += rows.length;
-        runs = [];
-        break;
-      } catch (err) {
-        const refused = refusedRunsOf(err);
-        if (!refused) {
-          const msg = errorMessage(err);
-          console.error(`[Apollo Service] outcome_backfill.declare_failed runs=${runs.length} rows=${rows.length}: ${msg}`);
-          await bumpAttempts(rows, now, `backfill declare: ${msg}`);
-          result.failed += rows.length;
-          runs = [];
-          break;
-        }
-        const refusedRows = rows.filter((r) => refused.has(r.runId));
-        for (const [runId, reason] of refused) {
-          await db
-            .update(outcomeDeclarations)
-            .set({ status: "abandoned", lastError: `backfill: runs-service refused the run (${reason})` })
-            .where(and(eq(outcomeDeclarations.runId, runId), isNotNull(outcomeDeclarations.occurredAt), eq(outcomeDeclarations.status, "pending")));
-        }
-        console.warn(`[Apollo Service] outcome_backfill.runs_refused ${JSON.stringify([...refused].slice(0, 20))}${refused.size > 20 ? ` (+${refused.size - 20})` : ""}`);
-        result.invalid += refusedRows.length;
-        runs = runs.filter((r) => !refused.has(r.runId));
-        rows = rows.filter((r) => !refused.has(r.runId));
-      }
-    }
-    if (runs.length > 0) {
-      await bumpAttempts(rows, now, "backfill declare: runs-service kept refusing runs of this chunk");
-      result.failed += rows.length;
-    }
+    await declareBackfillChunk(chunk.runs, chunk.rows, now, result);
   }
   return result;
+}
+
+/** A batch refusal that names no run: one run of the call is SUPPORT-marked (staff probe), which produces nothing. */
+export function isSupportMarkedRefusal(err: unknown): boolean {
+  return err instanceof RunsServiceError && err.status === 409 && !!err.body && err.body.includes("run_marked_support");
+}
+
+async function abandonRuns(refused: Map<string, string>): Promise<void> {
+  for (const [runId, reason] of refused) {
+    await db
+      .update(outcomeDeclarations)
+      .set({ status: "abandoned", lastError: `backfill: runs-service refused the run (${reason})` })
+      .where(and(eq(outcomeDeclarations.runId, runId), isNotNull(outcomeDeclarations.occurredAt), eq(outcomeDeclarations.status, "pending")));
+  }
+}
+
+/**
+ * One batch call, all or nothing. A refused run (422 `invalid_runs`, 409 conflicts) is abandoned
+ * with its reason and the rest re-sent. A 409 `run_marked_support` names no run, so the call is
+ * split in halves until the marked run stands alone, then abandoned (a support run produces nothing).
+ */
+async function declareBackfillChunk(runs: DeclareOutcomesBatchRun[], rows: OutcomeDeclaration[], now: Date, result: BackfillPassResult): Promise<void> {
+  for (let attempt = 0; runs.length > 0 && attempt < 3; attempt++) {
+    try {
+      await declareOutcomesBatch(runs);
+      await db
+        .update(outcomeDeclarations)
+        .set({ status: "declared", declaredAt: now, lastError: null })
+        .where(inArray(outcomeDeclarations.id, rows.map((r) => r.id)));
+      result.declared += rows.length;
+      return;
+    } catch (err) {
+      if (isSupportMarkedRefusal(err)) {
+        if (runs.length === 1) {
+          await abandonRuns(new Map([[runs[0].runId, "run_marked_support"]]));
+          result.invalid += rows.length;
+          return;
+        }
+        const half = Math.ceil(runs.length / 2);
+        for (const part of [runs.slice(0, half), runs.slice(half)]) {
+          const ids = new Set(part.map((r) => r.runId));
+          await declareBackfillChunk(part, rows.filter((r) => ids.has(r.runId)), now, result);
+        }
+        return;
+      }
+      const refused = refusedRunsOf(err);
+      if (!refused) {
+        const msg = errorMessage(err);
+        console.error(`[Apollo Service] outcome_backfill.declare_failed runs=${runs.length} rows=${rows.length}: ${msg}`);
+        await bumpAttempts(rows, now, `backfill declare: ${msg}`);
+        result.failed += rows.length;
+        return;
+      }
+      await abandonRuns(refused);
+      console.warn(`[Apollo Service] outcome_backfill.runs_refused ${JSON.stringify([...refused].slice(0, 20))}${refused.size > 20 ? ` (+${refused.size - 20})` : ""}`);
+      result.invalid += rows.filter((r) => refused.has(r.runId)).length;
+      runs = runs.filter((r) => !refused.has(r.runId));
+      rows = rows.filter((r) => !refused.has(r.runId));
+    }
+  }
+  if (runs.length > 0) {
+    await bumpAttempts(rows, now, "backfill declare: runs-service kept refusing runs of this chunk");
+    result.failed += rows.length;
+  }
 }
 
 /** Drain the backfill queue a few passes at a time; shares the live declarer's single flight. */
