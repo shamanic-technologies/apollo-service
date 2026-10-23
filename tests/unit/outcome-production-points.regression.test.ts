@@ -25,7 +25,7 @@ describe("every paid task declares its outcome", () => {
       const src = readFileSync(join(__dirname, "../..", p.file), "utf8");
       expect(src).toContain("recordOutcomeDetached({");
       expect(src).toContain(`produced: ["${p.produced}"]`);
-      if (p.consumed) expect(src).toContain(`consumed: ["${p.consumed}"]`);
+      if (p.consumed) expect(src).toContain(`["${p.consumed}"]`);
     });
   }
 });

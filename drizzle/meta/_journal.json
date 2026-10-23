@@ -302,6 +302,13 @@
       "when": 1781049600000,
       "tag": "0042_outcome_declarations",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1781136000000,
+      "tag": "0043_outcome_declarations_subject_service",
+      "breakpoints": true
     }
   ]
 }
