@@ -21,6 +21,7 @@ import verificationHistoryRoutes from "./routes/verification-history.js";
 import acquisitionCostRoutes from "./routes/acquisition-costs.js";
 import webhookRoutes from "./routes/webhook.js";
 import costHoldRoutes from "./routes/cost-holds.js";
+import outcomeBackfillRoutes from "./routes/outcome-backfill.js";
 import companyFirmographicsRoutes from "./routes/company-firmographics.js";
 import { startHoldReconciler } from "./lib/hold-reconciler.js";
 import { startOutcomeDeclarer } from "./lib/outcome-declarations.js";
@@ -74,6 +75,7 @@ app.use(acquisitionCostRoutes);
 app.use(transferBrandRoutes);
 app.use(webhookRoutes);
 app.use(costHoldRoutes);
+app.use(outcomeBackfillRoutes);
 app.use(companyFirmographicsRoutes);
 
 // 404 handler
