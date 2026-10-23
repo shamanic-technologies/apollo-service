@@ -123,6 +123,16 @@ describe("backfill declarations", () => {
     expect(declaredRuns.sort()).toEqual(["run-a", "run-b", "run-d"]);
   });
 
+  it("asks lead-service in chunks small enough for its body limit, answers kept in order", async () => {
+    dueRows = Array.from({ length: 450 }, (_, i) => row({ id: `r${i}`, runId: `run-${i}`, apolloPersonId: `p-${i}`, personKey: `apollo:p-${i}` }));
+    fetchMock.mockImplementation(async (_url: string, init: any) => resolveAnswer(JSON.parse(init.body).people.map((p: any) => `lead-${p.apolloPersonId}`)));
+    mockBatch.mockResolvedValue({ recordedCount: 0, alreadyRecordedCount: 0 });
+    const r = await declareBackfillPass(NOW);
+    expect(fetchMock.mock.calls.map((c) => JSON.parse(c[1].body).people.length)).toEqual([200, 200, 50]);
+    expect(r).toMatchObject({ resolved: 450, declared: 450 });
+    expect(mockBatch.mock.calls[0][0][0].produced[0].subjectId).toBe("lead-p-0");
+  });
+
   it("a transient failure keeps every row pending with its error (retried next pass)", async () => {
     dueRows = [row({ id: "a", leadId: "l-a" })];
     mockBatch.mockRejectedValue(new FakeRunsServiceError(502, "{}"));
