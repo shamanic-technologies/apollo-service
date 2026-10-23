@@ -1395,6 +1395,44 @@ registry.registerPath({
   },
 });
 
+// ─── POST /internal/outcome-declarations/backfill ────────────────────────
+
+export const OutcomeBackfillRequestSchema = z
+  .object({ dryRun: z.boolean() })
+  .openapi("OutcomeBackfillRequest");
+
+const OutcomeBackfillResponseSchema = z
+  .object({
+    dryRun: z.boolean(),
+    candidates: z.object({
+      enrichment: z.number().int(),
+      email_finding: z.number().int(),
+      email_verification: z.number().int(),
+      phone_reveal: z.number().int(),
+    }),
+    parked: z.number().int(),
+    queue: z.object({ pending: z.number().int(), declared: z.number().int(), abandoned: z.number().int() }),
+  })
+  .openapi("OutcomeBackfillResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/outcome-declarations/backfill",
+  summary: "Declare the outcomes our PAST runs produced (COST-BACKFILL-1023)",
+  description:
+    "Re-reads this service's own rows (verified Apollo reveals and treg/Explee finds -> email_found, final kept verifications -> email_checked consuming email_found, found phone reveals -> phone_found) and parks one declaration per past outcome on the run that paid for it. The in-process declarer resolves each person's lead in lead-service and declares through runs-service's batch backfill door (occurredAt = the run's start), so each outcome counts as declared when its run happened. A person who never became a lead of the org is abandoned (the spend rolls into the nearest declaring ancestor). Idempotent: a re-run parks nothing already parked and runs-service records nothing twice. dryRun: true only counts. Requires x-api-key = APOLLO_SERVICE_API_KEY.",
+  request: {
+    headers: z.object({ "x-api-key": z.string() }),
+    body: { content: { "application/json": { schema: OutcomeBackfillRequestSchema } }, required: true },
+  },
+  responses: {
+    200: { description: "Candidates per source, rows parked by this call, the backfill queue by status", content: { "application/json": { schema: OutcomeBackfillResponseSchema } } },
+    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponseSchema } } },
+    401: { description: "Missing or invalid x-api-key", content: { "application/json": { schema: ErrorResponseSchema } } },
+    500: { description: "Internal server error", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
 // ─── POST /internal/person-identity ──────────────────────────────────────
 
 export const PersonIdentityRequestSchema = z

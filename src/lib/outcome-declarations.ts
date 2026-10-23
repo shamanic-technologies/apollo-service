@@ -25,10 +25,10 @@
  * idempotent per (run, direction, key, subject), so a replay records nothing
  * twice (`alreadyRecordedCount`).
  */
-import { and, asc, eq, inArray, lt, lte } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, lt, lte } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { outcomeDeclarations, type OutcomeDeclaration } from "../db/schema.js";
-import { declareRunOutcomes, type OutcomeSubjectItem } from "./runs-client.js";
+import { declareOutcomesBatch, declareRunOutcomes, RunsServiceError, type DeclareOutcomesBatchRun, type OutcomeSubjectItem } from "./runs-client.js";
 import { errorMessage } from "./db-error.js";
 
 export const SUBJECT_SERVICE = "lead-service";
@@ -215,7 +215,7 @@ async function declarePass(now: Date): Promise<DeclarePassResult> {
   const due = await db
     .select()
     .from(outcomeDeclarations)
-    .where(and(eq(outcomeDeclarations.status, "pending"), lte(outcomeDeclarations.nextAttemptAt, now)))
+    .where(and(eq(outcomeDeclarations.status, "pending"), isNull(outcomeDeclarations.occurredAt), lte(outcomeDeclarations.nextAttemptAt, now)))
     .orderBy(asc(outcomeDeclarations.nextAttemptAt))
     .limit(BATCH);
   result.due = due.length;
@@ -291,9 +291,185 @@ async function bumpAttempts(rows: OutcomeDeclaration[], now: Date, error: string
   }
 }
 
+// ─── The backfill declarer (COST-BACKFILL-1023) ──────────────────────────────
+//
+// Rows the backfill parked from PAST production (`occurred_at` set, see
+// outcome-backfill.ts) go through runs-service's batch backfill door with
+// `occurredAt: "run_started_at"`, so a past email_found counts as declared when
+// its run happened and can feed a past verification or serve. Same resolve as the
+// live rows; a person still not a lead when their row is older than
+// ABANDON_AFTER_MS never will be (lead-service kept who it kept): abandoned at once.
+
+/** runs-service batch door caps. */
+export const BACKFILL_MAX_RUNS = 500;
+export const BACKFILL_MAX_OCCURRENCES = 1000;
+/** Passes per declarer tick: ~10k rows every 2 minutes, so the whole history drains in well under an hour. */
+export const BACKFILL_PASSES_PER_TICK = 20;
+
+export interface BackfillPassResult {
+  due: number;
+  resolved: number;
+  noLead: number;
+  declared: number;
+  invalid: number;
+  failed: number;
+}
+
+/** Group resolved rows per run and cut them into calls the batch door accepts (≤ 500 runs, ≤ 1000 occurrences). */
+export function backfillChunks(rows: OutcomeDeclaration[]): Array<{ runs: DeclareOutcomesBatchRun[]; rows: OutcomeDeclaration[] }> {
+  const byRun = new Map<string, OutcomeDeclaration[]>();
+  for (const row of rows) {
+    if (!row.leadId) continue;
+    (byRun.get(row.runId) ?? byRun.set(row.runId, []).get(row.runId)!).push(row);
+  }
+  const chunks: Array<{ runs: DeclareOutcomesBatchRun[]; rows: OutcomeDeclaration[] }> = [];
+  let current = { runs: [] as DeclareOutcomesBatchRun[], rows: [] as OutcomeDeclaration[] };
+  for (const [runId, runRows] of byRun) {
+    if (current.runs.length >= BACKFILL_MAX_RUNS || current.rows.length + runRows.length > BACKFILL_MAX_OCCURRENCES) {
+      chunks.push(current);
+      current = { runs: [], rows: [] };
+    }
+    const body = declarationBody(runRows);
+    current.runs.push({ runId, occurredAt: "run_started_at", ...(body.produced.length ? { produced: body.produced } : {}), ...(body.consumed.length ? { consumed: body.consumed } : {}) });
+    current.rows.push(...runRows);
+  }
+  if (current.runs.length > 0) chunks.push(current);
+  return chunks;
+}
+
+/** The runs a batch refusal names (422 `invalid_runs`, 409 conflicts), with the reason each was refused. */
+export function refusedRunsOf(err: unknown): Map<string, string> | null {
+  if (!(err instanceof RunsServiceError) || (err.status !== 422 && err.status !== 409) || !err.body) return null;
+  let body: { error?: string; details?: { invalid?: { runId?: string; reason?: string }[] }; conflicts?: { runId?: string }[] };
+  try {
+    body = JSON.parse(err.body);
+  } catch {
+    return null;
+  }
+  const refused = new Map<string, string>();
+  for (const r of body.details?.invalid ?? []) if (r.runId) refused.set(r.runId, r.reason ?? "invalid");
+  for (const c of body.conflicts ?? []) if (c.runId) refused.set(c.runId, body.error ?? "conflict");
+  return refused.size > 0 ? refused : null;
+}
+
+export async function declareBackfillPass(now: Date = new Date()): Promise<BackfillPassResult> {
+  const result: BackfillPassResult = { due: 0, resolved: 0, noLead: 0, declared: 0, invalid: 0, failed: 0 };
+  const due = await db
+    .select()
+    .from(outcomeDeclarations)
+    .where(and(eq(outcomeDeclarations.status, "pending"), isNotNull(outcomeDeclarations.occurredAt), lte(outcomeDeclarations.nextAttemptAt, now)))
+    .orderBy(asc(outcomeDeclarations.nextAttemptAt))
+    .limit(BATCH);
+  result.due = due.length;
+  if (due.length === 0) return result;
+
+  const toResolve = due.filter((r) => !r.leadId);
+  if (toResolve.length > 0) {
+    let leadIds: (string | null)[];
+    try {
+      leadIds = await resolveLeadIds(toResolve.map(toResolveItem));
+    } catch (err) {
+      const msg = errorMessage(err);
+      console.error(`[Apollo Service] outcome_backfill.resolve_failed rows=${toResolve.length}: ${msg}`);
+      await bumpAttempts(toResolve, now, `resolve: ${msg}`);
+      result.failed += toResolve.length;
+      return result;
+    }
+    const stale = now.getTime() - ABANDON_AFTER_MS;
+    const noLead: OutcomeDeclaration[] = [];
+    const notYet: OutcomeDeclaration[] = [];
+    for (let i = 0; i < toResolve.length; i++) {
+      const row = toResolve[i];
+      if (leadIds[i]) {
+        row.leadId = leadIds[i];
+        result.resolved++;
+        await db.update(outcomeDeclarations).set({ leadId: row.leadId }).where(eq(outcomeDeclarations.id, row.id));
+      } else if (row.occurredAt && row.occurredAt.getTime() < stale) {
+        noLead.push(row);
+      } else {
+        notYet.push(row);
+      }
+    }
+    if (noLead.length > 0) {
+      await db
+        .update(outcomeDeclarations)
+        .set({ status: "abandoned", lastError: "backfill: no lead of the org holds this person" })
+        .where(inArray(outcomeDeclarations.id, noLead.map((r) => r.id)));
+    }
+    result.noLead = noLead.length;
+    await bumpAttempts(notYet, now, null);
+  }
+
+  for (const chunk of backfillChunks(due)) {
+    let runs = chunk.runs;
+    let rows = chunk.rows;
+    // A refused run is abandoned with its reason and the rest re-sent: the door is all or nothing.
+    for (let attempt = 0; runs.length > 0 && attempt < 3; attempt++) {
+      try {
+        await declareOutcomesBatch(runs);
+        await db
+          .update(outcomeDeclarations)
+          .set({ status: "declared", declaredAt: now, lastError: null })
+          .where(inArray(outcomeDeclarations.id, rows.map((r) => r.id)));
+        result.declared += rows.length;
+        runs = [];
+        break;
+      } catch (err) {
+        const refused = refusedRunsOf(err);
+        if (!refused) {
+          const msg = errorMessage(err);
+          console.error(`[Apollo Service] outcome_backfill.declare_failed runs=${runs.length} rows=${rows.length}: ${msg}`);
+          await bumpAttempts(rows, now, `backfill declare: ${msg}`);
+          result.failed += rows.length;
+          runs = [];
+          break;
+        }
+        const refusedRows = rows.filter((r) => refused.has(r.runId));
+        for (const [runId, reason] of refused) {
+          await db
+            .update(outcomeDeclarations)
+            .set({ status: "abandoned", lastError: `backfill: runs-service refused the run (${reason})` })
+            .where(and(eq(outcomeDeclarations.runId, runId), isNotNull(outcomeDeclarations.occurredAt), eq(outcomeDeclarations.status, "pending")));
+        }
+        console.warn(`[Apollo Service] outcome_backfill.runs_refused ${JSON.stringify([...refused].slice(0, 20))}${refused.size > 20 ? ` (+${refused.size - 20})` : ""}`);
+        result.invalid += refusedRows.length;
+        runs = runs.filter((r) => !refused.has(r.runId));
+        rows = rows.filter((r) => !refused.has(r.runId));
+      }
+    }
+    if (runs.length > 0) {
+      await bumpAttempts(rows, now, "backfill declare: runs-service kept refusing runs of this chunk");
+      result.failed += rows.length;
+    }
+  }
+  return result;
+}
+
+/** Drain the backfill queue a few passes at a time; shares the live declarer's single flight. */
+export async function declareBackfillOutcomes(maxPasses = BACKFILL_PASSES_PER_TICK): Promise<BackfillPassResult | null> {
+  if (passRunning) return null;
+  passRunning = true;
+  const total: BackfillPassResult = { due: 0, resolved: 0, noLead: 0, declared: 0, invalid: 0, failed: 0 };
+  try {
+    for (let i = 0; i < maxPasses; i++) {
+      const pass = await declareBackfillPass();
+      for (const k of Object.keys(total) as (keyof BackfillPassResult)[]) total[k] += pass[k];
+      // Nothing moved forward (empty, or every row failed): wait for the next tick.
+      if (pass.due === 0 || pass.declared + pass.noLead + pass.invalid === 0) break;
+    }
+  } finally {
+    passRunning = false;
+  }
+  if (total.due > 0) console.log(`[Apollo Service] outcome_backfill.pass ${JSON.stringify(total)}`);
+  return total;
+}
+
 export function startOutcomeDeclarer(): NodeJS.Timeout {
   const tick = () => {
-    declarePendingOutcomes().catch((err) => console.error("[Apollo Service] outcome_declarations.pass_failed", err));
+    declarePendingOutcomes()
+      .catch((err) => console.error("[Apollo Service] outcome_declarations.pass_failed", err))
+      .then(() => declareBackfillOutcomes())
+      .catch((err) => console.error("[Apollo Service] outcome_backfill.pass_failed", err));
   };
   setTimeout(tick, 60_000).unref();
   const timer = setInterval(tick, DECLARE_INTERVAL_MS);

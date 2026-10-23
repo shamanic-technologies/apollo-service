@@ -1164,6 +1164,26 @@ declares. `src/lib/outcome-declarations.ts` is the ONE mechanism for every paid 
 - `outcome_declarations.org_id` = the RUN's org (runs-service 409s any other), so
   transfer-brand does NOT move it.
 
+## Backfill of PAST outcomes (COST-BACKFILL-1023) — same rules, batch door, run start
+
+Owner 2026-10-23 (« pour être à 100 % now »): runs from before the live declarations above declare too,
+read from our own rows. `src/lib/outcome-backfill.ts` (`BACKFILL_CANDIDATES_SQL`, rules pinned in
+`tests/unit/outcome-backfill.test.ts`) parks one `outcome_declarations` row per past outcome with
+`occurred_at` = the source row's instant (migration 0044; NULL = parked live):
+verified reveal / found treg-Explee email → `email_found`; FINAL kept verification → `email_checked` +
+consumed `email_found` (before BounceBan's first row the step-1 verdict WAS final); found phone → `phone_found`.
+- **Trigger**: `POST /internal/outcome-declarations/backfill {dryRun}` (x-api-key). Idempotent: the unique index
+  skips what is parked, runs-service records nothing twice.
+- **Declared ONLY through runs-service's batch backfill door** (`POST /v1/platform-runs/outcomes/batch`, no
+  x-org-id, `occurredAt: "run_started_at"`, ≤500 runs / ≤1000 occurrences); never the live per-run door, which
+  would date a past outcome today. The declarer drains it after each live pass (≤20 × 500 rows per tick, same
+  single flight). A run the door refuses (422 `invalid_runs`, 409 conflict) is abandoned with the reason, the
+  rest re-sent. A person who is no lead of the org after 3 days never will be: abandoned at the first ask.
+- **Not backfilled, by design**: mailing-list verifications (subscribers, transactional-email-service declares
+  on its own run), probes, buying-signal evidence and linkedin-engagement (our rows do not say which person a
+  past paid run was for: no guess), audience-companies (onboarding preview), org-less lookups, retired
+  tasks (waterfall, search-params-generation) and staff experiments.
+
 ## Commands
 
 - `pnpm test` — run all tests (Vitest)
