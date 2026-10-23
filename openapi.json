@@ -3671,6 +3671,76 @@
           "dryRun"
         ]
       },
+      "OutcomeBackfillResponse": {
+        "type": "object",
+        "properties": {
+          "dryRun": {
+            "type": "boolean"
+          },
+          "candidates": {
+            "type": "object",
+            "properties": {
+              "enrichment": {
+                "type": "integer"
+              },
+              "email_finding": {
+                "type": "integer"
+              },
+              "email_verification": {
+                "type": "integer"
+              },
+              "phone_reveal": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "enrichment",
+              "email_finding",
+              "email_verification",
+              "phone_reveal"
+            ]
+          },
+          "parked": {
+            "type": "integer"
+          },
+          "queue": {
+            "type": "object",
+            "properties": {
+              "pending": {
+                "type": "integer"
+              },
+              "declared": {
+                "type": "integer"
+              },
+              "abandoned": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "pending",
+              "declared",
+              "abandoned"
+            ]
+          }
+        },
+        "required": [
+          "dryRun",
+          "candidates",
+          "parked",
+          "queue"
+        ]
+      },
+      "OutcomeBackfillRequest": {
+        "type": "object",
+        "properties": {
+          "dryRun": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "dryRun"
+        ]
+      },
       "PersonIdentityResponse": {
         "type": "object",
         "properties": {
@@ -6943,6 +7013,74 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ReconcileHoldsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid x-api-key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/outcome-declarations/backfill": {
+      "post": {
+        "summary": "Declare the outcomes our PAST runs produced (COST-BACKFILL-1023)",
+        "description": "Re-reads this service's own rows (verified Apollo reveals and treg/Explee finds -> email_found, final kept verifications -> email_checked consuming email_found, found phone reveals -> phone_found) and parks one declaration per past outcome on the run that paid for it. The in-process declarer resolves each person's lead in lead-service and declares through runs-service's batch backfill door (occurredAt = the run's start), so each outcome counts as declared when its run happened. A person who never became a lead of the org is abandoned (the spend rolls into the nearest declaring ancestor). Idempotent: a re-run parks nothing already parked and runs-service records nothing twice. dryRun: true only counts. Requires x-api-key = APOLLO_SERVICE_API_KEY.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutcomeBackfillRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Candidates per source, rows parked by this call, the backfill queue by status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutcomeBackfillResponse"
                 }
               }
             }

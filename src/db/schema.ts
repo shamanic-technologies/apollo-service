@@ -878,6 +878,8 @@ export const outcomeDeclarations = pgTable(
     producedAt: timestamp("produced_at", { withTimezone: true }).notNull().defaultNow(),
     nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
     declaredAt: timestamp("declared_at", { withTimezone: true }),
+    // COST-BACKFILL-1023: set = parked by the backfill from a past row (its instant); NULL = parked live.
+    occurredAt: timestamp("occurred_at", { withTimezone: true }),
   },
   (table) => [
     uniqueIndex("idx_outcome_declarations_unique").on(table.runId, table.direction, table.outcomeKey, table.personKey),

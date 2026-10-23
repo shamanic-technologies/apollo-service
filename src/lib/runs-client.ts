@@ -514,6 +514,31 @@ export interface DeclareRunOutcomesResult {
  * per (run, direction, key, subject) on runs-service's side: a replay answers
  * `alreadyRecordedCount`, never a second occurrence. x-org-id = the run's org.
  */
+export interface DeclareOutcomesBatchRun extends DeclareRunOutcomesBody {
+  runId: string;
+  /** "run_started_at": the occurrences count as declared when the run started (COST-BACKFILL-1023). */
+  occurredAt: "run_started_at";
+}
+
+export interface DeclareOutcomesBatchResult {
+  recordedCount: number;
+  alreadyRecordedCount: number;
+}
+
+/**
+ * The BACKFILL door (`POST /v1/platform-runs/outcomes/batch`): ≤ 500 past runs and
+ * ≤ 1000 occurrences per call, all or nothing (a 422 `invalid_runs` lists each bad
+ * run, nothing written). No x-org-id: runs of several orgs travel together.
+ */
+export async function declareOutcomesBatch(runs: DeclareOutcomesBatchRun[]): Promise<DeclareOutcomesBatchResult> {
+  return runsRequest<DeclareOutcomesBatchResult>("/v1/platform-runs/outcomes/batch", {
+    method: "POST",
+    body: { runs },
+    extraHeaders: { "x-service-name": "apollo-service" },
+    timeoutMs: 60_000,
+  });
+}
+
 export async function declareRunOutcomes(runId: string, orgId: string, body: DeclareRunOutcomesBody): Promise<DeclareRunOutcomesResult> {
   return runsRequest<DeclareRunOutcomesResult>(`/v1/runs/${encodeURIComponent(runId)}/outcomes`, {
     method: "POST",
