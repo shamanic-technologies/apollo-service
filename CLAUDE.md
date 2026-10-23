@@ -1150,6 +1150,13 @@ declares. `src/lib/outcome-declarations.ts` is the ONE mechanism for every paid 
   OUR run. null = not yet, re-asked (2 min for 30 tries, then 30 min); still no lead after
   3 days = a loss, `abandoned`. A resolve or declaration failure is logged loud and the row
   stays pending with `last_error`. Never invent a lead id.
+- **A caller can name the subject** (`POST /email-verifications` `subjects:
+  [{email, subjectService, subjectId}]`, first caller transactional-email-service's
+  mailing-list release: subscribers are not leads). That row is parked already resolved
+  (`subject_service` + its id in `lead_id`), produces `email_checked` only (nothing
+  consumed: we never found that address) and never asks lead-service. A REUSED verdict
+  spends nothing and declares nothing; the caller's `consumed email_checked` resolves to
+  the subject's earlier occurrence (standard cost on reuse).
 - **Idempotent twice**: the park is unique per (run, direction, key, person) and
   runs-service records each (run, direction, key, subject) once (`alreadyRecordedCount`).
 - Env: `LEAD_SERVICE_URL` + `LEAD_SERVICE_API_KEY` (shared fleet values), read lazily: absent

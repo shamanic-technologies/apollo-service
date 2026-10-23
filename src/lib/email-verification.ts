@@ -35,7 +35,7 @@
  */
 
 import { errorMessage, messageOf } from "./db-error.js";
-import { isKeptVerdict, recordOutcomeDetached } from "./outcome-declarations.js";
+import { isKeptVerdict, recordOutcomeDetached, type NamedSubject } from "./outcome-declarations.js";
 import { and, desc, eq, gt, isNotNull, isNull, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { emailVerifications, type EmailVerification } from "../db/schema.js";
@@ -153,6 +153,8 @@ export interface VerificationContext {
   /** The caller's run; the verification run hangs under it. */
   runId?: string;
   source: string;
+  /** The subject a caller named per (normalized) address; absent = the person's lead in lead-service. */
+  subjects?: ReadonlyMap<string, NamedSubject>;
 }
 
 /** Same precedence human-service used: invalid is terminal, catch-all cannot confirm, a spam trap is never valid. */
@@ -193,7 +195,7 @@ export async function decideVerdict(row: Record<string, unknown> | undefined, em
   return (await domainHasMx(email.split("@")[1] ?? "")) ? "unknown" : "invalid";
 }
 
-function normalizeEmail(email: string): string {
+export function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
@@ -567,13 +569,17 @@ async function meteredVerification(
     // catch_all/unknown is not final (BounceBan decides it): nothing declared,
     // its cost rides the kept units.
     if (!outcome.error && isFinalKeptVerdict(plan.verifier, stored.verdict)) {
+      // A caller-named subject (a subscriber, not a lead) was never found by us:
+      // nothing to consume, only the check produced.
+      const subject = ctx.subjects?.get(email);
       recordOutcomeDetached({
         runId: run.id,
         orgId: identity.orgId,
         brandIds: tracking.brandIds,
         campaignId: tracking.campaignId,
+        subject,
         produced: ["email_checked"],
-        consumed: ["email_found"],
+        consumed: subject ? [] : ["email_found"],
         person: { email },
       });
     }

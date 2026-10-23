@@ -869,6 +869,9 @@ export const outcomeDeclarations = pgTable(
     email: text("email"),
     linkedinUrl: text("linkedin_url"),
     status: text("status").notNull().default("pending"), // pending | declared | abandoned
+    // NULL = lead-service (resolved by the declarer into lead_id); else a subject the
+    // CALLER named, its id in lead_id (POST /email-verifications `subjects`).
+    subjectService: text("subject_service"),
     leadId: text("lead_id"),
     attempts: integer("attempts").notNull().default(0),
     lastError: text("last_error"),

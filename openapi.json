@@ -5710,6 +5710,33 @@
           "source": {
             "type": "string",
             "description": "Caller label stored on each bronze row as `verify:<source>`."
+          },
+          "subjects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "email": {
+                  "type": "string",
+                  "description": "One of `emails` (case-insensitive)."
+                },
+                "subjectService": {
+                  "type": "string",
+                  "description": "The service holding the subject, e.g. transactional-email-service."
+                },
+                "subjectId": {
+                  "type": "string",
+                  "description": "The subject's id in that service, stable across calls (e.g. the mailing-list subscriber id)."
+                }
+              },
+              "required": [
+                "email",
+                "subjectService",
+                "subjectId"
+              ]
+            },
+            "maxItems": 50,
+            "description": "Cost ledger (COST-ACCOUNTING-1023): who each address IS. When given for an address, the verification run that decides its verdict declares produced `email_checked` on THIS subject in runs-service (no lead-service lookup, no consumed email_found). Absent = the person's lead in lead-service. A REUSED verdict (reused: true) spends nothing and declares nothing: a consumer's `consumed email_checked` then resolves to this subject's earlier occurrence (standard cost on reuse). An invalid or step-1 catch_all/unknown verdict declares nothing (a loss)."
           }
         },
         "required": [

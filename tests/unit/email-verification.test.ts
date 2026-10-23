@@ -143,6 +143,14 @@ describe("outcome occurrences (COST-ACCOUNTING-1023): the deciding verification 
     expect(mockRecordOutcome.mock.calls.map((c) => c[0].runId)).toEqual(["run-verify-email-bounceban"]);
   });
 
+  it("a caller-named subject (a subscriber, not a lead) is declared as is, with nothing consumed", async () => {
+    answers.apify = [() => actor([{ email: "ada@example.com", status: "valid", is_catch_all: false }])];
+    const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
+    const subject = { subjectService: "transactional-email-service", subjectId: "sub-1" };
+    await verifyRevealedEmail("Ada@Example.com", { ...CTX, subjects: new Map([["ada@example.com", subject]]) });
+    expect(mockRecordOutcome).toHaveBeenCalledWith(expect.objectContaining({ subject, produced: ["email_checked"], consumed: [] }));
+  });
+
   it("an invalid final verdict is a loss: nothing declared", async () => {
     answers.apify = [() => actor([{ email: "ada@example.com", status: "unknown" }])];
     answers.bounceban = [() => bounceban("undeliverable")];

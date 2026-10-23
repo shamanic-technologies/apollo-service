@@ -2210,6 +2210,20 @@ registry.registerPath({
             .object({
               emails: z.array(z.string()).min(1).max(50).openapi({ description: "1 to 50 addresses." }),
               source: z.string().optional().openapi({ description: "Caller label stored on each bronze row as `verify:<source>`." }),
+              subjects: z
+                .array(
+                  z.object({
+                    email: z.string().openapi({ description: "One of `emails` (case-insensitive)." }),
+                    subjectService: z.string().openapi({ description: "The service holding the subject, e.g. transactional-email-service." }),
+                    subjectId: z.string().openapi({ description: "The subject's id in that service, stable across calls (e.g. the mailing-list subscriber id)." }),
+                  })
+                )
+                .max(50)
+                .optional()
+                .openapi({
+                  description:
+                    "Cost ledger (COST-ACCOUNTING-1023): who each address IS. When given for an address, the verification run that decides its verdict declares produced `email_checked` on THIS subject in runs-service (no lead-service lookup, no consumed email_found). Absent = the person's lead in lead-service. A REUSED verdict (reused: true) spends nothing and declares nothing: a consumer's `consumed email_checked` then resolves to this subject's earlier occurrence (standard cost on reuse). An invalid or step-1 catch_all/unknown verdict declares nothing (a loss).",
+                }),
             })
             .openapi("VerifyEmailsRequest"),
         },
