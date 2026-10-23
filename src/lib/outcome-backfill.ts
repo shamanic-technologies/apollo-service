@@ -50,14 +50,14 @@ export const BACKFILL_CANDIDATES_SQL = `
   candidates AS (
     SELECT 'enrichment' AS source, e.enrichment_run_id AS run_id, 'produced' AS direction, 'email_found' AS outcome_key,
            ${personKey("e.apollo_person_id", "e.email", "e.linkedin_url")} AS person_key,
-           e.org_id, NULLIF(e.brand_ids, '{}') AS brand_ids, e.campaign_id, e.apollo_person_id,
+           e.org_id, NULLIF(array_remove(e.brand_ids, ''), '{}') AS brand_ids, e.campaign_id, e.apollo_person_id,
            lower(btrim(e.email)) AS email, e.linkedin_url, e.created_at AS occurred_at
       FROM apollo_people_enrichments e
      WHERE e.email IS NOT NULL AND e.email_status = 'verified' AND e.enrichment_run_id ~* '${UUID_RE}'
     UNION ALL
     SELECT 'email_finding', f.find_run_id, 'produced', 'email_found',
            ${personKey("f.apollo_person_id", "f.email", "f.linkedin_url")},
-           f.org_id, NULLIF(f.brand_ids, '{}'), f.campaign_id, f.apollo_person_id,
+           f.org_id, NULLIF(array_remove(f.brand_ids, ''), '{}'), f.campaign_id, f.apollo_person_id,
            lower(btrim(f.email)), f.linkedin_url, COALESCE(f.completed_at, f.created_at)
       FROM email_findings f
      WHERE f.status = 'found' AND f.email IS NOT NULL AND f.find_run_id ~* '${UUID_RE}'
@@ -77,7 +77,7 @@ export const BACKFILL_CANDIDATES_SQL = `
     UNION ALL
     SELECT 'phone_reveal', p.reveal_run_id, 'produced', 'phone_found',
            'apollo:' || p.apollo_person_id,
-           p.org_id, NULLIF(p.brand_ids, '{}'), p.campaign_id, p.apollo_person_id, NULL::text, NULL::text,
+           p.org_id, NULLIF(array_remove(p.brand_ids, ''), '{}'), p.campaign_id, p.apollo_person_id, NULL::text, NULL::text,
            COALESCE(p.completed_at, p.created_at)
       FROM apollo_phone_reveals p
      WHERE p.status = 'found' AND p.reveal_run_id ~* '${UUID_RE}'
