@@ -137,7 +137,19 @@ export interface LeadResolveItem {
 
 export class LeadServiceUnconfiguredError extends Error {}
 
+/**
+ * People per resolve call. lead-service documents 1000 but its JSON body limit (100 kB) refuses
+ * ~400 full items with a 413 that surfaces as a 500 (2026-10-23, first backfill pass of 500).
+ */
+export const RESOLVE_CHUNK = 200;
+
 export async function resolveLeadIds(items: LeadResolveItem[]): Promise<(string | null)[]> {
+  const out: (string | null)[] = [];
+  for (let i = 0; i < items.length; i += RESOLVE_CHUNK) out.push(...(await resolveLeadIdsOnce(items.slice(i, i + RESOLVE_CHUNK))));
+  return out;
+}
+
+async function resolveLeadIdsOnce(items: LeadResolveItem[]): Promise<(string | null)[]> {
   const url = process.env.LEAD_SERVICE_URL;
   const key = process.env.LEAD_SERVICE_API_KEY;
   if (!url || !key) throw new LeadServiceUnconfiguredError("LEAD_SERVICE_URL / LEAD_SERVICE_API_KEY not set");
