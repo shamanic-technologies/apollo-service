@@ -1,5 +1,6 @@
 import { errorMessage, messageOf } from "../lib/db-error.js";
 import { Router } from "express";
+import { recordOutcomeDetached } from "../lib/outcome-declarations.js";
 import { eq, and, gt, isNotNull, desc, inArray, count, sum, sql, arrayOverlaps } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloPeopleSearches, apolloPeopleEnrichments, apolloSearchCursors } from "../db/schema.js";
@@ -396,7 +397,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
     // wrote instead of calling Apollo again.
     type EnrichOutcome =
       | { kind: "cached"; record: typeof apolloPeopleEnrichments.$inferSelect; negative: boolean }
-      | { kind: "fresh"; person: ApolloPerson | null; enrichmentId: string | null };
+      | { kind: "fresh"; person: ApolloPerson | null; enrichmentId: string | null; runId: string | null };
 
     const outcome = await db.transaction(async (tx): Promise<EnrichOutcome> => {
       await advisoryXactLock(tx, enrichLockKey(apolloPersonId));
@@ -420,6 +421,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       const person = result.person ? withVerifiedEmailOnly(result.person) : result.person;
 
       let enrichmentId: string | null = null;
+      let enrichRunId: string | null = null;
 
       if (person) {
         const enrichRun = await createRun({
@@ -463,9 +465,10 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
 
         await updateRun(enrichRun.id, "completed", identity);
         openRun = null;
+        enrichRunId = enrichRun.id;
       }
 
-      return { kind: "fresh", person, enrichmentId };
+      return { kind: "fresh", person, enrichmentId, runId: enrichRunId };
     });
 
     // A concurrent request filled the cache first — serve it, no Apollo spend.
@@ -487,6 +490,17 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
         enrichmentId: null,
         person: outcome.negative ? null : transformCachedEnrichment(apolloPersonId, outcome.record),
         cached: true,
+      });
+    }
+
+    if (outcome.person?.email && outcome.runId) {
+      recordOutcomeDetached({
+        runId: outcome.runId,
+        orgId: req.orgId!,
+        brandIds,
+        campaignId,
+        produced: ["email_found"],
+        person: { apolloPersonId, email: outcome.person.email, linkedinUrl: outcome.person.linkedin_url },
       });
     }
 

@@ -1,5 +1,6 @@
 import { errorMessage } from "../lib/db-error.js";
 import { Router } from "express";
+import { recordOutcomeDetached } from "../lib/outcome-declarations.js";
 import { and, gt, eq, isNotNull, desc, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloPeopleEnrichments } from "../db/schema.js";
@@ -197,7 +198,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
     // we just wrote instead of calling Apollo again.
     type MatchOutcome =
       | { kind: "cached"; record: typeof apolloPeopleEnrichments.$inferSelect; negative: boolean }
-      | { kind: "fresh"; person: ApolloPerson | null; enrichmentId: string | null };
+      | { kind: "fresh"; person: ApolloPerson | null; enrichmentId: string | null; runId: string };
 
     const outcome = await db.transaction(async (tx): Promise<MatchOutcome> => {
       await advisoryXactLock(tx, matchLockKey(firstName, lastName, organizationDomain));
@@ -278,7 +279,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
       await updateRun(matchRun.id, "completed", identity);
       openRun = null;
 
-      return { kind: "fresh", person, enrichmentId };
+      return { kind: "fresh", person, enrichmentId, runId: matchRun.id };
     });
 
     // A concurrent request filled the cache first — serve it, no Apollo spend.
@@ -300,6 +301,17 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
         enrichmentId: null,
         person: outcome.negative ? null : transformCachedEnrichment(outcome.record.apolloPersonId ?? "", outcome.record),
         cached: true,
+      });
+    }
+
+    if (outcome.person?.email) {
+      recordOutcomeDetached({
+        runId: outcome.runId,
+        orgId: req.orgId!,
+        brandIds,
+        campaignId,
+        produced: ["email_found"],
+        person: { apolloPersonId: outcome.person.id, email: outcome.person.email, linkedinUrl: outcome.person.linkedin_url },
       });
     }
 

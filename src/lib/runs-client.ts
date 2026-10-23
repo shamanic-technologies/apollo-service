@@ -489,3 +489,35 @@ export async function addPlatformRunCosts(
 export async function updatePlatformRun(runId: string, status: "completed" | "failed"): Promise<void> {
   await runsRequest(`/v1/platform-runs/${runId}`, { method: "PATCH", extraHeaders: PLATFORM_HEADERS, body: { status } });
 }
+
+// ─── Outcome occurrences (COST-ACCOUNTING-1023) ─────────────────────────────
+
+export interface OutcomeSubjectItem {
+  outcomeKey: string;
+  subjectService: string;
+  subjectId: string;
+}
+
+export interface DeclareRunOutcomesBody {
+  produced?: OutcomeSubjectItem[];
+  consumed?: OutcomeSubjectItem[];
+}
+
+export interface DeclareRunOutcomesResult {
+  runId: string;
+  recordedCount: number;
+  alreadyRecordedCount: number;
+}
+
+/**
+ * State the outcome occurrences a run of ours produced / consumed. Idempotent
+ * per (run, direction, key, subject) on runs-service's side: a replay answers
+ * `alreadyRecordedCount`, never a second occurrence. x-org-id = the run's org.
+ */
+export async function declareRunOutcomes(runId: string, orgId: string, body: DeclareRunOutcomesBody): Promise<DeclareRunOutcomesResult> {
+  return runsRequest<DeclareRunOutcomesResult>(`/v1/runs/${encodeURIComponent(runId)}/outcomes`, {
+    method: "POST",
+    body,
+    identity: { orgId },
+  });
+}

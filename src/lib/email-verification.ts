@@ -35,6 +35,7 @@
  */
 
 import { errorMessage, messageOf } from "./db-error.js";
+import { isKeptVerdict, recordOutcomeDetached } from "./outcome-declarations.js";
 import { and, desc, eq, gt, isNotNull, isNull, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { emailVerifications, type EmailVerification } from "../db/schema.js";
@@ -561,6 +562,21 @@ async function meteredVerification(
     if (holdId) await updateCostStatus(run.id, holdId, "cancelled", identity);
     holdId = null;
     await updateRun(run.id, outcome.error || outcome.verdict === null ? "failed" : "completed", identity);
+    // A KEPT FINAL verdict is this run's output: it checked the email the
+    // person's lead was found with. An invalid one is a loss, and a step-1
+    // catch_all/unknown is not final (BounceBan decides it): nothing declared,
+    // its cost rides the kept units.
+    if (!outcome.error && isFinalKeptVerdict(plan.verifier, stored.verdict)) {
+      recordOutcomeDetached({
+        runId: run.id,
+        orgId: identity.orgId,
+        brandIds: tracking.brandIds,
+        campaignId: tracking.campaignId,
+        produced: ["email_checked"],
+        consumed: ["email_found"],
+        person: { email },
+      });
+    }
     return stored;
   } catch (err) {
     // Release the hold (nothing was bought) and fail the run, then surface the
@@ -574,6 +590,12 @@ async function meteredVerification(
     if (err instanceof EmailVerificationError) throw err;
     throw new EmailVerificationError(errorMessage(err));
   }
+}
+
+/** valid at step 1, or whatever BounceBan (step 2) decides when it is valid / catch_all / unknown. */
+export function isFinalKeptVerdict(verifier: string, verdict: string | null): boolean {
+  if (!isKeptVerdict(verdict)) return false;
+  return verifier === SECOND_OPINION_VERIFIER || verdict === "valid";
 }
 
 function failLoud(row: EmailVerification, providerError?: ProviderErrorDetail): never {

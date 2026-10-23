@@ -46,6 +46,12 @@ vi.mock("../../src/lib/mail-domain.js", async (orig) => ({
   domainHasMx: (...a: unknown[]) => mockDomainHasMx(...a),
 }));
 
+const mockRecordOutcome = vi.fn();
+vi.mock("../../src/lib/outcome-declarations.js", async (orig) => ({
+  ...(await orig<typeof import("../../src/lib/outcome-declarations.js")>()),
+  recordOutcomeDetached: (...a: unknown[]) => mockRecordOutcome(...a),
+}));
+
 const fetchMock = vi.fn();
 const CTX = {
   identity: { orgId: "org-1", userId: "user-1", brandIds: ["b-1"], campaignId: "c-1" },
@@ -109,6 +115,42 @@ beforeEach(async () => {
   vi.stubGlobal("fetch", fetchMock);
 });
 afterEach(() => vi.unstubAllGlobals());
+
+describe("outcome occurrences (COST-ACCOUNTING-1023): the deciding verification produces email_checked", () => {
+  it("valid at step 1 → its run produced email_checked and consumed email_found, for the person's email", async () => {
+    answers.apify = [() => actor([{ email: "ada@example.com", status: "valid", is_catch_all: false }])];
+    const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
+    await verifyRevealedEmail("ada@example.com", CTX);
+    expect(mockRecordOutcome).toHaveBeenCalledTimes(1);
+    expect(mockRecordOutcome).toHaveBeenCalledWith({
+      runId: "verify-run-1",
+      orgId: "org-1",
+      brandIds: ["b-1"],
+      campaignId: "c-1",
+      produced: ["email_checked"],
+      consumed: ["email_found"],
+      person: { email: "ada@example.com" },
+    });
+  });
+
+  it("step-1 catch_all is not final: only BounceBan's run declares", async () => {
+    mockCreateRun.mockReset();
+    mockCreateRun.mockImplementation(async (p: { taskName: string }) => ({ id: `run-${p.taskName}` }));
+    answers.apify = [() => actor([{ email: "ada@example.com", status: "valid", is_catch_all: true }])];
+    answers.bounceban = [() => bounceban("risky", { is_accept_all: true })];
+    const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
+    await verifyRevealedEmail("ada@example.com", CTX);
+    expect(mockRecordOutcome.mock.calls.map((c) => c[0].runId)).toEqual(["run-verify-email-bounceban"]);
+  });
+
+  it("an invalid final verdict is a loss: nothing declared", async () => {
+    answers.apify = [() => actor([{ email: "ada@example.com", status: "unknown" }])];
+    answers.bounceban = [() => bounceban("undeliverable")];
+    const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
+    await verifyRevealedEmail("ada@example.com", CTX);
+    expect(mockRecordOutcome).not.toHaveBeenCalled();
+  });
+});
 
 describe("verifyRevealedEmail", () => {
   it("valid → deliverable, billed exactly 1, hold released, raw row stored", async () => {

@@ -1125,6 +1125,38 @@ table; run it with `TRANSFER_BRAND_TEST_DATABASE_URL` on a throwaway DB).
   findings written with no brand and no campaign (nothing ties them).
 - History only: no cost is declared or reversed.
 
+## Outcome occurrences on our runs (COST-ACCOUNTING-1023) — declared LATER, on the person's lead
+
+Owner doctrine 2026-10-23 (agent-config skill `cost-accounting`): a run is a production
+order; runs-service (`POST /v1/runs/{id}/outcomes`) prices each outcome occurrence a run
+declares. `src/lib/outcome-declarations.ts` is the ONE mechanism for every paid task here:
+
+- **What each task produces** (pinned in `outcome-production-points.regression.test.ts`):
+  enrichment / person-match / email-find-* with an email → `email_found`; the DECIDING
+  verification (step-1 `valid`, or BounceBan's valid/catch_all/unknown) → `email_checked`
+  + consumed `email_found`; phone reveal with a number → `phone_found`; buying-signal
+  evidence bought, and every engager a paid linkedin-engagement serve returns →
+  `lead_identified`. A step-1 catch_all/unknown, an invalid, a miss, a cache hit, a free
+  teaser search declare NOTHING: their cost rolls into the nearest declaring ancestor
+  (lead-service's serve). audience-companies (an AUDIENCE, not in the catalogue) and the
+  org-less platform lookups are undeclared.
+- **Subject = the person's lead in lead-service** (`subjectService: "lead-service"`). The
+  lead does not exist when we spend (a lead = a person lead-service KEPT), so each point
+  parks a row in `outcome_declarations` (one local insert, never throws, never awaited by
+  the response) and the in-process declarer (every 2 min, first tick 60 s after boot,
+  single flight) asks lead-service `POST /internal/leads/ids/resolve` (x-api-key;
+  `{people:[{orgId, brandIds?, apolloPersonId?, email?, linkedinUrl?}]}` →
+  `{people:[{leadId|null, matchedBy}]}`, a lead OF that org/brand only), then declares on
+  OUR run. null = not yet, re-asked (2 min for 30 tries, then 30 min); still no lead after
+  3 days = a loss, `abandoned`. A resolve or declaration failure is logged loud and the row
+  stays pending with `last_error`. Never invent a lead id.
+- **Idempotent twice**: the park is unique per (run, direction, key, person) and
+  runs-service records each (run, direction, key, subject) once (`alreadyRecordedCount`).
+- Env: `LEAD_SERVICE_URL` + `LEAD_SERVICE_API_KEY` (shared fleet values), read lazily: absent
+  = the declarer logs and retries, nothing else is affected.
+- `outcome_declarations.org_id` = the RUN's org (runs-service 409s any other), so
+  transfer-brand does NOT move it.
+
 ## Commands
 
 - `pnpm test` — run all tests (Vitest)
