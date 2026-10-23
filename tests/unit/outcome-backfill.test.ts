@@ -109,6 +109,20 @@ describe("backfill declarations", () => {
     expect(updates.some((u) => u.set.status === "abandoned" && /run_not_found/.test(u.set.lastError))).toBe(true);
   });
 
+  it("a support-marked run (409 naming no run) is isolated by halving and abandoned; the others are declared", async () => {
+    dueRows = ["a", "b", "c", "d"].map((x) => row({ id: x, runId: `run-${x}`, leadId: `l-${x}` }));
+    const marked = new FakeRunsServiceError(409, JSON.stringify({ error: "run_marked_support", conflicts: [] }));
+    mockBatch.mockImplementation(async (runs: any[]) => {
+      if (runs.some((r) => r.runId === "run-c")) throw marked;
+      return { recordedCount: runs.length, alreadyRecordedCount: 0 };
+    });
+    const r = await declareBackfillPass(NOW);
+    expect(r).toMatchObject({ declared: 3, invalid: 1, failed: 0 });
+    expect(updates.some((u) => u.set.status === "abandoned" && /run_marked_support/.test(u.set.lastError))).toBe(true);
+    const declaredRuns = mockBatch.mock.calls.filter((c) => !c[0].some((r: any) => r.runId === "run-c")).flatMap((c) => c[0].map((r: any) => r.runId));
+    expect(declaredRuns.sort()).toEqual(["run-a", "run-b", "run-d"]);
+  });
+
   it("a transient failure keeps every row pending with its error (retried next pass)", async () => {
     dueRows = [row({ id: "a", leadId: "l-a" })];
     mockBatch.mockRejectedValue(new FakeRunsServiceError(502, "{}"));
