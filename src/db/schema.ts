@@ -848,3 +848,38 @@ export const personRoleLookups = pgTable("person_role_lookups", {
   // NULL = apollo-credit (our key); "treg-micro-usd" when treg answered (creditsCharged = micro-USD).
   costName: text("cost_name"),
 });
+
+// ─── Outcome declarations outbox (src/lib/outcome-declarations.ts) ──────────
+// Outcome occurrences produced/consumed on OUR runs, parked until lead-service
+// knows the person's lead, then declared to runs-service (COST-ACCOUNTING-1023).
+// org_id = the RUN's org (runs-service 409s any other), so it is NOT moved by
+// transfer-brand: rows live minutes, and the run stays under its org.
+export const outcomeDeclarations = pgTable(
+  "outcome_declarations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    runId: text("run_id").notNull(),
+    direction: text("direction").notNull(), // produced | consumed
+    outcomeKey: text("outcome_key").notNull(),
+    personKey: text("person_key").notNull(),
+    orgId: uuid("org_id").notNull(),
+    brandIds: text("brand_ids").array(),
+    campaignId: text("campaign_id"),
+    apolloPersonId: text("apollo_person_id"),
+    email: text("email"),
+    linkedinUrl: text("linkedin_url"),
+    status: text("status").notNull().default("pending"), // pending | declared | abandoned
+    leadId: text("lead_id"),
+    attempts: integer("attempts").notNull().default(0),
+    lastError: text("last_error"),
+    producedAt: timestamp("produced_at", { withTimezone: true }).notNull().defaultNow(),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+    declaredAt: timestamp("declared_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("idx_outcome_declarations_unique").on(table.runId, table.direction, table.outcomeKey, table.personKey),
+    index("idx_outcome_declarations_due").on(table.nextAttemptAt),
+  ]
+);
+
+export type OutcomeDeclaration = typeof outcomeDeclarations.$inferSelect;

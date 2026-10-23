@@ -4,6 +4,7 @@
  * so /enrich reuses it without importing a router.
  */
 import { errorMessage, messageOf } from "./db-error.js";
+import { recordOutcomeDetached } from "./outcome-declarations.js";
 import { and, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { emailFinderCalls, emailFindings, type EmailFinding } from "../db/schema.js";
@@ -191,6 +192,22 @@ export interface EmailFindOutcome {
  * called again, so a re-run never pays twice. Only a `failed` finding (the
  * vendor answered with an error, which it does not bill) is retried.
  */
+/** A found work email is this find run's output: `email_found` for the person's lead (outcome-declarations.ts). */
+function recordFoundEmail(
+  row: Pick<EmailFinding, "apolloPersonId" | "email" | "linkedinUrl">,
+  findRunId: string,
+  ctx: Pick<EmailFindContext, "orgId" | "brandIds" | "campaignId">
+): void {
+  recordOutcomeDetached({
+    runId: findRunId,
+    orgId: ctx.orgId,
+    brandIds: ctx.brandIds,
+    campaignId: ctx.campaignId,
+    produced: ["email_found"],
+    person: { apolloPersonId: row.apolloPersonId, email: row.email, linkedinUrl: row.linkedinUrl },
+  });
+}
+
 export async function executeEmailFind(
   ctx: EmailFindContext,
   vendor: Vendor,
@@ -420,6 +437,8 @@ export async function executeEmailFind(
       .where(eq(emailFindings.id, claimed.id))
       .returning();
 
+    if (done.status === "found" && done.email) recordFoundEmail(done, findRunId, ctx);
+
     traceEvent(
       runId,
       { service: "apollo-service", event: "email-find-done", detail: `vendor=${vendor}, status=${result.outcome}, charged=${result.chargedQuantity}` },
@@ -470,6 +489,9 @@ export async function executeEmailFind(
             updatedAt: new Date(),
           })
           .where(eq(emailFindings.id, claimed.id));
+        if (settled.outcome === "found" && settled.email && findRunId) {
+          recordFoundEmail({ apolloPersonId: claimed.apolloPersonId, email: settled.email, linkedinUrl: claimed.linkedinUrl }, findRunId, ctx);
+        }
       } else if (claimed) {
         await db
           .update(emailFindings)
