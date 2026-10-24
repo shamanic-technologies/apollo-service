@@ -121,7 +121,9 @@ export type SupportFunction =
   | "platform_llm"
   | "staff_experiment"
   | "product_feature"
-  | "retired_product";
+  | "retired_product"
+  /** Real production tied to no pipe and no subject (pre-campaign Feb 2026 runs): a period cost, never support (LEDGER-HISTORY-1024). */
+  | "unattributed_production";
 
 export interface RunSupport {
   kind: SupportFunction;

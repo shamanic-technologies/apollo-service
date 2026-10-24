@@ -1201,6 +1201,9 @@ consumed `email_found` (before BounceBan's first row the step-1 verdict WAS fina
   (self or ancestor) $4,841 (92.5 %), support $228, no output $163, and every no-output dollar checked against
   our rows: no email returned, invalid / no verdict, a domain-gate probe, a person no lead of the org ever held,
   a failed serve, or pre-February rows we never stored. Nothing that produced is left out.
+  The 7,458 pre-campaign Feb 2026 reveals (no campaign, no pipe, $73) are marked `unattributed_production`
+  by run id through the same `/internal/support-marks/backfill` route: real production on no pipe and no
+  subject, a period cost on runs-service's own line, never support and never a guessed declaration.
 
 ## Support runs (COST-SUPPORT-1024) — no outcome BY DESIGN, marked so
 

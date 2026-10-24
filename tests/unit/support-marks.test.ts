@@ -92,3 +92,14 @@ describe("markPastSupportRuns", () => {
     await expect(markPastSupportRuns({ dryRun: true })).rejects.toThrow(/422/);
   });
 });
+
+describe("SupportMarksBackfillRequestSchema (LEDGER-HISTORY-1024)", () => {
+  it("accepts unattributed_production run marks", async () => {
+    const { SupportMarksBackfillRequestSchema } = await import("../../src/schemas.js");
+    const ok = SupportMarksBackfillRequestSchema.safeParse({
+      dryRun: true,
+      runMarks: [{ kind: "unattributed_production", reason: "Pre-campaign reveals", runIds: ["0d041449-afde-42e0-899b-bb8c32b2d15d"] }],
+    });
+    expect(ok.success).toBe(true);
+  });
+});

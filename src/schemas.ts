@@ -1457,6 +1457,7 @@ const SupportFunctionSchema = z.enum([
   "staff_experiment",
   "product_feature",
   "retired_product",
+  "unattributed_production",
 ]);
 
 export const SupportMarksBackfillRequestSchema = z
@@ -1504,7 +1505,7 @@ registry.registerPath({
   path: "/internal/support-marks/backfill",
   summary: "Mark our PAST runs that produce no outcome by design as SUPPORT (COST-SUPPORT-1024)",
   description:
-    "Coverage reads declared outcome spend / (ledger - support). Runs of ours that can never produce an outcome are marked SUPPORT on runs-service's owner door, naming the function: audience-companies, company-firmographics and person-role (product_feature, also marked at creation since COST-SUPPORT-1024), the staff probe tasks (experiment-treg-people-search, issue-249-verification, email-find-probe, linkedin-engagement-probe, staff-verify-probe: staff_experiment), plus explicit runMarks (e.g. runs of a retired production task that ride no outcome: a task-wide mark would strip the ones riding the email or lead they helped produce). runs-service leaves out every run that declared an outcome. Each step is previewed then applied; dryRun: true only previews. Idempotent: a mark is final. Requires x-api-key = APOLLO_SERVICE_API_KEY.",
+    "Coverage reads declared outcome spend / (ledger - support). Runs of ours that can never produce an outcome are marked SUPPORT on runs-service's owner door, naming the function: audience-companies, company-firmographics and person-role (product_feature, also marked at creation since COST-SUPPORT-1024), the staff probe tasks (experiment-treg-people-search, issue-249-verification, email-find-probe, linkedin-engagement-probe, staff-verify-probe: staff_experiment), plus explicit runMarks (e.g. runs of a retired production task that ride no outcome: a task-wide mark would strip the ones riding the email or lead they helped produce). A runMark of kind unattributed_production states real production tied to no pipe and no subject (pre-campaign Feb 2026 reveals): a period cost on its own reconciliation line, not support. runs-service leaves out every run that declared an outcome. Each step is previewed then applied; dryRun: true only previews. Idempotent: a mark is final. Requires x-api-key = APOLLO_SERVICE_API_KEY.",
   request: {
     headers: z.object({ "x-api-key": z.string() }),
     body: { content: { "application/json": { schema: SupportMarksBackfillRequestSchema } }, required: true },
