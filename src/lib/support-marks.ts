@@ -46,16 +46,13 @@ export function supportOf(task: LiveSupportTask): RunSupport {
   return LIVE_SUPPORT_TASKS[task];
 }
 
-/** Tasks of products no longer served, or one-off experiments: every past run not declaring an outcome. */
+/**
+ * Tasks whose EVERY past run is support: one-off experiments and staff probes. A retired
+ * PRODUCTION task (waterfall-enrichment, search-params-generation) is not listed: most of
+ * its runs ride the email/lead they helped produce, which a task-wide mark would strip;
+ * only its runs riding nothing are passed by id (`runMarks`).
+ */
 export const PAST_SUPPORT_TASKS: Record<string, RunSupport> = {
-  "waterfall-enrichment": {
-    kind: "retired_product",
-    reason: "Apollo waterfall enrichment, disabled 2026-05-28 (vendor email quality).",
-  },
-  "search-params-generation": {
-    kind: "retired_product",
-    reason: "LLM search-params generation, replaced by stored audiences (last run 2026-04-21).",
-  },
   "experiment-treg-people-search": {
     kind: "staff_experiment",
     reason: "One-off treg people-search benchmark (2026-09-26).",
