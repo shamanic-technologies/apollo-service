@@ -410,7 +410,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       // Our Apollo key, or Apollo through treg while ours is out of credits (apollo-reveal-route.ts).
       const reveal = await revealPerson(keySource, {
         own: () => enrichPerson(apolloApiKey, apolloPersonId, webhookUrl, toCreditAlertIdentity(req)),
-        tregQuery: { id: apolloPersonId, reveal_personal_emails: "false", run_waterfall_email: "false" },
+        tregQuery: { id: apolloPersonId, reveal_personal_emails: "false" },
         callerPath: "/enrich",
       });
       const result = reveal.response;

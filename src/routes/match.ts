@@ -211,7 +211,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
       // Our Apollo key, or Apollo through treg while ours is out of credits (apollo-reveal-route.ts).
       const reveal = await revealPerson(keySource, {
         own: () => matchPersonByName(apolloApiKey, firstName, lastName, organizationDomain, webhookUrl, toCreditAlertIdentity(req)),
-        tregQuery: { first_name: firstName, last_name: lastName, domain: organizationDomain, reveal_personal_emails: "false", run_waterfall_email: "false" },
+        tregQuery: { first_name: firstName, last_name: lastName, domain: organizationDomain, reveal_personal_emails: "false" },
         callerPath: "/match",
       });
       const result = reveal.response;

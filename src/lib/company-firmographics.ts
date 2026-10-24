@@ -411,7 +411,7 @@ async function lookupPersonRow(
       lastName: args.lastName,
       domain: isPersonalDomain(args.domain) ? undefined : args.domain,
     };
-    const tregQuery: Record<string, string> = { reveal_personal_emails: "false", run_waterfall_email: "false" };
+    const tregQuery: Record<string, string> = { reveal_personal_emails: "false" };
     if (matchArgs.email) tregQuery.email = matchArgs.email;
     if (matchArgs.firstName) tregQuery.first_name = matchArgs.firstName;
     if (matchArgs.lastName) tregQuery.last_name = matchArgs.lastName;

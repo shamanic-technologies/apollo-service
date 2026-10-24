@@ -8,6 +8,7 @@ import {
   ownKeyExhausted,
   OWN_KEY_EXHAUSTED_RECHECK_MS,
   TREG_APOLLO_MATCH_URL,
+  tregSharedKeyQuery,
 } from "../../src/lib/apollo-reveal-route.js";
 import { ApolloCreditsExhaustedError } from "../../src/lib/provider-error.js";
 
@@ -132,5 +133,45 @@ describe("withTregFallback — the other Apollo calls (GET, path params as query
     expect(tregCostItems(26000)).toEqual([{ costName: "treg-micro-usd", costSource: "platform", quantity: 26000 }]);
     expect(tregCostItems(0)).toEqual([]);
     expect(tregCostItems(null)).toEqual([]);
+  });
+});
+
+/**
+ * STOCK-EMPTY-WITH-AUDIENCE-LEFT-1024: since 2026-10-22 treg refuses Apollo's
+ * waterfall/phone/webhook options on its shared key, even at `false`. Every
+ * platform enrichment sent `run_waterfall_email=false` through treg (our key
+ * out of credits) and got a 400, so Lead Sourcing found nobody while the
+ * brand's audiences still held thousands of people.
+ */
+describe("treg shared-key query", () => {
+  it("drops a refused option left at its default false", () => {
+    expect(tregSharedKeyQuery({ id: "p1", reveal_personal_emails: "false", run_waterfall_email: "false", run_waterfall_phone: "false" })).toEqual({
+      id: "p1",
+      reveal_personal_emails: "false",
+    });
+  });
+
+  it("keeps a refused option turned ON, so treg's refusal stays loud", () => {
+    expect(tregSharedKeyQuery({ id: "p1", reveal_phone_number: "true", webhook_url: "https://x/y" })).toEqual({
+      id: "p1",
+      reveal_phone_number: "true",
+      webhook_url: "https://x/y",
+    });
+  });
+
+  it("an enrichment through treg never sends run_waterfall_email", async () => {
+    const fetchImpl = tregFetch();
+    await revealPerson("platform", {
+      own: async () => {
+        throw EXHAUSTED();
+      },
+      tregQuery: { id: "p1", reveal_personal_emails: "false", run_waterfall_email: "false" },
+      callerPath: "/enrich",
+      credentials: creds,
+      fetchImpl,
+    });
+    const [url] = fetchImpl.mock.calls[0];
+    expect(url).toBe(`${TREG_APOLLO_MATCH_URL}?id=p1&reveal_personal_emails=false`);
+    expect(String(url)).not.toContain("run_waterfall");
   });
 });
