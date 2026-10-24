@@ -38,6 +38,7 @@ import { PERSONAL_EMAIL_DOMAINS, normalizeDomain } from "./email-finders.js";
 import { decryptPlatformKey } from "./keys-client.js";
 import { withTregFallback, TREG_COST_NAME } from "./apollo-reveal-route.js";
 import { addPlatformRunCosts, createPlatformRun, updatePlatformRun } from "./runs-client.js";
+import { supportOf, type LiveSupportTask } from "./support-marks.js";
 
 export const FIRMOGRAPHICS_COST_NAME = "apollo-credit";
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -269,8 +270,9 @@ async function declareCredits(runId: string, credits: number, idempotencyKey: st
 }
 
 /** Open a platform run, run the paid call, return its run id. Marks the run failed if the call throws. */
-async function onPlatformRun<T>(taskName: string, key: string, call: (runId: string) => Promise<T>): Promise<{ runId: string; result: T }> {
-  const run = await createPlatformRun({ taskName, idempotencyKey: `apollo-service:${taskName}:${key}:${Date.now()}` });
+async function onPlatformRun<T>(taskName: LiveSupportTask, key: string, call: (runId: string) => Promise<T>): Promise<{ runId: string; result: T }> {
+  // A lookup names a company or a person for a platform job: support, never an outcome (COST-SUPPORT-1024).
+  const run = await createPlatformRun({ taskName, idempotencyKey: `apollo-service:${taskName}:${key}:${Date.now()}`, support: supportOf(taskName) });
   try {
     return { runId: run.id, result: await call(run.id) };
   } catch (err) {

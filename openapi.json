@@ -3741,6 +3741,171 @@
           "dryRun"
         ]
       },
+      "SupportMarksBackfillResponse": {
+        "type": "object",
+        "properties": {
+          "dryRun": {
+            "type": "boolean"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string",
+                  "description": "task:<task> for a task rule, runIds:<i>:<kind> for an explicit list."
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "payment_fees",
+                    "brand_setup",
+                    "copilot",
+                    "platform_llm",
+                    "staff_experiment",
+                    "product_feature",
+                    "retired_product"
+                  ]
+                },
+                "preview": {
+                  "type": "object",
+                  "properties": {
+                    "matchedRunCount": {
+                      "type": "integer"
+                    },
+                    "toMarkCount": {
+                      "type": "integer"
+                    },
+                    "alreadyMarkedCount": {
+                      "type": "integer"
+                    },
+                    "declaresOutcomesCount": {
+                      "type": "integer"
+                    },
+                    "onOutcomeNowCount": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "spend": {
+                      "type": "object",
+                      "properties": {
+                        "grossCents": {
+                          "type": "string"
+                        },
+                        "netCents": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "grossCents",
+                        "netCents"
+                      ]
+                    },
+                    "maxRuns": {
+                      "type": "integer"
+                    },
+                    "tooMany": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "matchedRunCount",
+                    "toMarkCount",
+                    "alreadyMarkedCount",
+                    "declaresOutcomesCount",
+                    "onOutcomeNowCount",
+                    "spend",
+                    "maxRuns",
+                    "tooMany"
+                  ]
+                },
+                "applied": {
+                  "type": "object",
+                  "nullable": true,
+                  "properties": {
+                    "markedCount": {
+                      "type": "integer"
+                    },
+                    "alreadyMarkedCount": {
+                      "type": "integer"
+                    },
+                    "declaresOutcomesCount": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "markedCount",
+                    "alreadyMarkedCount"
+                  ]
+                }
+              },
+              "required": [
+                "label",
+                "kind",
+                "preview",
+                "applied"
+              ]
+            }
+          }
+        },
+        "required": [
+          "dryRun",
+          "steps"
+        ]
+      },
+      "SupportMarksBackfillRequest": {
+        "type": "object",
+        "properties": {
+          "dryRun": {
+            "type": "boolean"
+          },
+          "runMarks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "payment_fees",
+                    "brand_setup",
+                    "copilot",
+                    "platform_llm",
+                    "staff_experiment",
+                    "product_feature",
+                    "retired_product"
+                  ]
+                },
+                "reason": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                },
+                "runIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "minItems": 1,
+                  "maxItems": 5000
+                }
+              },
+              "required": [
+                "kind",
+                "reason",
+                "runIds"
+              ]
+            },
+            "maxItems": 20,
+            "description": "Single runs of ours a task rule cannot reach (e.g. a staff probe that borrowed one of our production runs as its x-run-id), each with its support function and why. All or nothing per entry."
+          }
+        },
+        "required": [
+          "dryRun"
+        ]
+      },
       "PersonIdentityResponse": {
         "type": "object",
         "properties": {
@@ -7107,6 +7272,74 @@
           },
           "500": {
             "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/support-marks/backfill": {
+      "post": {
+        "summary": "Mark our PAST runs that produce no outcome by design as SUPPORT (COST-SUPPORT-1024)",
+        "description": "Coverage reads declared outcome spend / (ledger - support). Runs of ours that can never produce an outcome are marked SUPPORT on runs-service's owner door, naming the function: audience-companies, company-firmographics and person-role (product_feature, also marked at creation since COST-SUPPORT-1024), waterfall-enrichment and search-params-generation (retired_product), the staff probe tasks (experiment-treg-people-search, issue-249-verification, email-find-probe, linkedin-engagement-probe, staff-verify-probe: staff_experiment), plus any explicit runMarks. runs-service leaves out every run that declared an outcome. Each step is previewed then applied; dryRun: true only previews. Idempotent: a mark is final. Requires x-api-key = APOLLO_SERVICE_API_KEY.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SupportMarksBackfillRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Each step: what runs-service matched, the spend it moves to support, what was marked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportMarksBackfillResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid x-api-key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "runs-service refused a step (its answer verbatim)",
             "content": {
               "application/json": {
                 "schema": {

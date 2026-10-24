@@ -38,6 +38,7 @@ import { ServeSourceRequestSchema, SignalCoverageRequestSchema, CreateSignalAudi
 import { signalConflicts, signalWindow, utcDay, SignalNotApolloSearchableError, type BuyingSignalSpec, type BuyingSignalType } from "../lib/buying-signal-spec.js";
 import { filtersBesideEngagement } from "../lib/linkedin-engagement.js";
 import { parseCompetitorPage } from "../lib/linkedin-engagement-spec.js";
+import { supportOf } from "../lib/support-marks.js";
 
 const router = Router();
 
@@ -323,6 +324,8 @@ async function enrichOrganizations(args: {
       serviceName: "apollo-service",
       taskName: "audience-companies",
       parentRunId: runId,
+      // An onboarding preview of an audience, no outcome of the catalogue (COST-SUPPORT-1024).
+      support: supportOf("audience-companies"),
     });
 
     // PROVISION the worst case (every missing company billed) before anything is spent.

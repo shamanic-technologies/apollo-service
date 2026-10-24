@@ -1186,6 +1186,19 @@ consumed `email_found` (before BounceBan's first row the step-1 verdict WAS fina
   past paid run was for: no guess), audience-companies (onboarding preview), org-less lookups, retired
   tasks (waterfall, search-params-generation) and staff experiments.
 
+## Support runs (COST-SUPPORT-1024) — no outcome BY DESIGN, marked so
+
+Coverage = declared outcome spend / (ledger - support). `src/lib/support-marks.ts` holds the
+rules, never a cost name. LIVE: `audience-companies` (onboarding preview), `company-firmographics`
+and `person-role` (org-less lookups) open their run with `support: product_feature`.
+PAST: `POST /internal/support-marks/backfill {dryRun, runMarks?}` marks through runs-service's owner
+door by task (those three, retired `waterfall-enrichment` / `search-params-generation`, the staff
+probe tasks) plus explicit run lists a task cannot reach (a staff probe that borrowed one of our
+production runs as x-run-id: 1,259 chat completions under one `verify-email-contactout` run,
+2026-10-22; person-match for the retired journalists product). runs-service skips any run that
+declared an outcome. A run that SPENT and found nobody kept (a loss) is NOT support: it rides the
+caller's serve (lead-service), which declares.
+
 ## Commands
 
 - `pnpm test` — run all tests (Vitest)

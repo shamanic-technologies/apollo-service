@@ -1433,6 +1433,76 @@ registry.registerPath({
   },
 });
 
+// ─── POST /internal/support-marks/backfill ───────────────────────────────
+
+const SupportFunctionSchema = z.enum([
+  "payment_fees",
+  "brand_setup",
+  "copilot",
+  "platform_llm",
+  "staff_experiment",
+  "product_feature",
+  "retired_product",
+]);
+
+export const SupportMarksBackfillRequestSchema = z
+  .object({
+    dryRun: z.boolean(),
+    runMarks: z
+      .array(
+        z.object({
+          kind: SupportFunctionSchema,
+          reason: z.string().min(1).max(2000),
+          runIds: z.array(z.string().uuid()).min(1).max(5000),
+        })
+      )
+      .max(20)
+      .optional()
+      .describe("Single runs of ours a task rule cannot reach (e.g. a staff probe that borrowed one of our production runs as its x-run-id), each with its support function and why. All or nothing per entry."),
+  })
+  .openapi("SupportMarksBackfillRequest");
+
+const SupportMarksBackfillResponseSchema = z
+  .object({
+    dryRun: z.boolean(),
+    steps: z.array(
+      z.object({
+        label: z.string().describe("task:<task> for a task rule, runIds:<i>:<kind> for an explicit list."),
+        kind: SupportFunctionSchema,
+        preview: z.object({
+          matchedRunCount: z.number().int(),
+          toMarkCount: z.number().int(),
+          alreadyMarkedCount: z.number().int(),
+          declaresOutcomesCount: z.number().int(),
+          onOutcomeNowCount: z.number().int().nullable(),
+          spend: z.object({ grossCents: z.string(), netCents: z.string() }),
+          maxRuns: z.number().int(),
+          tooMany: z.boolean(),
+        }),
+        applied: z.object({ markedCount: z.number().int(), alreadyMarkedCount: z.number().int(), declaresOutcomesCount: z.number().int().optional() }).nullable(),
+      })
+    ),
+  })
+  .openapi("SupportMarksBackfillResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/support-marks/backfill",
+  summary: "Mark our PAST runs that produce no outcome by design as SUPPORT (COST-SUPPORT-1024)",
+  description:
+    "Coverage reads declared outcome spend / (ledger - support). Runs of ours that can never produce an outcome are marked SUPPORT on runs-service's owner door, naming the function: audience-companies, company-firmographics and person-role (product_feature, also marked at creation since COST-SUPPORT-1024), waterfall-enrichment and search-params-generation (retired_product), the staff probe tasks (experiment-treg-people-search, issue-249-verification, email-find-probe, linkedin-engagement-probe, staff-verify-probe: staff_experiment), plus any explicit runMarks. runs-service leaves out every run that declared an outcome. Each step is previewed then applied; dryRun: true only previews. Idempotent: a mark is final. Requires x-api-key = APOLLO_SERVICE_API_KEY.",
+  request: {
+    headers: z.object({ "x-api-key": z.string() }),
+    body: { content: { "application/json": { schema: SupportMarksBackfillRequestSchema } }, required: true },
+  },
+  responses: {
+    200: { description: "Each step: what runs-service matched, the spend it moves to support, what was marked", content: { "application/json": { schema: SupportMarksBackfillResponseSchema } } },
+    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponseSchema } } },
+    401: { description: "Missing or invalid x-api-key", content: { "application/json": { schema: ErrorResponseSchema } } },
+    500: { description: "runs-service refused a step (its answer verbatim)", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
 // ─── POST /internal/person-identity ──────────────────────────────────────
 
 export const PersonIdentityRequestSchema = z
