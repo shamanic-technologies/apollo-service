@@ -1447,6 +1447,58 @@ registry.registerPath({
   },
 });
 
+// ─── POST /internal/outcome-declarations/named-subjects ──────────────────
+
+export const NamedSubjectsBackfillRequestSchema = z
+  .object({
+    dryRun: z.boolean(),
+    callerLabel: z
+      .string()
+      .trim()
+      .min(1)
+      .max(200)
+      .describe("The source label the caller sent when it asked for the checks (bronze source = verify:<callerLabel>), e.g. transactional-email-service:mailing-list-release."),
+    subjects: z
+      .array(
+        z.object({
+          email: z.string().trim().min(3).max(320),
+          subjectService: z.string().trim().min(1).max(100),
+          subjectId: z.string().trim().min(1).max(200),
+        })
+      )
+      .min(1)
+      .max(500),
+  })
+  .openapi("NamedSubjectsBackfillRequest");
+
+const NamedSubjectsBackfillResponseSchema = z
+  .object({
+    dryRun: z.boolean(),
+    subjects: z.number().int(),
+    checks: z.number().int().describe("Final kept checks of those addresses the caller asked for: one email_checked each."),
+    subjectsWithoutCheck: z.number().int().describe("Subjects with no such check in our rows."),
+    parked: z.number().int(),
+  })
+  .openapi("NamedSubjectsBackfillResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/outcome-declarations/named-subjects",
+  summary: "Name the subject of past checks a caller asked for (LEDGER-HISTORY-1024)",
+  description:
+    "A caller of POST /email-verifications names, since 2026-10-23, the subject of each address (subjects[]). Checks it asked for before carry no subject in our rows, so they declared nothing. The caller names them here (address -> its own subject, at most 500 per call): every billed FINAL kept check of that address asked by that caller (bronze source = verify:<callerLabel>) is parked as email_checked produced on that subject, on the run that paid, dated at the check (nothing consumed: we never found that address). The in-process declarer sends them through runs-service's batch backfill door. Idempotent. dryRun: true only counts. Requires x-api-key = APOLLO_SERVICE_API_KEY.",
+  request: {
+    headers: z.object({ "x-api-key": z.string() }),
+    body: { content: { "application/json": { schema: NamedSubjectsBackfillRequestSchema } }, required: true },
+  },
+  responses: {
+    200: { description: "Checks found and parked", content: { "application/json": { schema: NamedSubjectsBackfillResponseSchema } } },
+    400: { description: "Validation error, or two subjects for one address", content: { "application/json": { schema: ErrorResponseSchema } } },
+    401: { description: "Missing or invalid x-api-key", content: { "application/json": { schema: ErrorResponseSchema } } },
+    500: { description: "Internal error", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
 // ─── POST /internal/support-marks/backfill ───────────────────────────────
 
 const SupportFunctionSchema = z.enum([
