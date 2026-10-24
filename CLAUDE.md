@@ -1188,10 +1188,19 @@ consumed `email_found` (before BounceBan's first row the step-1 verdict WAS fina
   rest re-sent; a `409 run_marked_support` (a staff-probe run runs-service marked SUPPORT) names no run, so the call
   is halved until the marked run stands alone, then that run is abandoned. A person who is no lead of the org
   after 3 days never will be: abandoned at the first ask.
+- **Run-tree-matched sources (LEDGER-HISTORY-1024, `src/lib/outcome-backfill-linked.ts`)**: past
+  linkedin-engagement serves and buying-signal evidence produce `lead_identified` like live, but their rows hold
+  no run. Our own runs (GET /v1/runs per org) give the link, EXACT single matches only: a served row → the ONE
+  engagement run of its org + campaign whose [start, end] holds `served_at`; a charged evidence run → the ONE
+  person enriched under its parent (caller) run at the company it bought postings of. Two candidates = counted
+  `ambiguous`, never picked. Same route, `linked` block in the response.
 - **Not backfilled, by design**: mailing-list verifications (subscribers, transactional-email-service declares
-  on its own run), probes, buying-signal evidence and linkedin-engagement (our rows do not say which person a
-  past paid run was for: no guess), audience-companies (onboarding preview), org-less lookups, retired
+  on its own run), probes, audience-companies (onboarding preview), org-less lookups, retired
   tasks (waterfall, search-params-generation) and staff experiments.
+- **Ledger proof 2026-10-24 (runs DB walk, every apollo run with spend since 2026-02-02, $5,232)**: declared
+  (self or ancestor) $4,841 (92.5 %), support $228, no output $163, and every no-output dollar checked against
+  our rows: no email returned, invalid / no verdict, a domain-gate probe, a person no lead of the org ever held,
+  a failed serve, or pre-February rows we never stored. Nothing that produced is left out.
 
 ## Support runs (COST-SUPPORT-1024) — no outcome BY DESIGN, marked so
 

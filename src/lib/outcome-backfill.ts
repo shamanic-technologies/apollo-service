@@ -14,12 +14,14 @@
  *     (final = BounceBan's verdict, or a step-1 valid; before BounceBan existed
  *      (its first row), the step-1 verdict WAS the decision: catch_all/unknown kept too)
  *   apollo_phone_reveals found                    → phone_found      on reveal_run_id
+ *   linkedin-engagement serves / buying-signal evidence → lead_identified, matched to
+ *     their run through our own runs-service run tree (outcome-backfill-linked.ts)
  * Not parked, on purpose:
  *   - verifications asked for a transactional-email-service mailing list (the
  *     subject is a subscriber, not a lead; that service declares on its own run,
  *     ours rolls into it) and reveal-domain / staff probes (nobody's address);
- *   - buying-signal evidence and linkedin-engagement serves: their tables do not
- *     record WHICH person a past paid run was for, so nothing is declared by guess;
+ *   - a linkedin-engagement serve or buying-signal evidence whose run or person is
+ *     ambiguous (counted, never picked);
  *   - audience-companies (an onboarding preview) and the org-less platform lookups.
  *
  * Idempotent: the unique (run, direction, key, person) index skips every row
@@ -28,8 +30,9 @@
  */
 import { sql } from "drizzle-orm";
 import { db } from "../db/index.js";
+import { parkLinkedHistory, type LinkedBackfillReport } from "./outcome-backfill-linked.js";
 
-export type BackfillSource = "enrichment" | "email_finding" | "email_verification" | "phone_reveal";
+export type BackfillSource = "enrichment" | "email_finding" | "email_verification" | "phone_reveal" | "linkedin_engagement" | "buying_signal_evidence";
 
 const UUID_RE = "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$";
 
@@ -89,6 +92,8 @@ export interface BackfillParkReport {
   candidates: Record<BackfillSource, number>;
   /** Rows newly parked by this call (0 on a dry run, 0 on a replay). */
   parked: number;
+  /** The two run-tree-matched sources: rows held, matched, unmatched, ambiguous (never picked). */
+  linked: LinkedBackfillReport;
   /** The whole backfill queue after this call: rows parked from the past, by status. */
   queue: { pending: number; declared: number; abandoned: number };
 }
@@ -97,8 +102,13 @@ export async function parkHistoricalOutcomes(opts: { dryRun: boolean }): Promise
   const counts = (await db.execute(
     sql.raw(`${BACKFILL_CANDIDATES_SQL} SELECT source, count(*)::int AS n FROM candidates GROUP BY source`)
   )) as unknown as Array<{ source: BackfillSource; n: number }>;
-  const candidates: Record<BackfillSource, number> = { enrichment: 0, email_finding: 0, email_verification: 0, phone_reveal: 0 };
+  const candidates: Record<BackfillSource, number> = {
+    enrichment: 0, email_finding: 0, email_verification: 0, phone_reveal: 0, linkedin_engagement: 0, buying_signal_evidence: 0,
+  };
   for (const r of counts) candidates[r.source] = Number(r.n);
+  const linked = await parkLinkedHistory(opts);
+  candidates.linkedin_engagement = linked.linkedin_engagement.candidates;
+  candidates.buying_signal_evidence = linked.buying_signal_evidence.candidates;
 
   let parked = 0;
   if (!opts.dryRun) {
@@ -112,7 +122,7 @@ export async function parkHistoricalOutcomes(opts: { dryRun: boolean }): Promise
         ON CONFLICT (run_id, direction, outcome_key, person_key) DO NOTHING
         RETURNING 1`)
     )) as unknown as unknown[];
-    parked = inserted.length;
+    parked = inserted.length + linked.parked;
   }
 
   const queueRows = (await db.execute(
@@ -121,5 +131,5 @@ export async function parkHistoricalOutcomes(opts: { dryRun: boolean }): Promise
   const queue = { pending: 0, declared: 0, abandoned: 0 };
   for (const r of queueRows) if (r.status in queue) queue[r.status as keyof typeof queue] = Number(r.n);
 
-  return { dryRun: opts.dryRun, candidates, parked, queue };
+  return { dryRun: opts.dryRun, candidates, parked, linked, queue };
 }
