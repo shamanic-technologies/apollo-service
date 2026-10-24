@@ -26,7 +26,7 @@ import { normalizeDomain } from "../lib/teaser-employer-domains.js";
 import { toApolloSearchParams } from "../lib/transform.js";
 import { apolloOrganizations } from "../db/schema.js";
 import { advisoryXactLock } from "../lib/advisory-lock.js";
-import { createRun, updateRun, addCosts, updateCostStatus, type IdentityHeaders } from "../lib/runs-client.js";
+import { createRun, updateRun, addCosts, updateCostStatus, failOpenRun, type IdentityHeaders } from "../lib/runs-client.js";
 import { authorizeCredit, type AuthorizeCreditResult } from "../lib/billing-client.js";
 import { creditRefusalBody } from "../lib/credit-refusal.js";
 import { assertKeySource } from "../lib/validators.js";
@@ -66,6 +66,7 @@ const FILTERS_PROMPT = `${buildFiltersPrompt(ApolloNativeSearchFiltersSchema)}\n
  * removes them.
  */
 router.post("/audiences/suggest-from-segment", serviceAuth, async (req: AuthenticatedRequest, res) => {
+  let openRun: { id: string; identity: IdentityHeaders } | null = null;
   try {
     const parsed = SuggestFromSegmentRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -90,6 +91,24 @@ router.post("/audiences/suggest-from-segment", serviceAuth, async (req: Authenti
       tracking,
     );
 
+    // This service's OWN run for the refine loop (PLATFORM-CALLER-RUN-1024):
+    // every LLM call it makes rides it, on both chat-service tiers. Child of the
+    // caller's run when there is one; a caller without a run gets a root run of
+    // ours instead of an orphan platform run at chat-service.
+    const refineRun = await createRun({
+      orgId: req.orgId!,
+      userId: req.userId,
+      brandIds,
+      campaignId: req.campaignId,
+      audienceId: req.audienceId,
+      featureSlug: req.featureSlug,
+      workflowSlug: req.workflowSlug,
+      serviceName: "apollo-service",
+      taskName: "audience-refine",
+      parentRunId: req.runId,
+    });
+    openRun = { id: refineRun.id, identity: { orgId: req.orgId!, userId: req.userId, runId: refineRun.id } };
+
     const refined = await refineAudience({
       name,
       description,
@@ -98,7 +117,10 @@ router.post("/audiences/suggest-from-segment", serviceAuth, async (req: Authenti
       tracking: {
         orgId: req.orgId!,
         userId: req.userId,
-        runId: req.runId,
+        runId: refineRun.id,
+        // Who pays is unchanged: a caller with a run pays on its org balance,
+        // a run-less caller (internal sweep) on the platform key.
+        billing: req.runId ? "org" : "platform",
         brandIds,
         campaignId: req.campaignId,
         featureSlug: req.featureSlug,
@@ -126,6 +148,9 @@ router.post("/audiences/suggest-from-segment", serviceAuth, async (req: Authenti
       )
       .returning();
 
+    await updateRun(refineRun.id, "completed", openRun.identity);
+    openRun = null;
+
     const candidates = refined.candidates.map((c, i) => ({
       apolloAudienceId: rows[i].id,
       round: c.round,
@@ -148,6 +173,7 @@ router.post("/audiences/suggest-from-segment", serviceAuth, async (req: Authenti
     });
   } catch (error) {
     console.error("[Apollo Service][POST /audiences/suggest-from-segment] ERROR:", error);
+    await failOpenRun(openRun, "POST /audiences/suggest-from-segment");
     if (error instanceof SignalNotApolloSearchableError) return res.status(400).json({ type: "validation", error: messageOf(error) });
     res.status(500).json({ type: "internal", error: error instanceof Error ? errorMessage(error) : "Internal server error", ...providerErrorFields(error) });
   }

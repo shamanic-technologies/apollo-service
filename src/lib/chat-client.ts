@@ -1,12 +1,18 @@
 /**
  * HTTP client for chat-service LLM completion.
  *
- * Two endpoints, picked by whether the caller carries an inbound run id:
- *   - WITH runId: POST /complete, org/run-scoped. chat-service meters the LLM
- *     cost against the caller's org + run.
- *   - WITHOUT runId: POST /internal/platform-complete, for run-less internal
- *     callers (migrations/backfills/sweeps). chat-service uses the platform key
- *     and declares the spend on a platform run, with no org balance gate.
+ * Two endpoints, picked by `billing`:
+ *   - "org": POST /complete, org/run-scoped. chat-service meters the LLM cost
+ *     against the caller's org + run.
+ *   - "platform": POST /internal/platform-complete, platform key, no org
+ *     balance gate.
+ *
+ * Every call carries THIS service's own run in `x-run-id`, on both endpoints
+ * (PLATFORM-CALLER-RUN-1024): on the platform tier the run chat-service opens
+ * becomes a child of ours, so the spend rides the work that run does. A
+ * platform call stating neither a caller run nor a support function is refused
+ * by chat-service, and nothing here declares support: every LLM call this
+ * service makes is done for a run of its own.
  *
  * chat-service owns the LLM cost in both cases. apollo-service declares no LLM
  * cost locally; it just calls chat-service and passes the relevant headers.
@@ -66,8 +72,12 @@ export interface ChatCompleteResult {
 export interface ChatTrackingHeaders {
   orgId: string;
   userId?: string;
-  /** Outbound x-run-id: this service's own runId, not the inbound parent. */
-  runId?: string;
+  /** Outbound x-run-id: this service's OWN run doing the work, never an
+   * inbound run forwarded as is. Required on both endpoints. */
+  runId: string;
+  /** Who pays: "org" = /complete on the org's balance, "platform" =
+   * /internal/platform-complete on the platform key. */
+  billing: "org" | "platform";
   brandIds?: string[];
   campaignId?: string;
   audienceId?: string;
@@ -91,7 +101,7 @@ function buildHeaders(tracking: ChatTrackingHeaders): Record<string, string> {
     "x-org-id": tracking.orgId,
   };
   if (tracking.userId) headers["x-user-id"] = tracking.userId;
-  if (tracking.runId) headers["x-run-id"] = tracking.runId;
+  headers["x-run-id"] = tracking.runId;
   if (tracking.brandIds?.length) headers["x-brand-id"] = tracking.brandIds.join(",");
   if (tracking.campaignId) headers["x-campaign-id"] = tracking.campaignId;
   if (tracking.audienceId) headers["x-audience-id"] = tracking.audienceId;
@@ -101,15 +111,18 @@ function buildHeaders(tracking: ChatTrackingHeaders): Record<string, string> {
 }
 
 /**
- * Headers for POST /internal/platform-complete. The platform endpoint takes no
- * org/user/run identity from this caller.
+ * Headers for chat-service's platform routes. They take no org/user identity
+ * from this caller, only the caller's run: `callerRunId` is the run of THIS
+ * service doing the work, and the platform run becomes its child.
  */
-function buildPlatformHeaders(): Record<string, string> {
+function buildPlatformHeaders(callerRunId: string): Record<string, string> {
   const apiKey = process.env.CHAT_SERVICE_API_KEY;
   if (!apiKey) throw new Error("[apollo-service] CHAT_SERVICE_API_KEY is required");
+  if (!callerRunId) throw new Error("[apollo-service] a platform call to chat-service needs this service's run id");
   return {
     "Content-Type": "application/json",
     "x-api-key": apiKey,
+    "x-run-id": callerRunId,
   };
 }
 
@@ -117,10 +130,8 @@ export async function chatComplete(
   params: ChatCompleteParams,
   tracking: ChatTrackingHeaders,
 ): Promise<ChatCompleteResult> {
-  // Run-less callers (no inbound run id: migrations / backfills / internal
-  // sweeps) route to the platform completion endpoint; run-scoped callers keep
-  // the org-scoped /complete path. chat-service owns the cost in both cases.
-  const isPlatform = !tracking.runId;
+  if (!tracking.runId) throw new Error("[apollo-service] chatComplete needs this service's run id");
+  const isPlatform = tracking.billing === "platform";
   const path = isPlatform ? "/internal/platform-complete" : "/complete";
 
   const body = {
@@ -144,7 +155,7 @@ export async function chatComplete(
   // error is write-safe.
   const res = await fetchWithRetry(`${baseUrl()}${path}`, {
     method: "POST",
-    headers: isPlatform ? buildPlatformHeaders() : buildHeaders(tracking),
+    headers: isPlatform ? buildPlatformHeaders(tracking.runId) : buildHeaders(tracking),
     body: JSON.stringify(body),
     ...(params.signal && { signal: params.signal }),
   });
@@ -168,17 +179,19 @@ export interface ChoiceJudgment {
 
 /**
  * One `choice` classification on the PLATFORM tier (`POST
- * /internal/platform-judgments`): org-less, x-api-key only. chat-service
- * declares the spend on its own platform run, so nothing is declared here.
+ * /internal/platform-judgments`): org-less. chat-service declares the spend on
+ * its own platform run, a child of `callerRunId` (this service's run doing the
+ * work), so nothing is declared here.
  */
 export async function platformChoiceJudgment(params: {
+  callerRunId: string;
   state: string | Record<string, unknown>;
   instructions: string;
   criteria: Record<string, string>;
 }): Promise<ChoiceJudgment> {
   const res = await fetchWithRetry(`${baseUrl()}/internal/platform-judgments`, {
     method: "POST",
-    headers: buildPlatformHeaders(),
+    headers: buildPlatformHeaders(params.callerRunId),
     body: JSON.stringify({
       state: params.state,
       questions: { answer: { type: "choice", instructions: params.instructions, criteria: params.criteria } },

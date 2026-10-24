@@ -68,6 +68,7 @@ vi.mock("../../src/middleware/auth.js", () => ({
     if (!req.headers["x-user-id"]) return res.status(400).json({ type: "validation", error: "x-user-id header required" });
     req.orgId = req.headers["x-org-id"];
     req.userId = req.headers["x-user-id"];
+    if (req.headers["x-run-id"]) req.runId = req.headers["x-run-id"];
     next();
   },
   orgAuth: (req: any, res: any, next: any) => {
@@ -80,6 +81,16 @@ vi.mock("../../src/middleware/auth.js", () => ({
 const mockDecryptKey = vi.fn();
 vi.mock("../../src/lib/keys-client.js", () => ({
   decryptKey: (...a: unknown[]) => mockDecryptKey(...a),
+}));
+
+const mockCreateRun = vi.fn();
+const mockUpdateRun = vi.fn();
+const mockFailOpenRun = vi.fn();
+vi.mock("../../src/lib/runs-client.js", async (importOriginal) => ({
+  ...((await importOriginal()) as Record<string, unknown>),
+  createRun: (...a: unknown[]) => mockCreateRun(...a),
+  updateRun: (...a: unknown[]) => mockUpdateRun(...a),
+  failOpenRun: (...a: unknown[]) => mockFailOpenRun(...a),
 }));
 
 const mockChatComplete = vi.fn();
@@ -160,6 +171,8 @@ describe("Apollo audience endpoints", () => {
     state.insertedRows = [];
     state.selectRow = undefined;
     mockDecryptKey.mockResolvedValue({ key: "apollo-key", keySource: "platform" });
+    mockCreateRun.mockResolvedValue({ id: "refine-run-1" });
+    mockUpdateRun.mockResolvedValue({ id: "refine-run-1" });
     apollo.counts = [42000];
     apollo.people = [person("Drogerie Müller", "Owner")];
     apollo.pagesRequested = [];
@@ -981,5 +994,56 @@ describe("Apollo audience endpoints", () => {
       .expect(200);
     expect(big.body.count).toBe(180000);
     expect(big.body.degraded).toBe(true);
+  });
+
+  // PLATFORM-CALLER-RUN-1024: every LLM call of the refine loop rides THIS
+  // service's own run, never an inbound run forwarded as is, never support.
+  describe("refine loop LLM calls carry this service's own run", () => {
+    it("caller with a run: opens a child run, every call bills the org on that child run", async () => {
+      setCounts(1000, 42000);
+      await request(app)
+        .post("/audiences/suggest-from-segment")
+        .set({ ...HEADERS, "X-Run-Id": "caller-run-1" })
+        .send({ name: "n", description: "d", brandId: null })
+        .expect(200);
+
+      expect(mockCreateRun).toHaveBeenCalledWith(
+        expect.objectContaining({ taskName: "audience-refine", serviceName: "apollo-service", parentRunId: "caller-run-1", orgId: "org-1" }),
+      );
+      expect(mockChatComplete.mock.calls.length).toBeGreaterThan(0);
+      for (const [, tracking] of mockChatComplete.mock.calls) {
+        expect(tracking.runId).toBe("refine-run-1");
+        expect(tracking.billing).toBe("org");
+      }
+      expect(mockUpdateRun).toHaveBeenCalledWith("refine-run-1", "completed", expect.objectContaining({ orgId: "org-1" }));
+    });
+
+    it("caller without a run: a root run of ours, every platform call names it", async () => {
+      setCounts(1000, 42000);
+      await request(app)
+        .post("/audiences/suggest-from-segment")
+        .set(HEADERS)
+        .send({ name: "n", description: "d", brandId: null })
+        .expect(200);
+
+      expect(mockCreateRun).toHaveBeenCalledWith(expect.objectContaining({ taskName: "audience-refine", parentRunId: undefined }));
+      for (const [, tracking] of mockChatComplete.mock.calls) {
+        expect(tracking.runId).toBe("refine-run-1");
+        expect(tracking.billing).toBe("platform");
+      }
+    });
+
+    it("a failed loop marks our run failed", async () => {
+      mockDecryptKey.mockResolvedValue({ key: "apollo-key", keySource: "platform" });
+      mockSearchPeople.mockRejectedValue(new Error("apollo down"));
+      mockChatComplete.mockReset().mockResolvedValue(stop(FINAL_FILTERS));
+      await request(app)
+        .post("/audiences/suggest-from-segment")
+        .set(HEADERS)
+        .send({ name: "n", description: "d", brandId: null })
+        .expect(500);
+      expect(mockFailOpenRun).toHaveBeenCalledWith(expect.objectContaining({ id: "refine-run-1" }), expect.any(String));
+      expect(mockUpdateRun).not.toHaveBeenCalledWith("refine-run-1", "completed", expect.anything());
+    });
   });
 });
