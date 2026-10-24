@@ -1401,6 +1401,13 @@ export const OutcomeBackfillRequestSchema = z
   .object({ dryRun: z.boolean() })
   .openapi("OutcomeBackfillRequest");
 
+const LinkedSourceReportSchema = z.object({
+  candidates: z.number().int().describe("Rows matched to exactly one run and one person: parked."),
+  rows: z.number().int().describe("Rows our tables hold for the task."),
+  unmatched: z.number().int().describe("Rows no run or no person matches."),
+  ambiguous: z.number().int().describe("Rows two runs or two people match: never picked."),
+});
+
 const OutcomeBackfillResponseSchema = z
   .object({
     dryRun: z.boolean(),
@@ -1409,8 +1416,15 @@ const OutcomeBackfillResponseSchema = z
       email_finding: z.number().int(),
       email_verification: z.number().int(),
       phone_reveal: z.number().int(),
+      linkedin_engagement: z.number().int(),
+      buying_signal_evidence: z.number().int(),
     }),
     parked: z.number().int(),
+    linked: z.object({
+      linkedin_engagement: LinkedSourceReportSchema,
+      buying_signal_evidence: LinkedSourceReportSchema,
+      parked: z.number().int(),
+    }),
     queue: z.object({ pending: z.number().int(), declared: z.number().int(), abandoned: z.number().int() }),
   })
   .openapi("OutcomeBackfillResponse");

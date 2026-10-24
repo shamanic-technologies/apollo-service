@@ -3691,17 +3691,92 @@
               },
               "phone_reveal": {
                 "type": "integer"
+              },
+              "linkedin_engagement": {
+                "type": "integer"
+              },
+              "buying_signal_evidence": {
+                "type": "integer"
               }
             },
             "required": [
               "enrichment",
               "email_finding",
               "email_verification",
-              "phone_reveal"
+              "phone_reveal",
+              "linkedin_engagement",
+              "buying_signal_evidence"
             ]
           },
           "parked": {
             "type": "integer"
+          },
+          "linked": {
+            "type": "object",
+            "properties": {
+              "linkedin_engagement": {
+                "type": "object",
+                "properties": {
+                  "candidates": {
+                    "type": "integer",
+                    "description": "Rows matched to exactly one run and one person: parked."
+                  },
+                  "rows": {
+                    "type": "integer",
+                    "description": "Rows our tables hold for the task."
+                  },
+                  "unmatched": {
+                    "type": "integer",
+                    "description": "Rows no run or no person matches."
+                  },
+                  "ambiguous": {
+                    "type": "integer",
+                    "description": "Rows two runs or two people match: never picked."
+                  }
+                },
+                "required": [
+                  "candidates",
+                  "rows",
+                  "unmatched",
+                  "ambiguous"
+                ]
+              },
+              "buying_signal_evidence": {
+                "type": "object",
+                "properties": {
+                  "candidates": {
+                    "type": "integer",
+                    "description": "Rows matched to exactly one run and one person: parked."
+                  },
+                  "rows": {
+                    "type": "integer",
+                    "description": "Rows our tables hold for the task."
+                  },
+                  "unmatched": {
+                    "type": "integer",
+                    "description": "Rows no run or no person matches."
+                  },
+                  "ambiguous": {
+                    "type": "integer",
+                    "description": "Rows two runs or two people match: never picked."
+                  }
+                },
+                "required": [
+                  "candidates",
+                  "rows",
+                  "unmatched",
+                  "ambiguous"
+                ]
+              },
+              "parked": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "linkedin_engagement",
+              "buying_signal_evidence",
+              "parked"
+            ]
           },
           "queue": {
             "type": "object",
@@ -3727,6 +3802,7 @@
           "dryRun",
           "candidates",
           "parked",
+          "linked",
           "queue"
         ]
       },
