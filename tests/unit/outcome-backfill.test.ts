@@ -84,7 +84,7 @@ describe("backfill declarations", () => {
     expect(updates.some((u) => u.set.status === "declared")).toBe(true);
   });
 
-  it("a person who is not a lead long after the fact never will be: abandoned at once; a recent one is re-asked", async () => {
+  it("a person not a lead (yet) is never abandoned: an old one is re-asked tomorrow, a recent one soon (LEDGER-HISTORY-1024)", async () => {
     dueRows = [
       row({ id: "old", runId: "run-old" }),
       row({ id: "new", runId: "run-new", occurredAt: new Date("2026-10-22T10:00:00Z") }),
@@ -92,7 +92,9 @@ describe("backfill declarations", () => {
     fetchMock.mockResolvedValue(resolveAnswer([null, null]));
     const r = await declareBackfillPass(NOW);
     expect(r).toMatchObject({ noLead: 1, declared: 0 });
-    expect(updates.filter((u) => u.set.status === "abandoned")).toHaveLength(1);
+    expect(updates.filter((u) => u.set.status === "abandoned")).toHaveLength(0);
+    const tomorrow = updates.find((u) => u.set.nextAttemptAt && !u.set.attempts);
+    expect(tomorrow!.set.nextAttemptAt.getTime() - NOW.getTime()).toBe(24 * 60 * 60 * 1000);
     expect(updates.some((u) => u.set.attempts === 1)).toBe(true);
     expect(mockBatch).not.toHaveBeenCalled();
   });
