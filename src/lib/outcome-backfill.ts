@@ -77,6 +77,8 @@ export const BACKFILL_CANDIDATES_SQL = `
        AND COALESCE(v.source, '') NOT LIKE 'verify:transactional-email-service%'
        AND COALESCE(v.source, '') <> 'reveal-domain-probe'
        AND COALESCE(v.source, '') NOT LIKE 'verify:%probe%'
+       -- an address the caller already held (verify:<caller>) was found by no run of ours: nothing consumed
+       AND (d.direction = 'produced' OR COALESCE(v.source, '') NOT LIKE 'verify:%')
     UNION ALL
     SELECT 'phone_reveal', p.reveal_run_id, 'produced', 'phone_found',
            'apollo:' || p.apollo_person_id,

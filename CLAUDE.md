@@ -1154,9 +1154,17 @@ declares. `src/lib/outcome-declarations.ts` is the ONE mechanism for every paid 
   single flight) asks lead-service `POST /internal/leads/ids/resolve` (x-api-key;
   `{people:[{orgId, brandIds?, apolloPersonId?, email?, linkedinUrl?}]}` →
   `{people:[{leadId|null, matchedBy}]}`, a lead OF that org/brand only), then declares on
-  OUR run. null = not yet, re-asked (2 min for 30 tries, then 30 min); still no lead after
-  3 days = a loss, `abandoned`. A resolve or declaration failure is logged loud and the row
-  stays pending with `last_error`. Never invent a lead id.
+  OUR run. null = not yet, re-asked (2 min for 30 tries, then 30 min, then ONCE A DAY after
+  3 days, forever): never abandoned for "no lead", because lead-service serves from STOCK and
+  a person we paid for in September becomes a lead of a later campaign (LEDGER-HISTORY-1024:
+  09-30 finds abandoned on 10-23 were served 10-24; migration 0045 reopened 15,087 rows).
+  Until then the spend reads as loss. Only a RESOLVED row whose declaration keeps failing is
+  abandoned. A resolve or declaration failure is logged loud and the row stays pending with
+  `last_error`. Never invent a lead id.
+- **A check consumes `email_found` only on our own path** (`consumedByCheck`): an address a
+  caller already HELD (`POST /email-verifications`, source `verify:<caller>`, e.g. instantly's
+  send gate) was found by no run of ours, so the check consumes nothing (it consumed an
+  unknown-provenance email_found per check before). A domain-gate probe produces nothing.
 - **A caller can name the subject** (`POST /email-verifications` `subjects:
   [{email, subjectService, subjectId}]`, first caller transactional-email-service's
   mailing-list release: subscribers are not leads). That row is parked already resolved
@@ -1186,8 +1194,8 @@ consumed `email_found` (before BounceBan's first row the step-1 verdict WAS fina
   would date a past outcome today. The declarer drains it after each live pass (≤20 × 500 rows per tick, same
   single flight). A run the door refuses (422 `invalid_runs`, 409 conflict) is abandoned with the reason, the
   rest re-sent; a `409 run_marked_support` (a staff-probe run runs-service marked SUPPORT) names no run, so the call
-  is halved until the marked run stands alone, then that run is abandoned. A person who is no lead of the org
-  after 3 days never will be: abandoned at the first ask.
+  is halved until the marked run stands alone, then that run is abandoned. A person not a lead of the org (yet)
+  is re-asked once a day, like a live row.
 - **Run-tree-matched sources (LEDGER-HISTORY-1024, `src/lib/outcome-backfill-linked.ts`)**: past
   linkedin-engagement serves and buying-signal evidence produce `lead_identified` like live, but their rows hold
   no run. Our own runs (GET /v1/runs per org) give the link, EXACT single matches only: a served row → the ONE

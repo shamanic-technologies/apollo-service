@@ -35,7 +35,7 @@
  */
 
 import { errorMessage, messageOf } from "./db-error.js";
-import { isKeptVerdict, recordOutcomeDetached, type NamedSubject } from "./outcome-declarations.js";
+import { checkProducesOutcome, consumedByCheck, isKeptVerdict, recordOutcomeDetached, type NamedSubject } from "./outcome-declarations.js";
 import { and, desc, eq, gt, isNotNull, isNull, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { emailVerifications, type EmailVerification } from "../db/schema.js";
@@ -568,7 +568,7 @@ async function meteredVerification(
     // person's lead was found with. An invalid one is a loss, and a step-1
     // catch_all/unknown is not final (BounceBan decides it): nothing declared,
     // its cost rides the kept units.
-    if (!outcome.error && isFinalKeptVerdict(plan.verifier, stored.verdict)) {
+    if (!outcome.error && isFinalKeptVerdict(plan.verifier, stored.verdict) && checkProducesOutcome(ctx.source)) {
       // A caller-named subject (a subscriber, not a lead) was never found by us:
       // nothing to consume, only the check produced.
       const subject = ctx.subjects?.get(email);
@@ -579,7 +579,7 @@ async function meteredVerification(
         campaignId: tracking.campaignId,
         subject,
         produced: ["email_checked"],
-        consumed: subject ? [] : ["email_found"],
+        consumed: consumedByCheck(ctx.source, subject),
         person: { email },
       });
     }

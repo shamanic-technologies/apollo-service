@@ -16,7 +16,10 @@
  * call time: `recordOutcome` parks a row in `outcome_declarations` (one local
  * insert, never throws, never slows the action) and the in-process declarer
  * asks lead-service `POST /internal/leads/ids/resolve` which lead it became,
- * then declares on our run. A person never kept within ABANDON_AFTER_MS was a
+ * then declares on our run. A person not kept within ABANDON_AFTER_MS is
+ * re-asked once a day, never given up: lead-service serves from its STOCK, so a
+ * person revealed for one campaign becomes a lead weeks later (LEDGER-HISTORY-1024:
+ * 09-30 finds abandoned on 10-23 were served on 10-24). Until then the spend is a
  * LOSS: nothing is declared and the run's cost rolls into the nearest
  * declaring ancestor (lead-service's serve), as the doctrine wants.
  *
@@ -40,8 +43,9 @@ export const DECLARE_INTERVAL_MS = 2 * 60 * 1000;
 /** After this many quick attempts, a still-unresolved person is re-asked every SLOW_RETRY_MS. */
 export const FAST_ATTEMPTS = 30;
 export const SLOW_RETRY_MS = 30 * 60 * 1000;
-/** Not a lead after this long = the spend was a loss: declare nothing. A row whose declaration keeps failing that long is abandoned too (its last_error says why). */
+/** Not a lead after this long: re-asked once a day (NO_LEAD_RETRY_MS), never abandoned. A RESOLVED row whose declaration keeps failing that long is abandoned (its last_error says why). */
 export const ABANDON_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
+export const NO_LEAD_RETRY_MS = 24 * 60 * 60 * 1000;
 /** lead-service resolve and runs-service declaration both cap at 1000 items. */
 export const BATCH = 500;
 
@@ -189,8 +193,25 @@ export function declarationBody(
   };
 }
 
-export function nextAttemptAt(attempts: number, now: Date): Date {
+export function nextAttemptAt(attempts: number, now: Date, since?: Date | null): Date {
+  if (since && now.getTime() - since.getTime() > ABANDON_AFTER_MS) return new Date(now.getTime() + NO_LEAD_RETRY_MS);
   return new Date(now.getTime() + (attempts < FAST_ATTEMPTS ? DECLARE_INTERVAL_MS : SLOW_RETRY_MS));
+}
+
+/**
+ * What a kept check consumed. It checked an address WE found (a reveal, a find) only
+ * when it ran on our own path: a caller that sent the address it already HOLDS
+ * (POST /email-verifications, source `verify:<caller>`) or named its subject consumed
+ * no email_found of ours (LEDGER-HISTORY-1024: instantly's send gate consumed one per
+ * check, and no run had found those addresses).
+ */
+export function consumedByCheck(source: string, subject: NamedSubject | undefined): OutcomeKey[] {
+  return subject || source.startsWith("verify:") ? [] : ["email_found"];
+}
+
+/** A domain-gate probe checks an address nobody owns: it produces no outcome. */
+export function checkProducesOutcome(source: string): boolean {
+  return source !== "reveal-domain-probe";
 }
 
 // ─── The declarer ────────────────────────────────────────────────────────────
@@ -222,7 +243,13 @@ async function declarePass(now: Date): Promise<DeclarePassResult> {
   const abandonedRows = await db
     .update(outcomeDeclarations)
     .set({ status: "abandoned" })
-    .where(and(eq(outcomeDeclarations.status, "pending"), lt(outcomeDeclarations.producedAt, new Date(now.getTime() - ABANDON_AFTER_MS))))
+    .where(
+      and(
+        eq(outcomeDeclarations.status, "pending"),
+        isNotNull(outcomeDeclarations.leadId),
+        lt(outcomeDeclarations.producedAt, new Date(now.getTime() - ABANDON_AFTER_MS))
+      )
+    )
     .returning({ id: outcomeDeclarations.id });
   result.abandoned = abandonedRows.length;
 
@@ -300,7 +327,7 @@ async function bumpAttempts(rows: OutcomeDeclaration[], now: Date, error: string
     const attempts = row.attempts + 1;
     await db
       .update(outcomeDeclarations)
-      .set({ attempts, nextAttemptAt: nextAttemptAt(attempts, now), ...(error ? { lastError: error.slice(0, 1000) } : {}) })
+      .set({ attempts, nextAttemptAt: nextAttemptAt(attempts, now, row.leadId ? null : (row.occurredAt ?? row.producedAt)), ...(error ? { lastError: error.slice(0, 1000) } : {}) })
       .where(eq(outcomeDeclarations.id, row.id));
   }
 }
@@ -312,7 +339,8 @@ async function bumpAttempts(rows: OutcomeDeclaration[], now: Date, error: string
 // `occurredAt: "run_started_at"`, so a past email_found counts as declared when
 // its run happened and can feed a past verification or serve. Same resolve as the
 // live rows; a person still not a lead when their row is older than
-// ABANDON_AFTER_MS never will be (lead-service kept who it kept): abandoned at once.
+// ABANDON_AFTER_MS is re-asked once a day: lead-service serves from stock, so a
+// person can become a lead long after we paid for them.
 
 /** runs-service batch door caps. */
 export const BACKFILL_MAX_RUNS = 500;
@@ -405,9 +433,10 @@ export async function declareBackfillPass(now: Date = new Date()): Promise<Backf
       }
     }
     if (noLead.length > 0) {
+      // Not a lead (yet): re-asked tomorrow, never abandoned (lead-service serves from stock).
       await db
         .update(outcomeDeclarations)
-        .set({ status: "abandoned", lastError: "backfill: no lead of the org holds this person" })
+        .set({ nextAttemptAt: new Date(now.getTime() + NO_LEAD_RETRY_MS), lastError: "backfill: no lead of the org holds this person yet" })
         .where(inArray(outcomeDeclarations.id, noLead.map((r) => r.id)));
     }
     result.noLead = noLead.length;
