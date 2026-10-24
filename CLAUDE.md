@@ -274,6 +274,12 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
     clamp) and 1,222 (geography collapsed to bare `Switzerland`) in one day. If a
     fix adds an instruction to this prompt, it is the wrong fix — the model has the
     count, the sample and its own judgement, which is the whole design.
+- **Every LLM call rides an `audience-refine` run of THIS service
+  (PLATFORM-CALLER-RUN-1024).** The route opens it (child of the caller's run when
+  one is sent, else a root run on the org), sends it as `x-run-id` on every
+  chat-service call, closes it completed/failed. Who pays is unchanged: caller run
+  → `/complete` (org), none → `/internal/platform-complete` (platform key).
+  Never forward the inbound run as is, never a `support` mark.
 - **Endpoints:** `POST /audiences/suggest-from-segment` (returns `candidates[]` —
   every explored round, in round order, each persisted), `GET /audiences/{id}`,
   `POST /audiences/{id}/dry-run`. A serve-next-by-audience-id endpoint is a
@@ -727,8 +733,9 @@ job). `x-api-key` = `APOLLO_SERVICE_API_KEY`, no identity headers.
   answers `{}`; `people/match` by email = 1 for a real match, 0 for an unknown
   address (Apollo returns a synthetic person with `match_confidence: "none"` and
   no title — that is "not matched", never a role). Category = one Jev `choice`
-  on chat-service `/internal/platform-judgments` (chat-service declares it);
-  below 0.5 confidence it is reported null.
+  on chat-service `/internal/platform-judgments` (chat-service declares it),
+  sent with `x-run-id` = the lookup row's `platform_run_id` (the run that did
+  this lookup, PLATFORM-CALLER-RUN-1024); below 0.5 confidence it is reported null.
 - **Org-less protocol** (no org balance, so no authorize/hold): platform run
   opened BEFORE the Apollo call (runs-service down = 502, nothing spent),
   `apollo-credit` posted as `actual` on `/v1/platform-runs/{id}/costs`, run
