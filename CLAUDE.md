@@ -1197,6 +1197,12 @@ consumed `email_found` (before BounceBan's first row the step-1 verdict WAS fina
 - **Not backfilled, by design**: mailing-list verifications (subscribers, transactional-email-service declares
   on its own run), probes, audience-companies (onboarding preview), org-less lookups, retired
   tasks (waterfall, search-params-generation) and staff experiments.
+- **Caller-named past subjects (`POST /internal/outcome-declarations/named-subjects`, LEDGER-HISTORY-1024)**:
+  checks a caller asked for before it could name subjects live (mailing-list releases 2026-09-28 → 10-23) hold
+  only the address. The caller sends `{callerLabel, subjects:[{email, subjectService, subjectId}]}` (≤500 per
+  call); every billed FINAL kept check of that address with `source = verify:<callerLabel>` parks
+  `email_checked` on that subject, dated at the check, nothing consumed. Only the caller knows whose address it
+  was: never guessed here. Checks before 2026-09-25 were human-service's (our bronze starts that day).
 - **Ledger proof 2026-10-24 (runs DB walk, every apollo run with spend since 2026-02-02, $5,232)**: declared
   (self or ancestor) $4,841 (92.5 %), support $228, no output $163, and every no-output dollar checked against
   our rows: no email returned, invalid / no verdict, a domain-gate probe, a person no lead of the org ever held,
