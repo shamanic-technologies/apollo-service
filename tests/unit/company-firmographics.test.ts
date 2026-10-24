@@ -132,6 +132,8 @@ describe("POST /internal/company-firmographics", () => {
     ]);
     expect(mockUpdatePlatformRun).toHaveBeenCalledWith("run-1", "completed");
     expect(mockJudgment).toHaveBeenCalledTimes(1);
+    // PLATFORM-CALLER-RUN-1024: the category judgment rides the lookup's own platform run.
+    expect(mockJudgment).toHaveBeenCalledWith(expect.objectContaining({ callerRunId: "run-1" }));
 
     vi.clearAllMocks();
     const again = await post({ domain: "stripe.com" });

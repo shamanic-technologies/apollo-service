@@ -366,7 +366,14 @@ async function ensureCategory(row: CompanyRow): Promise<CompanyRow> {
       .returning();
     return updated;
   }
-  const answer = await platformChoiceJudgment({ state, instructions: CATEGORY_INSTRUCTIONS, criteria: CATEGORY_CRITERIA });
+  // The judgment is part of THIS lookup's work: it rides the platform run that
+  // fetched the company (PLATFORM-CALLER-RUN-1024), never a support mark.
+  const answer = await platformChoiceJudgment({
+    callerRunId: row.platformRunId,
+    state,
+    instructions: CATEGORY_INSTRUCTIONS,
+    criteria: CATEGORY_CRITERIA,
+  });
   const [updated] = await db
     .update(companyDomainLookups)
     .set({
