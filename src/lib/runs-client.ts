@@ -109,6 +109,23 @@ export interface CreateRunParams {
   taskName: string;
   parentRunId?: string;
   workflowSlug?: string;
+  /** This run serves a SUPPORT function (no outcome by design): marked at creation (COST-SUPPORT-1024). */
+  support?: RunSupport;
+}
+
+/** runs-service's support functions (`SupportFunctionEnum`). */
+export type SupportFunction =
+  | "payment_fees"
+  | "brand_setup"
+  | "copilot"
+  | "platform_llm"
+  | "staff_experiment"
+  | "product_feature"
+  | "retired_product";
+
+export interface RunSupport {
+  kind: SupportFunction;
+  reason: string;
 }
 
 export interface CostItem {
@@ -269,6 +286,7 @@ export async function createRun(params: CreateRunParams): Promise<Run> {
       serviceName: params.serviceName,
       taskName: params.taskName,
       workflowSlug: params.workflowSlug,
+      ...(params.support ? { support: params.support } : {}),
       // One key per logical create: a retry after a lost answer returns the
       // run already created instead of opening a second one.
       idempotencyKey: `apollo-service:run:${randomUUID()}`,
@@ -467,12 +485,57 @@ export async function getRunCostsBatch(orgId: string, runIds: string[]): Promise
 
 const PLATFORM_HEADERS = { "x-service-name": "apollo-service" };
 
-export async function createPlatformRun(params: { taskName: string; idempotencyKey: string }): Promise<{ id: string }> {
+export async function createPlatformRun(params: { taskName: string; idempotencyKey: string; support?: RunSupport }): Promise<{ id: string }> {
   return runsRequest<{ id: string }>("/v1/platform-runs", {
     method: "POST",
     extraHeaders: PLATFORM_HEADERS,
-    body: { serviceName: "apollo-service", taskName: params.taskName, idempotencyKey: params.idempotencyKey },
+    body: {
+      serviceName: "apollo-service",
+      taskName: params.taskName,
+      idempotencyKey: params.idempotencyKey,
+      ...(params.support ? { support: params.support } : {}),
+    },
   });
+}
+
+// ─── Support marks on our PAST runs (COST-SUPPORT-1024) ─────────────────────
+
+export interface OwnSupportMarkBody {
+  kind: SupportFunction;
+  reason: string;
+  markedBy: string;
+  runIds?: string[];
+  taskNames?: string[];
+}
+
+export interface SupportSelection {
+  matchedRunCount: number;
+  toMarkCount: number;
+  alreadyMarkedCount: number;
+  declaresOutcomesCount: number;
+  onOutcomeNowCount: number | null;
+  spend: { grossCents: string; netCents: string };
+  maxRuns: number;
+  tooMany: boolean;
+}
+
+export interface SupportMarkResult {
+  markedCount: number;
+  alreadyMarkedCount: number;
+  declaresOutcomesCount?: number;
+}
+
+/**
+ * runs-service's OWNER door (`POST /v1/platform-runs/support-marks/{preview,apply}`):
+ * marks runs of apollo-service only (x-service-name), by runIds (all or nothing) or by
+ * task selection. A run that declared a produced outcome is never marked.
+ */
+export async function previewOwnSupportMarks(body: OwnSupportMarkBody): Promise<SupportSelection> {
+  return runsRequest<SupportSelection>("/v1/platform-runs/support-marks/preview", { method: "POST", extraHeaders: PLATFORM_HEADERS, body, timeoutMs: 60_000 });
+}
+
+export async function applyOwnSupportMarks(body: OwnSupportMarkBody): Promise<SupportMarkResult> {
+  return runsRequest<SupportMarkResult>("/v1/platform-runs/support-marks/apply", { method: "POST", extraHeaders: PLATFORM_HEADERS, body, timeoutMs: 120_000 });
 }
 
 export async function addPlatformRunCosts(
