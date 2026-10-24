@@ -184,7 +184,11 @@ describe("the declarer", () => {
 
   it("a person not (yet) a lead is NOT declared: retried later, never invented", async () => {
     dueRows = [row({})];
-    fetchMock.mockResolvedValue(new Response(JSON.stringify({ people: [{ leadId: null, matchedBy: null }] }), { status: 200 }));
+    fetchMock.mockImplementation(async (url: string, init: any) =>
+      url.endsWith("/by-email")
+        ? new Response(JSON.stringify({ answers: JSON.parse(init.body).emails.map((email: string) => ({ email, leadId: null, reason: "not_a_lead" })) }), { status: 200 })
+        : new Response(JSON.stringify({ people: [{ leadId: null, matchedBy: null }] }), { status: 200 })
+    );
     const r = await declarePendingOutcomes(new Date("2026-10-23T10:05:00Z"));
     expect(mockDeclare).not.toHaveBeenCalled();
     expect(r).toMatchObject({ unresolved: 1, declared: 0 });
@@ -212,5 +216,30 @@ describe("the declarer", () => {
     expect(r).toMatchObject({ declared: 0 });
     expect(updates.some((u) => String(u.set.lastError).startsWith("resolve:"))).toBe(true);
     err.mockRestore();
+  });
+});
+
+describe("resolveRowLeads (LEDGER-HISTORY-1024, org-free by email)", () => {
+  it("asks lead-service by email only for people the org-scoped resolve left null, never picks", async () => {
+    const calls: Array<{ url: string; body: any }> = [];
+    vi.stubGlobal("fetch", async (url: string, init: any) => {
+      const body = JSON.parse(init.body);
+      calls.push({ url, body });
+      if (url.endsWith("/ids/resolve")) return { ok: true, json: async () => ({ people: [{ leadId: "l-org" }, { leadId: null }, { leadId: null }, { leadId: null }] }) };
+      return { ok: true, json: async () => ({ answers: [{ email: "b@x.com", leadId: "l-other-org", reason: null }, { email: "c@x.com", leadId: null, reason: "ambiguous" }] }) };
+    });
+    process.env.LEAD_SERVICE_URL = "http://lead";
+    process.env.LEAD_SERVICE_API_KEY = "k";
+    const { resolveRowLeads } = await import("../../src/lib/outcome-declarations.js");
+    const base = { orgId: "org-1", brandIds: null, apolloPersonId: null, linkedinUrl: null };
+    const ids = await resolveRowLeads([
+      { ...base, email: "a@x.com" },
+      { ...base, email: "B@x.com" },
+      { ...base, email: "c@x.com" },
+      { ...base, email: null, linkedinUrl: "http://www.linkedin.com/in/d" },
+    ]);
+    expect(ids).toEqual(["l-org", "l-other-org", null, null]);
+    expect(calls[1].url).toBe("http://lead/internal/leads/ids/by-email");
+    expect(calls[1].body).toEqual({ emails: ["b@x.com", "c@x.com"] });
   });
 });
