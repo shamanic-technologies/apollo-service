@@ -89,7 +89,11 @@ describe("backfill declarations", () => {
       row({ id: "old", runId: "run-old" }),
       row({ id: "new", runId: "run-new", occurredAt: new Date("2026-10-22T10:00:00Z") }),
     ];
-    fetchMock.mockResolvedValue(resolveAnswer([null, null]));
+    fetchMock.mockImplementation(async (url: string, init: any) =>
+      url.endsWith("/by-email")
+        ? { ok: true, json: async () => ({ answers: JSON.parse(init.body).emails.map((email: string) => ({ email, leadId: null, reason: "not_a_lead" })) }) }
+        : resolveAnswer([null, null])
+    );
     const r = await declareBackfillPass(NOW);
     expect(r).toMatchObject({ noLead: 1, declared: 0 });
     expect(updates.filter((u) => u.set.status === "abandoned")).toHaveLength(0);

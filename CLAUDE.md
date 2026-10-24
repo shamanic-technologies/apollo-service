@@ -1153,7 +1153,10 @@ declares. `src/lib/outcome-declarations.ts` is the ONE mechanism for every paid 
   the response) and the in-process declarer (every 2 min, first tick 60 s after boot,
   single flight) asks lead-service `POST /internal/leads/ids/resolve` (x-api-key;
   `{people:[{orgId, brandIds?, apolloPersonId?, email?, linkedinUrl?}]}` →
-  `{people:[{leadId|null, matchedBy}]}`, a lead OF that org/brand only), then declares on
+  `{people:[{leadId|null, matchedBy}]}`, a lead OF that org/brand only); a person it leaves null is
+  asked by email FLEET-WIDE (`POST /internal/leads/ids/by-email`, one registered email = one lead:
+  a lead is human x company in every org, so org A's paid check names the lead org B emailed,
+  LEDGER-HISTORY-1024), then declares on
   OUR run. null = not yet, re-asked (2 min for 30 tries, then 30 min, then ONCE A DAY after
   3 days, forever): never abandoned for "no lead", because lead-service serves from STOCK and
   a person we paid for in September becomes a lead of a later campaign (LEDGER-HISTORY-1024:

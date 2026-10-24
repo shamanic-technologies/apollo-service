@@ -171,6 +171,49 @@ async function resolveLeadIdsOnce(items: LeadResolveItem[]): Promise<(string | n
   return body.people.map((p) => (typeof p.leadId === "string" && p.leadId ? p.leadId : null));
 }
 
+/**
+ * A lead is human x company, the same in every org (doctrine): a check or reveal one org paid
+ * for names the lead another org kept, so a later send there pays the standard cost of OUR
+ * occurrence (LEDGER-HISTORY-1024, ~256 leads in 30 days). lead-service's org-scoped resolve
+ * answers first (it matches apollo id, email, LinkedIn); a person it leaves null is asked by
+ * email fleet-wide (`POST /internal/leads/ids/by-email`, one registered email = one lead):
+ * not_a_lead and ambiguous stay null, never a pick.
+ */
+export async function resolveRowLeads(rows: Array<Pick<OutcomeDeclaration, "orgId" | "brandIds" | "apolloPersonId" | "email" | "linkedinUrl">>): Promise<(string | null)[]> {
+  const ids = await resolveLeadIds(rows.map(toResolveItem));
+  const missing = [...new Set(rows.filter((r, i) => !ids[i] && r.email).map((r) => r.email!.trim().toLowerCase()))];
+  if (missing.length === 0) return ids;
+  const byEmail = await leadIdsByEmail(missing);
+  return ids.map((id, i) => id ?? (rows[i].email ? byEmail.get(rows[i].email!.trim().toLowerCase()) ?? null : null));
+}
+
+export const BY_EMAIL_CHUNK = 1000;
+
+export async function leadIdsByEmail(emails: string[]): Promise<Map<string, string>> {
+  const url = process.env.LEAD_SERVICE_URL;
+  const key = process.env.LEAD_SERVICE_API_KEY;
+  if (!url || !key) throw new LeadServiceUnconfiguredError("LEAD_SERVICE_URL / LEAD_SERVICE_API_KEY not set");
+  const out = new Map<string, string>();
+  for (let i = 0; i < emails.length; i += BY_EMAIL_CHUNK) {
+    const chunk = emails.slice(i, i + BY_EMAIL_CHUNK);
+    const res = await fetch(`${url}/internal/leads/ids/by-email`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": key },
+      body: JSON.stringify({ emails: chunk }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) throw new Error(`lead-service POST /internal/leads/ids/by-email failed: ${res.status} - ${(await res.text()).slice(0, 500)}`);
+    const body = (await res.json()) as { answers?: { leadId?: string | null }[] };
+    if (!Array.isArray(body.answers) || body.answers.length !== chunk.length) {
+      throw new Error(`lead-service by-email answered ${Array.isArray(body.answers) ? body.answers.length : "no"} emails for ${chunk.length} asked`);
+    }
+    body.answers.forEach((a, j) => {
+      if (typeof a.leadId === "string" && a.leadId) out.set(chunk[j], a.leadId);
+    });
+  }
+  return out;
+}
+
 export function toResolveItem(row: Pick<OutcomeDeclaration, "orgId" | "brandIds" | "apolloPersonId" | "email" | "linkedinUrl">): LeadResolveItem {
   const item: LeadResolveItem = { orgId: row.orgId };
   // Old enrichment rows hold `{""}`: lead-service refuses an empty brand id (400 for the whole call).
@@ -267,7 +310,7 @@ async function declarePass(now: Date): Promise<DeclarePassResult> {
   if (toResolve.length > 0) {
     let leadIds: (string | null)[];
     try {
-      leadIds = await resolveLeadIds(toResolve.map(toResolveItem));
+      leadIds = await resolveRowLeads(toResolve);
     } catch (err) {
       const msg = errorMessage(err);
       console.error(`[Apollo Service] outcome_declarations.resolve_failed rows=${toResolve.length}: ${msg}`);
@@ -409,7 +452,7 @@ export async function declareBackfillPass(now: Date = new Date()): Promise<Backf
   if (toResolve.length > 0) {
     let leadIds: (string | null)[];
     try {
-      leadIds = await resolveLeadIds(toResolve.map(toResolveItem));
+      leadIds = await resolveRowLeads(toResolve);
     } catch (err) {
       const msg = errorMessage(err);
       console.error(`[Apollo Service] outcome_backfill.resolve_failed rows=${toResolve.length}: ${msg}`);
