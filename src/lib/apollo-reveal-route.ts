@@ -79,6 +79,30 @@ export interface TregApolloCall {
 }
 
 /**
+ * Apollo options treg refuses on its SHARED key, even when set to their
+ * default `false` (400 `catalog_parameter_invalid`, "Apollo phone, waterfall
+ * and webhook options are not available on the shared key"). Live since
+ * 2026-10-22 ~18:05 UTC: every platform reveal sent `run_waterfall_email=false`
+ * through treg while our own key was out of credits, so every enrichment
+ * failed and every Lead Sourcing run produced nothing (STOCK-EMPTY-WITH-AUDIENCE-LEFT-1024).
+ */
+export const TREG_SHARED_KEY_REFUSED_PARAMS = ["run_waterfall_email", "run_waterfall_phone", "reveal_phone_number", "webhook_url"] as const;
+
+/**
+ * The query treg receives: a refused option left at Apollo's default (`false`)
+ * is dropped, since omitting it asks for exactly the same thing. A refused
+ * option actually turned ON is kept, so treg's refusal stays loud.
+ */
+export function tregSharedKeyQuery(query: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(query)) {
+    if ((TREG_SHARED_KEY_REFUSED_PARAMS as readonly string[]).includes(k) && v === "false") continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+/**
  * Apollo through treg. Any non-2xx is thrown with treg's status and body (a
  * 402 = treg balance). The charge header is required: it IS the cost we declare.
  */
@@ -87,7 +111,7 @@ export async function callApolloViaTreg<T>(
   creds: TregCredentials,
   fetchImpl: typeof fetch = fetch
 ): Promise<{ response: T; costMicro: number; callId: string | null }> {
-  const url = `${TREG_CALL_BASE}${call.endpoint}?${new URLSearchParams(call.query).toString()}`;
+  const url = `${TREG_CALL_BASE}${call.endpoint}?${new URLSearchParams(tregSharedKeyQuery(call.query)).toString()}`;
   const res = await fetchImpl(url, {
     method: call.method,
     headers: { "X-Treg-Token": creds.token, "X-Treg-Org": creds.org },
