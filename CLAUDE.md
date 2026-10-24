@@ -1199,8 +1199,9 @@ Coverage = declared outcome spend / (ledger - support). `src/lib/support-marks.t
 rules, never a cost name. LIVE: `audience-companies` (onboarding preview), `company-firmographics`
 and `person-role` (org-less lookups) open their run with `support: product_feature`.
 PAST: `POST /internal/support-marks/backfill {dryRun, runMarks?}` marks through runs-service's owner
-door by task (those three, retired `waterfall-enrichment` / `search-params-generation`, the staff
-probe tasks) plus explicit run lists a task cannot reach (a staff probe that borrowed one of our
+door by task (those three, the staff probe tasks) plus explicit run lists a task cannot reach
+(retired PRODUCTION tasks `waterfall-enrichment` / `search-params-generation`: only their runs riding
+NO outcome, the dry run showed 277 + 441 riding the email/lead they produced) (a staff probe that borrowed one of our
 production runs as x-run-id: 1,259 chat completions under one `verify-email-contactout` run,
 2026-10-22; person-match for the retired journalists product). runs-service skips any run that
 declared an outcome. A run that SPENT and found nobody kept (a loss) is NOT support: it rides the

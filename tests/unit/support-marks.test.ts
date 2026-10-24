@@ -54,7 +54,7 @@ describe("support at run creation (COST-SUPPORT-1024)", () => {
     expect(firmo).toContain("support: supportOf(taskName)");
     expect(firmo).toContain('onPlatformRun("company-firmographics"');
     expect(firmo).toContain('onPlatformRun("person-role"');
-    for (const task of ["enrichment", "person-match", "phone-reveal", "linkedin-engagement", "buying-signal-evidence", "verify-email", "email-find-treg"]) {
+    for (const task of ["waterfall-enrichment", "search-params-generation", "enrichment", "person-match", "phone-reveal", "linkedin-engagement", "buying-signal-evidence", "verify-email", "email-find-treg"]) {
       expect(PAST_SUPPORT_TASKS[task]).toBeUndefined();
     }
   });
@@ -70,7 +70,7 @@ describe("markPastSupportRuns", () => {
     expect(steps).toHaveLength(Object.keys(PAST_SUPPORT_TASKS).length + 1);
     expect(fetchMock.mock.calls.every((c) => (c[0] as string).endsWith("/v1/platform-runs/support-marks/preview"))).toBe(true);
     expect(steps.every((s) => s.applied === null)).toBe(true);
-    expect(sentBody(0)).toEqual({ kind: "retired_product", reason: PAST_SUPPORT_TASKS["waterfall-enrichment"].reason, markedBy: "apollo-service", taskNames: ["waterfall-enrichment"] });
+    expect(sentBody(0)).toEqual({ kind: "staff_experiment", reason: PAST_SUPPORT_TASKS["experiment-treg-people-search"].reason, markedBy: "apollo-service", taskNames: ["experiment-treg-people-search"] });
     const last = sentBody(fetchMock.mock.calls.length - 1);
     expect(last).toEqual({ kind: "staff_experiment", reason: "probe", markedBy: "apollo-service", runIds: ["a3fde21d-1503-4008-9ffa-56c5115fe3c8"] });
     expect(fetchMock.mock.calls[0][1].headers["x-service-name"]).toBe("apollo-service");
