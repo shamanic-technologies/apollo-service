@@ -28,7 +28,8 @@ import { listRuns, type RunWithOwnCost } from "./runs-client.js";
 import { canonicalLinkedinUrl } from "./quickenrich.js";
 
 export const SERVICE_NAME = "apollo-service";
-const PAGE = 500;
+/** GET /v1/runs page. Read per CAMPAIGN (runs-service indexes campaign + task): an org-wide read timed out in prod. */
+const PAGE = 200;
 
 export interface LinkedRunWindow {
   id: string;
@@ -158,11 +159,11 @@ export function matchEvidenceToPersons(orgId: string, runs: EvidenceRun[], fetch
   return out;
 }
 
-/** Every run of one task of ours in one org (GET /v1/runs, paged). */
-async function ourRuns(orgId: string, taskName: string): Promise<RunWithOwnCost[]> {
+/** Every run of one task of ours in one org's campaign (GET /v1/runs, paged). */
+async function ourRuns(orgId: string, campaignId: string, taskName: string): Promise<RunWithOwnCost[]> {
   const all: RunWithOwnCost[] = [];
   for (let offset = 0; ; offset += PAGE) {
-    const { runs } = await listRuns({ orgId, serviceName: SERVICE_NAME, taskName, limit: PAGE, offset });
+    const { runs } = await listRuns({ orgId, campaignId, serviceName: SERVICE_NAME, taskName, limit: PAGE, offset });
     all.push(...runs);
     if (runs.length < PAGE) return all;
   }
@@ -221,21 +222,24 @@ export async function parkLinkedHistory(opts: { dryRun: boolean }): Promise<Link
       FROM linkedin_engagement_serves s
       LEFT JOIN linkedin_profiles p ON p.profile_id = s.profile_id
      WHERE s.status = 'served'`)) as unknown as Array<{ org_id: string; brand_ids: string[] | null; campaign_id: string; served_at: Date | string; linkedin_url: string | null }>;
-  const servesByOrg = new Map<string, ServedEngager[]>();
+  const servesByCampaign = new Map<string, ServedEngager[]>();
   for (const s of serves) {
-    (servesByOrg.get(s.org_id) ?? servesByOrg.set(s.org_id, []).get(s.org_id)!).push({
+    const key = `${s.org_id}|${s.campaign_id}`;
+    (servesByCampaign.get(key) ?? servesByCampaign.set(key, []).get(key)!).push({
       orgId: s.org_id, brandIds: s.brand_ids, campaignId: s.campaign_id, servedAt: new Date(s.served_at), linkedinUrl: s.linkedin_url,
     });
   }
-  for (const [orgId, list] of servesByOrg) {
-    const runs = await ourRuns(orgId, "linkedin-engagement");
+  for (const list of servesByCampaign.values()) {
+    const runs = await ourRuns(list[0].orgId, list[0].campaignId, "linkedin-engagement");
     add("linkedin_engagement", matchServesToRuns(list, runs));
   }
 
   // buying-signal-evidence
-  const orgs = (await db.execute(sql`SELECT DISTINCT org_id::text AS org_id FROM apollo_signal_serves`)) as unknown as Array<{ org_id: string }>;
-  for (const { org_id: orgId } of orgs) {
-    const runs = (await ourRuns(orgId, "buying-signal-evidence")).map((r) => ({
+  const scopes = (await db.execute(
+    sql`SELECT DISTINCT org_id::text AS org_id, campaign_id FROM apollo_signal_serves`
+  )) as unknown as Array<{ org_id: string; campaign_id: string }>;
+  for (const { org_id: orgId, campaign_id: campaignId } of scopes) {
+    const runs = (await ourRuns(orgId, campaignId, "buying-signal-evidence")).map((r) => ({
       id: r.id, parentRunId: r.parentRunId, campaignId: r.campaignId, charged: Number(r.ownCostInUsdCents ?? 0) > 0,
     }));
     const charged = runs.filter((r) => r.charged);
