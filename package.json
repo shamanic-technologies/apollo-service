@@ -24,7 +24,7 @@
     "drizzle-orm": "^0.45.4",
     "express": "^4.22.3",
     "postgres": "^3.4.0",
-    "zod": "^4.3.6"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
@@ -51,5 +51,6 @@
       "source-map-js@>=1.0.0 <1.2.2": "^1.2.2",
       "@esbuild-kit/core-utils>esbuild": "^0.25.12"
     }
-  }
+  },
+  "packageManager": "pnpm@9.15.9"
 }
