@@ -8,7 +8,10 @@
  * "run_started_at"`), so it behaves as if declared when the run happened.
  *
  * The rules are the live production points', row for row (a test pins them):
- *   apollo_people_enrichments, verified email     → email_found      on enrichment_run_id
+ *   apollo_people_enrichments, email returned     → email_found      on enrichment_run_id
+ *     (a verified email; or ANY email stored before the verified-only gate of
+ *      2026-06-07 (#124): until then an extrapolated address was returned to the
+ *      caller and billed, so it was found; since, the gate nulls it before storage)
  *   email_findings found with an email            → email_found      on find_run_id
  *   email_verifications FINAL kept verdict        → email_checked + consumed email_found on verify_run_id
  *     (final = BounceBan's verdict, or a step-1 valid; before BounceBan existed
@@ -34,6 +37,9 @@ import { parkLinkedHistory, type LinkedBackfillReport } from "./outcome-backfill
 
 export type BackfillSource = "enrichment" | "email_finding" | "email_verification" | "phone_reveal" | "linkedin_engagement" | "buying_signal_evidence";
 
+/** Merge instant of #124 (withVerifiedEmailOnly): before it, any email Apollo returned reached the caller. */
+export const VERIFIED_ONLY_GATE_AT = "2026-06-07T02:13:31Z";
+
 const UUID_RE = "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$";
 
 /** Same order as personKeyOf: apollo id, then the lowercased email, then the LinkedIn URL. */
@@ -56,7 +62,9 @@ export const BACKFILL_CANDIDATES_SQL = `
            e.org_id, NULLIF(array_remove(e.brand_ids, ''), '{}') AS brand_ids, e.campaign_id, e.apollo_person_id,
            lower(btrim(e.email)) AS email, e.linkedin_url, e.created_at AS occurred_at
       FROM apollo_people_enrichments e
-     WHERE e.email IS NOT NULL AND e.email_status = 'verified' AND e.enrichment_run_id ~* '${UUID_RE}'
+     WHERE e.email IS NOT NULL AND e.enrichment_run_id ~* '${UUID_RE}'
+       AND (e.email_status = 'verified' OR e.created_at < '${VERIFIED_ONLY_GATE_AT}'::timestamptz)
+       AND lower(e.email) NOT LIKE 'email_not_unlocked@%'
     UNION ALL
     SELECT 'email_finding', f.find_run_id, 'produced', 'email_found',
            ${personKey("f.apollo_person_id", "f.email", "f.linkedin_url")},

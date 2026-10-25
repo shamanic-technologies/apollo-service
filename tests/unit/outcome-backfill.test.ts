@@ -35,7 +35,7 @@ vi.mock("../../src/db/index.js", () => ({
 }));
 
 import { backfillChunks, declareBackfillPass, refusedRunsOf, BACKFILL_MAX_RUNS, BACKFILL_MAX_OCCURRENCES } from "../../src/lib/outcome-declarations.js";
-import { BACKFILL_CANDIDATES_SQL } from "../../src/lib/outcome-backfill.js";
+import { BACKFILL_CANDIDATES_SQL, VERIFIED_ONLY_GATE_AT } from "../../src/lib/outcome-backfill.js";
 
 const NOW = new Date("2026-10-23T12:00:00Z");
 function row(partial: Record<string, unknown>) {
@@ -175,6 +175,11 @@ describe("what the backfill reads from our own rows (same rules as the live prod
     expect(BACKFILL_CANDIDATES_SQL).toContain("f.status = 'found'");
     expect(BACKFILL_CANDIDATES_SQL).toContain("('produced', 'email_checked'), ('consumed', 'email_found')");
     expect(BACKFILL_CANDIDATES_SQL).toContain("p.status = 'found'");
+  });
+  it("an unverified email counts only when stored before the verified-only gate (it reached the caller then); never the no-credit placeholder", () => {
+    expect(VERIFIED_ONLY_GATE_AT).toBe("2026-06-07T02:13:31Z");
+    expect(BACKFILL_CANDIDATES_SQL).toContain("e.email_status = 'verified' OR e.created_at < '2026-06-07T02:13:31Z'::timestamptz");
+    expect(BACKFILL_CANDIDATES_SQL).toContain("lower(e.email) NOT LIKE 'email_not_unlocked@%'");
   });
   it("a step-1 catch_all/unknown counts only before BounceBan existed (after, BounceBan's verdict decides)", () => {
     expect(BACKFILL_CANDIDATES_SQL).toContain("v.verifier = 'bounceban' OR v.verdict = 'valid' OR b.at IS NULL OR v.verified_at < b.at");
