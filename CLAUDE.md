@@ -759,6 +759,24 @@ cache row (`person_role_lookups`, key `email:<lower>`), spend protocol and
 twice. A free-mail domain is not sent to Apollo as `domain`. `matchConfidence`
 is Apollo's verbatim; the caller judges (client-service accepts only `high`).
 
+## Stored reveal records (`POST /internal/reveal-records/by-person-ids`) — FREE, org-less, read-only
+
+"What did our paid reveals (`/enrich`, `/match`) of Apollo person id P return?",
+answered from `apollo_people_enrichments` only: no Apollo call, no cost, nothing
+written, any org. For human-service's fleet "same human?" merge
+(LEDGER-RESIDUAL-1025-HUMANS): it ties an id-only human to an email-only human
+only on the provider's own record. `src/lib/reveal-records.ts`.
+
+- Body `{apolloPersonIds: string[]}` (1..1000, trimmed, deduped). Answer
+  `{people: [{apolloPersonId, emails: [{email, firstRevealedAt, lastRevealedAt,
+  reveals}], unambiguousEmail}], emails: [{email, apolloPersonIds[]}]}`:
+  `people` one per asked id in request order (no emailed reveal / unknown id =
+  `emails: []`, not distinguished); `emails` one per address listed, with EVERY
+  Apollo person id (asked or not) a reveal returned it for. `unambiguousEmail` =
+  exactly one address for the id AND that address returned for no other id.
+- Email = `lower(btrim(email))`; reverse lookup rides `idx_enrichments_email_norm`
+  (migration 0046). Without it a 1,000-id batch seq-scanned the wide table (~9s).
+
 ## Other email finders: treg.to and Explee (bronze / silver / exact cost)
 
 apollo-service holds our enrichment PROVIDERS, not only Apollo. `POST
