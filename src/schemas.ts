@@ -1552,6 +1552,47 @@ const SupportMarksBackfillResponseSchema = z
   })
   .openapi("SupportMarksBackfillResponse");
 
+export const SupportUnmarkRequestSchema = z
+  .object({
+    dryRun: z.boolean(),
+    runIds: z.array(z.string().uuid()).min(1).max(5000).describe("Runs of ours marked support whose output production later reused (the caller's evidence)."),
+    reason: z.string().min(1).max(2000),
+  })
+  .openapi("SupportUnmarkRequest");
+
+const SupportUnmarkResponseSchema = z
+  .object({
+    dryRun: z.boolean(),
+    preview: z.object({
+      toUnmarkCount: z.number().int(),
+      byFunction: z.record(z.string(), z.number().int()),
+      spend: z.object({ grossCents: z.string(), netCents: z.string() }),
+      maxRuns: z.number().int(),
+      tooMany: z.boolean(),
+    }),
+    applied: z.object({ unmarkedCount: z.number().int(), notMarkedCount: z.number().int() }).nullable(),
+    reopened: z.number().int().describe("Our declaration rows on those runs that runs-service had refused as support, re-opened for the declarer."),
+  })
+  .openapi("SupportUnmarkResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/support-marks/unmark",
+  summary: "Undo the support mark of our runs whose output production reused, and declare it (LEDGER-RESIDUAL-1025)",
+  description:
+    "A run marked support produces nothing (runs-service 409 run_marked_support), so a check or find of a staff run that a real send later REUSED left that send's consumption with no producer. The listed runs (each ours, all or nothing) are un-marked through runs-service's owner door, then our declaration rows refused as support on exactly those runs are re-opened; the declarer then declares them through the backfill door like any past outcome. dryRun: true only previews. Requires x-api-key = APOLLO_SERVICE_API_KEY.",
+  request: {
+    headers: z.object({ "x-api-key": z.string() }),
+    body: { content: { "application/json": { schema: SupportUnmarkRequestSchema } }, required: true },
+  },
+  responses: {
+    200: { description: "What runs-service un-marks and how many of our rows re-open", content: { "application/json": { schema: SupportUnmarkResponseSchema } } },
+    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponseSchema } } },
+    401: { description: "Missing or invalid x-api-key", content: { "application/json": { schema: ErrorResponseSchema } } },
+    500: { description: "runs-service refused (its answer verbatim)", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
 registry.registerPath({
   method: "post",
   path: "/internal/support-marks/backfill",

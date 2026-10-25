@@ -3895,6 +3895,110 @@
           "subjects"
         ]
       },
+      "SupportUnmarkResponse": {
+        "type": "object",
+        "properties": {
+          "dryRun": {
+            "type": "boolean"
+          },
+          "preview": {
+            "type": "object",
+            "properties": {
+              "toUnmarkCount": {
+                "type": "integer"
+              },
+              "byFunction": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "integer"
+                }
+              },
+              "spend": {
+                "type": "object",
+                "properties": {
+                  "grossCents": {
+                    "type": "string"
+                  },
+                  "netCents": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "grossCents",
+                  "netCents"
+                ]
+              },
+              "maxRuns": {
+                "type": "integer"
+              },
+              "tooMany": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "toUnmarkCount",
+              "byFunction",
+              "spend",
+              "maxRuns",
+              "tooMany"
+            ]
+          },
+          "applied": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "unmarkedCount": {
+                "type": "integer"
+              },
+              "notMarkedCount": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "unmarkedCount",
+              "notMarkedCount"
+            ]
+          },
+          "reopened": {
+            "type": "integer",
+            "description": "Our declaration rows on those runs that runs-service had refused as support, re-opened for the declarer."
+          }
+        },
+        "required": [
+          "dryRun",
+          "preview",
+          "applied",
+          "reopened"
+        ]
+      },
+      "SupportUnmarkRequest": {
+        "type": "object",
+        "properties": {
+          "dryRun": {
+            "type": "boolean"
+          },
+          "runIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "minItems": 1,
+            "maxItems": 5000,
+            "description": "Runs of ours marked support whose output production later reused (the caller's evidence)."
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "dryRun",
+          "runIds",
+          "reason"
+        ]
+      },
       "SupportMarksBackfillResponse": {
         "type": "object",
         "properties": {
@@ -7496,6 +7600,74 @@
           },
           "500": {
             "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/support-marks/unmark": {
+      "post": {
+        "summary": "Undo the support mark of our runs whose output production reused, and declare it (LEDGER-RESIDUAL-1025)",
+        "description": "A run marked support produces nothing (runs-service 409 run_marked_support), so a check or find of a staff run that a real send later REUSED left that send's consumption with no producer. The listed runs (each ours, all or nothing) are un-marked through runs-service's owner door, then our declaration rows refused as support on exactly those runs are re-opened; the declarer then declares them through the backfill door like any past outcome. dryRun: true only previews. Requires x-api-key = APOLLO_SERVICE_API_KEY.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SupportUnmarkRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What runs-service un-marks and how many of our rows re-open",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportUnmarkResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid x-api-key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "runs-service refused (its answer verbatim)",
             "content": {
               "application/json": {
                 "schema": {
