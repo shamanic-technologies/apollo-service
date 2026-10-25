@@ -1,0 +1,64 @@
+name: Test
+
+on:
+  pull_request:
+    branches: [main, staging]
+  push:
+    branches: [main, staging]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # A throwaway database, created and thrown away with the runner. The suite
+    # never points at staging or at production.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: apollo_service_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # sslmode=disable: the runner's Postgres speaks plaintext.
+      APOLLO_SERVICE_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/apollo_service_test?sslmode=disable
+      # Each real-database suite runs only when its own URL is set
+      # (describe.skipIf). Point them all at the throwaway database so none is
+      # skipped; files run serially (vitest fileParallelism: false).
+      REVEAL_RECORDS_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/apollo_service_test?sslmode=disable
+      TRANSFER_BRAND_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/apollo_service_test?sslmode=disable
+      NUL_STRIP_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/apollo_service_test?sslmode=disable
+      LINKEDIN_ENGAGEMENT_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/apollo_service_test?sslmode=disable
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm version comes from package.json `packageManager` (action-setup
+      # refuses a second, different version spec).
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Replay the migrations as the service does at boot, so a broken
+      # migration fails here rather than on the deploy's health check.
+      - name: Apply migrations
+        run: pnpm db:migrate
+
+      - name: Typecheck and build
+        run: pnpm build
+
+      - name: Test
+        run: pnpm test
