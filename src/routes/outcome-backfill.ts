@@ -3,8 +3,9 @@ import { Router } from "express";
 import { requireServiceApiKey } from "./transfer-brand.js";
 import { parkHistoricalOutcomes } from "../lib/outcome-backfill.js";
 import { markPastSupportRuns } from "../lib/support-marks.js";
+import { unmarkReusedSupportRuns } from "../lib/support-unmarks.js";
 import { dedupeSubjects, parkNamedSubjectChecks } from "../lib/outcome-named-subjects.js";
-import { NamedSubjectsBackfillRequestSchema, OutcomeBackfillRequestSchema, SupportMarksBackfillRequestSchema } from "../schemas.js";
+import { NamedSubjectsBackfillRequestSchema, OutcomeBackfillRequestSchema, SupportMarksBackfillRequestSchema, SupportUnmarkRequestSchema } from "../schemas.js";
 
 const router = Router();
 
@@ -62,6 +63,24 @@ router.post("/internal/support-marks/backfill", requireServiceApiKey, async (req
     res.json({ dryRun: parsed.data.dryRun, steps: await markPastSupportRuns(parsed.data) });
   } catch (error) {
     console.error("[Apollo Service][POST /internal/support-marks/backfill] ERROR:", error);
+    res.status(500).json({ type: "internal", error: errorMessage(error) });
+  }
+});
+
+/**
+ * POST /internal/support-marks/unmark (LEDGER-RESIDUAL-1025) — undo the support mark
+ * of runs of ours whose output production reused, then re-open our declarations that
+ * runs-service refused on them (support-unmarks.ts). `dryRun: true` only previews.
+ */
+router.post("/internal/support-marks/unmark", requireServiceApiKey, async (req, res) => {
+  const parsed = SupportUnmarkRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ type: "validation", error: "Invalid request", details: parsed.error.flatten() });
+  }
+  try {
+    res.json(await unmarkReusedSupportRuns(parsed.data));
+  } catch (error) {
+    console.error("[Apollo Service][POST /internal/support-marks/unmark] ERROR:", error);
     res.status(500).json({ type: "internal", error: errorMessage(error) });
   }
 });
