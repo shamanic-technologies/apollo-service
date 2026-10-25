@@ -1570,6 +1570,67 @@ registry.registerPath({
   },
 });
 
+// ─── POST /internal/reveal-records/by-person-ids ─────────────────────────
+
+export const RevealRecordsRequestSchema = z
+  .object({
+    apolloPersonIds: z
+      .array(z.string().trim().min(1).max(64))
+      .min(1)
+      .max(1000)
+      .describe("Apollo person ids, 1..1000 per call. Trimmed and de-duplicated; the answer lists each once, in request order."),
+  })
+  .openapi("RevealRecordsRequest");
+
+const RevealedEmailSchema = z
+  .object({
+    email: z.string().describe("Address a stored reveal returned, lower-cased and trimmed."),
+    firstRevealedAt: z.string().describe("ISO time of the first stored reveal of this id that returned this address."),
+    lastRevealedAt: z.string().describe("ISO time of the latest one."),
+    reveals: z.number().int().describe("How many stored reveals of this id returned this address."),
+  })
+  .openapi("RevealedEmail");
+
+const RevealRecordsResponseSchema = z
+  .object({
+    people: z
+      .array(
+        z.object({
+          apolloPersonId: z.string(),
+          emails: z.array(RevealedEmailSchema).describe("Every distinct address any stored reveal of this id returned. Empty = never revealed, revealed without an email, or unknown id (not distinguished)."),
+          unambiguousEmail: z.string().nullable().describe("The address when this id's reveals returned exactly one AND no stored reveal returned it for another Apollo person id; else null."),
+        }),
+      )
+      .describe("One entry per asked id, request order."),
+    emails: z
+      .array(
+        z.object({
+          email: z.string(),
+          apolloPersonIds: z.array(z.string()).describe("Every Apollo person id (asked or not) any stored reveal returned this address for, sorted. More than one = an address shared by several Apollo people."),
+        }),
+      )
+      .describe("One entry per address listed under `people`, sorted by address."),
+  })
+  .openapi("RevealRecordsResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/reveal-records/by-person-ids",
+  summary: "What our stored Apollo reveals returned for these Apollo person ids (free, read-only)",
+  description:
+    "Reads apollo_people_enrichments (one row per paid /enrich or /match reveal we made, any org) and answers both directions: per Apollo person id every address its reveals returned, per address every Apollo person id any reveal returned it for. No Apollo call, no cost, nothing written, org-less. For human-service's fleet identity merge (an id-only human and an email-only human tied by the provider's own record). Requires x-api-key = APOLLO_SERVICE_API_KEY. No identity headers.",
+  request: {
+    headers: z.object({ "x-api-key": z.string() }),
+    body: { content: { "application/json": { schema: RevealRecordsRequestSchema } }, required: true },
+  },
+  responses: {
+    200: { description: "Stored reveal records (an id with none is an answer, not an error)", content: { "application/json": { schema: RevealRecordsResponseSchema } } },
+    400: { description: "Validation error (empty list, more than 1000 ids, blank id)", content: { "application/json": { schema: ErrorResponseSchema } } },
+    401: { description: "Missing or invalid x-api-key", content: { "application/json": { schema: ErrorResponseSchema } } },
+    500: { description: "Database error", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
 // ─── POST /internal/person-identity ──────────────────────────────────────
 
 export const PersonIdentityRequestSchema = z

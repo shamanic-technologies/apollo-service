@@ -23,6 +23,7 @@ import webhookRoutes from "./routes/webhook.js";
 import costHoldRoutes from "./routes/cost-holds.js";
 import outcomeBackfillRoutes from "./routes/outcome-backfill.js";
 import companyFirmographicsRoutes from "./routes/company-firmographics.js";
+import revealRecordsRoutes from "./routes/reveal-records.js";
 import { startHoldReconciler } from "./lib/hold-reconciler.js";
 import { startOutcomeDeclarer } from "./lib/outcome-declarations.js";
 import { stripNulReplacer } from "./lib/nul-strip.js";
@@ -77,6 +78,7 @@ app.use(webhookRoutes);
 app.use(costHoldRoutes);
 app.use(outcomeBackfillRoutes);
 app.use(companyFirmographicsRoutes);
+app.use(revealRecordsRoutes);
 
 // 404 handler
 app.use((req, res) => {
