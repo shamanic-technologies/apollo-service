@@ -1253,6 +1253,11 @@ production runs as x-run-id: 1,259 chat completions under one `verify-email-cont
 2026-10-22; person-match for the retired journalists product). runs-service skips any run that
 declared an outcome. A run that SPENT and found nobody kept (a loss) is NOT support: it rides the
 caller's serve (lead-service), which declares.
+UNDO (LEDGER-RESIDUAL-1025): `POST /internal/support-marks/unmark {dryRun, runIds, reason}` un-marks runs of ours
+whose output production later REUSED (a staff run's check whose verdict a real send reused: that send's consumption
+had no producer) through runs-service's owner door, then re-opens our rows refused `run_marked_support` on exactly
+those runs. The caller brings the evidence (a no-producer consumption on that person's lead after the run); pure
+staff probes stay marked.
 
 ## Commands
 

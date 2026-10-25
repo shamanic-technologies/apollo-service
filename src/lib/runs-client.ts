@@ -540,6 +540,38 @@ export async function applyOwnSupportMarks(body: OwnSupportMarkBody): Promise<Su
   return runsRequest<SupportMarkResult>("/v1/platform-runs/support-marks/apply", { method: "POST", extraHeaders: PLATFORM_HEADERS, body, timeoutMs: 120_000 });
 }
 
+export interface OwnSupportUnmarkBody {
+  reason: string;
+  unmarkedBy: string;
+  runIds: string[];
+}
+
+export interface SupportUnmarkPreview {
+  toUnmarkCount: number;
+  byFunction: Record<string, number>;
+  spend: { grossCents: string; netCents: string };
+  maxRuns: number;
+  tooMany: boolean;
+}
+
+export interface SupportUnmarkResult {
+  unmarkedCount: number;
+  notMarkedCount: number;
+}
+
+/**
+ * runs-service's OWNER unmark door (`POST /v1/platform-runs/support-marks/unmark/{preview,apply}`):
+ * undoes the support mark of runs of apollo-service only (each run ours, else 422
+ * not_run_owner; all or nothing). The run declares again; bronze keeps both events.
+ */
+export async function previewOwnSupportUnmarks(body: OwnSupportUnmarkBody): Promise<SupportUnmarkPreview> {
+  return runsRequest<SupportUnmarkPreview>("/v1/platform-runs/support-marks/unmark/preview", { method: "POST", extraHeaders: PLATFORM_HEADERS, body, timeoutMs: 60_000 });
+}
+
+export async function applyOwnSupportUnmarks(body: OwnSupportUnmarkBody): Promise<SupportUnmarkResult> {
+  return runsRequest<SupportUnmarkResult>("/v1/platform-runs/support-marks/unmark/apply", { method: "POST", extraHeaders: PLATFORM_HEADERS, body, timeoutMs: 120_000 });
+}
+
 export async function addPlatformRunCosts(
   runId: string,
   items: Array<{ costName: string; quantity: number; idempotencyKey: string }>
