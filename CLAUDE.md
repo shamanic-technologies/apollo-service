@@ -1188,7 +1188,7 @@ Owner 2026-10-23 (« pour être à 100 % now »): runs from before the live decl
 read from our own rows. `src/lib/outcome-backfill.ts` (`BACKFILL_CANDIDATES_SQL`, rules pinned in
 `tests/unit/outcome-backfill.test.ts`) parks one `outcome_declarations` row per past outcome with
 `occurred_at` = the source row's instant (migration 0044; NULL = parked live):
-verified reveal / found treg-Explee email → `email_found`; FINAL kept verification → `email_checked` +
+verified reveal (or ANY reveal email stored before the verified-only gate of 2026-06-07 #124: it reached the caller and was billed then; LEDGER-RESIDUAL-1025) / found treg-Explee email → `email_found`; FINAL kept verification → `email_checked` +
 consumed `email_found` (before BounceBan's first row the step-1 verdict WAS final); found phone → `phone_found`.
 - **Trigger**: `POST /internal/outcome-declarations/backfill {dryRun}` (x-api-key). Idempotent: the unique index
   skips what is parked, runs-service records nothing twice.
