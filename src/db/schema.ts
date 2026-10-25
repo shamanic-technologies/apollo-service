@@ -148,6 +148,7 @@ export const apolloPeopleEnrichments = pgTable(
     index("idx_enrichments_run").on(table.runId),
     index("idx_enrichments_brand_ids").using("gin", table.brandIds),
     index("idx_enrichments_email").on(table.email),
+    index("idx_enrichments_email_norm").on(sql`lower(btrim(${table.email}))`).where(sql`${table.email} IS NOT NULL`),
     index("idx_enrichments_person_id").on(table.apolloPersonId),
     index("idx_enrichments_organization_id").on(table.organizationId),
     index("idx_enrichments_campaign").on(table.campaignId),

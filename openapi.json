@@ -4062,6 +4062,113 @@
           "dryRun"
         ]
       },
+      "RevealRecordsResponse": {
+        "type": "object",
+        "properties": {
+          "people": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "apolloPersonId": {
+                  "type": "string"
+                },
+                "emails": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RevealedEmail"
+                  },
+                  "description": "Every distinct address any stored reveal of this id returned. Empty = never revealed, revealed without an email, or unknown id (not distinguished)."
+                },
+                "unambiguousEmail": {
+                  "type": "string",
+                  "nullable": true,
+                  "description": "The address when this id's reveals returned exactly one AND no stored reveal returned it for another Apollo person id; else null."
+                }
+              },
+              "required": [
+                "apolloPersonId",
+                "emails",
+                "unambiguousEmail"
+              ]
+            },
+            "description": "One entry per asked id, request order."
+          },
+          "emails": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "email": {
+                  "type": "string"
+                },
+                "apolloPersonIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Every Apollo person id (asked or not) any stored reveal returned this address for, sorted. More than one = an address shared by several Apollo people."
+                }
+              },
+              "required": [
+                "email",
+                "apolloPersonIds"
+              ]
+            },
+            "description": "One entry per address listed under `people`, sorted by address."
+          }
+        },
+        "required": [
+          "people",
+          "emails"
+        ]
+      },
+      "RevealedEmail": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Address a stored reveal returned, lower-cased and trimmed."
+          },
+          "firstRevealedAt": {
+            "type": "string",
+            "description": "ISO time of the first stored reveal of this id that returned this address."
+          },
+          "lastRevealedAt": {
+            "type": "string",
+            "description": "ISO time of the latest one."
+          },
+          "reveals": {
+            "type": "integer",
+            "description": "How many stored reveals of this id returned this address."
+          }
+        },
+        "required": [
+          "email",
+          "firstRevealedAt",
+          "lastRevealedAt",
+          "reveals"
+        ]
+      },
+      "RevealRecordsRequest": {
+        "type": "object",
+        "properties": {
+          "apolloPersonIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "minItems": 1,
+            "maxItems": 1000,
+            "description": "Apollo person ids, 1..1000 per call. Trimmed and de-duplicated; the answer lists each once, in request order."
+          }
+        },
+        "required": [
+          "apolloPersonIds"
+        ]
+      },
       "PersonIdentityResponse": {
         "type": "object",
         "properties": {
@@ -7564,6 +7671,74 @@
           },
           "500": {
             "description": "runs-service refused a step (its answer verbatim)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/reveal-records/by-person-ids": {
+      "post": {
+        "summary": "What our stored Apollo reveals returned for these Apollo person ids (free, read-only)",
+        "description": "Reads apollo_people_enrichments (one row per paid /enrich or /match reveal we made, any org) and answers both directions: per Apollo person id every address its reveals returned, per address every Apollo person id any reveal returned it for. No Apollo call, no cost, nothing written, org-less. For human-service's fleet identity merge (an id-only human and an email-only human tied by the provider's own record). Requires x-api-key = APOLLO_SERVICE_API_KEY. No identity headers.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevealRecordsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stored reveal records (an id with none is an answer, not an error)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevealRecordsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error (empty list, more than 1000 ids, blank id)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid x-api-key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
             "content": {
               "application/json": {
                 "schema": {
