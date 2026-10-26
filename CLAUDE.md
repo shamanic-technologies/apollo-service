@@ -33,7 +33,12 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
   rules to it.** Every round the model receives: the original request VERBATIM,
   the Apollo filter catalog (`buildFiltersPrompt`), the COLD-EMAIL business
   context (below), its round budget, and the FULL ordered history of previous
-  rounds. Up to **6** rounds (`MAX_ROUNDS`), plus a SEPARATE
+  rounds. Up to **6** rounds (`MAX_ROUNDS`), proposed **6 per model turn and
+  dry-run in PARALLEL** (`SETS_PER_TURN`, ONBOARDING-SEARCH-SPEED-1026: six
+  sequential turns were 38 s of the ~58 s onboarding wait; one turn of six is
+  ~10-13 s, two turns of three ~14-19 s, Haiku 5.5 slower at every shape — see
+  the constant). A turn that yields fewer usable sets gets another turn, with
+  feedback, for the rounds left. Plus a SEPARATE
   `MAX_INVALID_RETRIES` (3) budget for malformed output and a SEPARATE
   `MAX_DUPLICATE_RETRIES` (3) budget for a repeated encoding — neither may eat a
   round.
