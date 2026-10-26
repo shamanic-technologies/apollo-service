@@ -17,7 +17,8 @@
  * business context (why volume matters AND that a genuinely small market is a
  * correct answer), its round budget, and the full ordered history — each past
  * round carrying its filters, its live count, 24 sample rows drawn from RANDOM
- * pages, and the model's own three notes. It answers with a filter set and
+ * pages, and the model's own three notes. Each turn it answers with up to
+ * SETS_PER_TURN filter sets (one round each, dry-run in parallel) and
  * `toContinue`.
  *
  * NO SELF-GRADE, NO SELECTION (#246). This loop EXPLORES and REPORTS: it returns
@@ -83,13 +84,23 @@ const REFINE_MODEL = "sonnet" as const;
 export const REFINE_DECISION_JSON_SCHEMA: Record<string, unknown> = {
   type: "object",
   properties: {
-    filters: { type: "string" },
+    sets: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          filters: { type: "string" },
+          whatWorked: { type: "string" },
+          whatToImprove: { type: "string" },
+          nextExperiment: { type: "string" },
+        },
+        required: ["filters", "whatWorked", "whatToImprove", "nextExperiment"],
+        additionalProperties: false,
+      },
+    },
     toContinue: { type: "boolean" },
-    whatWorked: { type: "string" },
-    whatToImprove: { type: "string" },
-    nextExperiment: { type: "string" },
   },
-  required: ["filters", "toContinue", "whatWorked", "whatToImprove", "nextExperiment"],
+  required: ["sets", "toContinue"],
   additionalProperties: false,
 };
 
@@ -105,6 +116,27 @@ export const REFINE_DECISION_JSON_SCHEMA: Record<string, unknown> = {
  * three real prod descriptions found the best set by round 3-4 in all three
  * cases — rounds 5-10 mostly re-explored. */
 const MAX_ROUNDS = 6;
+/** Filter sets the model proposes per TURN, all dry-run in PARALLEL.
+ *
+ * The six rounds used to be six sequential model turns (~5 s each plus ~1.5 s
+ * of Apollo calls): 38 s of a ~58 s onboarding wait between confirming an
+ * audience and seeing its first companies (prod 2026-10-26,
+ * ONBOARDING-SEARCH-SPEED-1026). One turn now proposes all six sets and every
+ * one of them is run against Apollo concurrently.
+ *
+ * Measured on the box, same three requests (Canadian manufacturing ops
+ * directors, Swiss Drogerien, Saudi gyms), refine wall clock:
+ *   6 sequential turns 31.7 s (already with parallel sample pages) ·
+ *   2 turns × 3 sets 14-19 s · 1 turn × 6 sets 9.6-13 s.
+ * Claude Haiku 5.5 was SLOWER at every shape (16-39 s), so the model stays.
+ * The sets came out as relevant in both batch shapes (each run still holds
+ * rounds in the low hundreds to ~2,000 with recognisable targets), and the
+ * comparative choice over them, with every count and sample, is human-service's
+ * chooser, unchanged. What the single turn gives up is the model reading its
+ * own counts before proposing; a turn that yields fewer than six usable sets
+ * (invalid or repeated) still gets a second turn WITH that feedback for the
+ * rounds left. */
+export const SETS_PER_TURN = 6;
 /** Extra budget for unusable model output (malformed decision JSON, filters
  * rejected by the faithful schema, or chat-service REJECTING the completion
  * outright). These do NOT consume a round — a provider hiccup must not eat the
@@ -321,15 +353,13 @@ export async function dryRunSample(
 
   const apolloParams = toApolloSearchParams(filters);
   const totalPages = Math.min(Math.ceil(count / SAMPLE_PAGE_SIZE), APOLLO_MAX_PAGE);
-  const sample: SampledPerson[] = [];
-  for (const page of pickRandomPages(totalPages, SAMPLE_PAGES)) {
-    const res = await searchPeople(
-      apolloApiKey,
-      { ...apolloParams, page, per_page: SAMPLE_PAGE_SIZE },
-      alertIdentity,
-    );
-    sample.push(...(res.people ?? []).slice(0, SAMPLE_ROWS_PER_PAGE).map(toSampledPerson));
-  }
+  // The pages are independent reads: fetched concurrently, kept in page order.
+  const pages = await Promise.all(
+    pickRandomPages(totalPages, SAMPLE_PAGES).map((page) =>
+      searchPeople(apolloApiKey, { ...apolloParams, page, per_page: SAMPLE_PAGE_SIZE }, alertIdentity),
+    ),
+  );
+  const sample = pages.flatMap((res) => (res.people ?? []).slice(0, SAMPLE_ROWS_PER_PAGE).map(toSampledPerson));
   return { count, sample };
 }
 
@@ -374,23 +404,21 @@ export async function probeExclusions(
   const used = exclusionFieldsUsed(filters);
   if (used.length === 0) return null;
 
-  const { count: countWithoutAll, sample: sampleWithoutAll } = await dryRunSample(
-    apolloApiKey,
-    omitFields(filters, used),
-    alertIdentity,
-  );
-
+  // The wider set and the per-field counts are independent reads: concurrent.
   // With a single exclusion field, "without that field" and "without all of
   // them" are the same query — no second call.
-  const probes: ExclusionProbe[] =
+  const [{ count: countWithoutAll, sample: sampleWithoutAll }, perField] = await Promise.all([
+    dryRunSample(apolloApiKey, omitFields(filters, used), alertIdentity),
     used.length === 1
-      ? [{ field: used[0], countWithout: countWithoutAll }]
-      : await Promise.all(
+      ? Promise.resolve(null)
+      : Promise.all(
           used.map(async (field) => ({
             field,
             countWithout: await dryRunCount(apolloApiKey, omitFields(filters, [field]), alertIdentity),
           })),
-        );
+        ),
+  ]);
+  const probes: ExclusionProbe[] = perField ?? [{ field: used[0], countWithout: countWithoutAll }];
 
   return { probes, countWithoutAll, sampleWithoutAll };
 }
@@ -422,16 +450,21 @@ export function encodingKey(filters: Record<string, unknown>): string {
   return JSON.stringify(canonicalizeFilters(filters));
 }
 
-const RefineDecisionSchema = z.object({
+const RefineSetSchema = z.object({
   /** Accepted as the object itself OR as a JSON string of it. Schemaless JSON
    * modes return the object; some providers wrap it in a string. Taking both is
    * plain tolerance of the wire shape. */
   filters: z.union([z.record(z.string(), z.unknown()), z.string()]),
-  toContinue: z.boolean().optional(),
   whatWorked: z.string().optional(),
   whatToImprove: z.string().optional(),
   nextExperiment: z.string().optional(),
   reasoning: z.string().optional(),
+});
+
+/** One model TURN: a batch of filter sets, all dry-run in parallel. */
+const RefineDecisionSchema = z.object({
+  sets: z.array(RefineSetSchema).min(1),
+  toContinue: z.boolean().optional(),
 });
 
 /** The decision's filters as an object. `null` when the model sent something that
@@ -507,7 +540,7 @@ const APOLLO_FILTER_ALGEBRA = [
   "=== END ===",
 ].join("\n");
 
-function buildSystemPrompt(catalog: string): string {
+function buildSystemPrompt(catalog: string, setsPerTurn: number): string {
   return [
     "You are apollo-service's audience builder. Given a natural-language description of a B2B",
     "audience, find the Apollo People Search filter set that both answers that description and",
@@ -533,15 +566,23 @@ function buildSystemPrompt(catalog: string): string {
     `You have up to ${MAX_ROUNDS} rounds. Every round you see the full history of what you tried, what it`,
     "counted, who it matched, and your own notes.",
     "",
+    `Each turn you propose up to ${setsPerTurn} DIFFERENT filter sets at once — one round each. They are all`,
+    "run in parallel and reported back together, so each set is its own experiment: make them differ",
+    "from each other and from every set already run.",
+    "",
     "Each turn, reply with ONLY a JSON object (no prose, no code fences):",
     "{",
-    '  "filters": "<the filters object, JSON-encoded as a string>",',
-    '  "toContinue": true | false,',
-    '  "whatWorked": "<one sentence>",',
-    '  "whatToImprove": "<one sentence>",',
-    '  "nextExperiment": "<one sentence: what you are trying next and why>"',
+    '  "sets": [',
+    "    {",
+    '      "filters": "<the filters object, JSON-encoded as a string>",',
+    '      "whatWorked": "<one sentence>",',
+    '      "whatToImprove": "<one sentence>",',
+    '      "nextExperiment": "<one sentence: what this set is trying and why>"',
+    "    }",
+    "  ],",
+    '  "toContinue": true | false',
     "}",
-    '- "toContinue": true to keep iterating, false to stop here because you are satisfied.',
+    '- "toContinue": true to keep iterating, false to stop after this turn because you are satisfied.',
     "",
     "EVERY round you run is reported back, with its count, its sample and your notes — none of them is",
     "discarded, and you are not asked to pick. Explore the space: a round that turns out too narrow or",
@@ -553,7 +594,12 @@ function buildSystemPrompt(catalog: string): string {
   ].join("\n");
 }
 
-function buildUserMessage(input: RefineInput, history: RefineIteration[], roundsUsed: number): string {
+function buildUserMessage(
+  input: RefineInput,
+  history: RefineIteration[],
+  roundsUsed: number,
+  setsThisTurn: number,
+): string {
   const lines: string[] = [
     "=== THE REQUEST (verbatim) ===",
     `Segment name: ${input.name}`,
@@ -563,7 +609,9 @@ function buildUserMessage(input: RefineInput, history: RefineIteration[], rounds
   ];
 
   if (history.length === 0) {
-    lines.push(`Round 1 of ${MAX_ROUNDS}. No filter sets tried yet. Propose your first filter set.`);
+    lines.push(
+      `Round 1 of ${MAX_ROUNDS}. No filter sets tried yet. Propose your first ${setsThisTurn} filter set(s).`,
+    );
     return lines.join("\n");
   }
 
@@ -618,8 +666,8 @@ function buildUserMessage(input: RefineInput, history: RefineIteration[], rounds
   }
   lines.push("");
   lines.push(
-    `Round ${roundsUsed + 1} of ${MAX_ROUNDS} (${MAX_ROUNDS - roundsUsed} left). Propose the next filter set, or set ` +
-      '"toContinue": false to stop here.',
+    `Round ${roundsUsed + 1} of ${MAX_ROUNDS} (${MAX_ROUNDS - roundsUsed} left). Propose the next ${setsThisTurn} filter ` +
+      'set(s), or set "toContinue": false to stop after them.',
   );
   return lines.join("\n");
 }
@@ -711,11 +759,11 @@ function isScored(h: RefineIteration): h is ScoredRound {
 }
 
 export async function refineAudience(input: RefineInput): Promise<RefineResult> {
-  const systemPrompt = buildSystemPrompt(input.filtersPromptCatalog);
+  const systemPrompt = buildSystemPrompt(input.filtersPromptCatalog, SETS_PER_TURN);
   const trace: RefineIteration[] = [];
 
   // Two separate budgets: MAX_ROUNDS live dry-runs (the exploration budget),
-  // plus MAX_INVALID_RETRIES extra turns for unusable model output that must NOT
+  // plus MAX_INVALID_RETRIES extra units for unusable model output that must NOT
   // eat a round. `step` numbers the trace rows in order.
   let rounds = 0;
   let invalidRetries = 0;
@@ -741,14 +789,25 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
       reasoning: `stopped: the ${input.deadlineMs ?? REFINE_DEADLINE_MS}ms wall-clock bound was reached after ${rounds} round(s)`,
     });
   };
+  /** One unit of unusable output. True when that exhausted the budget. */
+  const pushInvalid = (row: Omit<RefineIteration, "iteration" | "action" | "count">): boolean => {
+    invalidRetries += 1;
+    step += 1;
+    trace.push({ iteration: step, action: "invalid", count: null, ...row });
+    if (invalidRetries > MAX_INVALID_RETRIES) {
+      stoppedReason = "invalid_budget_exhausted";
+      return true;
+    }
+    return false;
+  };
 
   while (rounds < MAX_ROUNDS) {
     if (Date.now() >= deadlineAt) {
       stopOnDeadline();
       break;
     }
-    step += 1;
-    const message = buildUserMessage(input, trace, rounds);
+    const setsThisTurn = Math.min(SETS_PER_TURN, MAX_ROUNDS - rounds);
+    const message = buildUserMessage(input, trace, rounds, setsThisTurn);
     let res: Awaited<ReturnType<typeof chatComplete>>;
     try {
       res = await chatComplete(
@@ -778,147 +837,145 @@ export async function refineAudience(input: RefineInput): Promise<RefineResult> 
       // NOT a round, and it is recorded in the trace like any other unusable
       // turn — never swallowed. Only exhausting the budget ends the run, and it
       // ends by returning the rounds already explored.
-      invalidRetries += 1;
-      trace.push({
-        iteration: step,
-        action: "invalid",
-        filters: null,
-        count: null,
-        reasoning: "chat-service did not return a usable model response",
-        validationErrors: [errorMessage(error)],
-      });
-      if (invalidRetries > MAX_INVALID_RETRIES) {
-        stoppedReason = "invalid_budget_exhausted";
+      if (
+        pushInvalid({
+          filters: null,
+          reasoning: "chat-service did not return a usable model response",
+          validationErrors: [errorMessage(error)],
+        })
+      )
         break;
-      }
       continue;
     }
 
     const parsed = RefineDecisionSchema.safeParse(res.json);
     if (!parsed.success) {
       // Unusable decision shape — burns the retry budget, NOT a round.
-      invalidRetries += 1;
-      trace.push({
-        iteration: step,
-        action: "invalid",
-        filters: decodeFilters(res.json?.filters),
-        count: null,
-        reasoning: "model decision did not match {filters, toContinue}",
-        validationErrors: parsed.error.issues.map((e) => `${e.path.join(".")}: ${e.message}`),
-      });
-      if (invalidRetries > MAX_INVALID_RETRIES) {
-        stoppedReason = "invalid_budget_exhausted";
+      if (
+        pushInvalid({
+          filters: null,
+          reasoning: "model decision did not match {sets: [{filters, …}], toContinue}",
+          validationErrors: parsed.error.issues.map((e) => `${e.path.join(".")}: ${e.message}`),
+        })
+      )
         break;
-      }
       continue;
     }
 
-    const { toContinue, whatWorked, whatToImprove, nextExperiment, reasoning } = parsed.data;
-    const filters = decodeFilters(parsed.data.filters);
-    if (filters === null) {
-      // The filter string was not a JSON object — unusable output, retry budget.
-      invalidRetries += 1;
-      trace.push({
-        iteration: step,
-        action: "invalid",
-        filters: null,
-        count: null,
-        reasoning: reasoning ?? "",
-        validationErrors: [`filters: not a JSON object (${String(parsed.data.filters).slice(0, 200)})`],
-      });
-      if (invalidRetries > MAX_INVALID_RETRIES) {
-        stoppedReason = "invalid_budget_exhausted";
-        break;
+    // Vet every proposed set of the turn (at most the rounds left). An unusable
+    // or repeated set is recorded and skipped; the valid ones of the SAME turn
+    // still run — one bad set must not discard its siblings.
+    const accepted: Array<{ filters: Record<string, unknown>; notes: RoundNotes; reasoning: string }> = [];
+    let budgetExhausted = false;
+    for (const set of parsed.data.sets.slice(0, setsThisTurn)) {
+      const reasoning = set.reasoning ?? "";
+      const filters = decodeFilters(set.filters);
+      if (filters === null) {
+        // The filter string was not a JSON object — unusable output, retry budget.
+        budgetExhausted = pushInvalid({
+          filters: null,
+          reasoning,
+          validationErrors: [`filters: not a JSON object (${String(set.filters).slice(0, 200)})`],
+        });
+        if (budgetExhausted) break;
+        continue;
       }
-      continue;
-    }
-
-    // Validate the proposed filters against our faithful vocabulary.
-    const filterCheck = SearchFiltersSchema.safeParse(filters);
-    if (!filterCheck.success) {
-      const flat = filterCheck.error.flatten();
-      const validationErrors = [
-        ...flat.formErrors,
-        ...Object.entries(flat.fieldErrors).flatMap(([k, v]) => (v ?? []).map((m) => `${k}: ${m}`)),
-      ];
-      // Schema-invalid filters — burns the retry budget, NOT a round.
-      invalidRetries += 1;
-      trace.push({
-        iteration: step,
-        action: "invalid",
-        filters,
-        count: null,
-        reasoning: reasoning ?? "",
-        validationErrors,
-      });
-      if (invalidRetries > MAX_INVALID_RETRIES) {
-        stoppedReason = "invalid_budget_exhausted";
-        break;
+      // Validate the proposed filters against our faithful vocabulary.
+      const filterCheck = SearchFiltersSchema.safeParse(filters);
+      if (!filterCheck.success) {
+        const flat = filterCheck.error.flatten();
+        // Schema-invalid filters — burns the retry budget, NOT a round.
+        budgetExhausted = pushInvalid({
+          filters,
+          reasoning,
+          validationErrors: [
+            ...flat.formErrors,
+            ...Object.entries(flat.fieldErrors).flatMap(([k, v]) => (v ?? []).map((m) => `${k}: ${m}`)),
+          ],
+        });
+        if (budgetExhausted) break;
+        continue;
       }
-      continue;
-    }
+      const validFilters = filterCheck.data as Record<string, unknown>;
 
-    const validFilters = filterCheck.data as Record<string, unknown>;
-
-    // Already dry-run in this run? Re-running the same query buys nothing and
-    // the round is the scarce resource — spend a duplicate turn instead, and
-    // tell the model which round it repeated.
-    const key = encodingKey(validFilters);
-    const seenAt = seenEncodings.get(key);
-    if (seenAt !== undefined) {
-      duplicateRetries += 1;
-      trace.push({
-        iteration: step,
-        action: "duplicate",
+      // Already dry-run in this run, or proposed twice in this turn? Re-running
+      // the same query buys nothing and the round is the scarce resource — the
+      // model is told which round it repeated.
+      const key = encodingKey(validFilters);
+      const seenAt = seenEncodings.get(key);
+      if (seenAt !== undefined) {
+        duplicateRetries += 1;
+        step += 1;
+        trace.push({
+          iteration: step,
+          action: "duplicate",
+          filters: validFilters,
+          count: null,
+          reasoning,
+          validationErrors: [
+            `same query as round #${seenAt} (value order and empty fields do not make a set different) — propose a different one`,
+          ],
+        });
+        if (duplicateRetries > MAX_DUPLICATE_RETRIES) {
+          stoppedReason = "duplicate_budget_exhausted";
+          budgetExhausted = true;
+          break;
+        }
+        continue;
+      }
+      seenEncodings.set(key, rounds + accepted.length + 1);
+      accepted.push({
         filters: validFilters,
-        count: null,
-        reasoning: reasoning ?? "",
-        validationErrors: [
-          `same query as round #${seenAt} (value order and empty fields do not make a set different) — propose a different one`,
-        ],
+        notes: {
+          whatWorked: set.whatWorked ?? "",
+          whatToImprove: set.whatToImprove ?? "",
+          nextExperiment: set.nextExperiment ?? "",
+        },
+        reasoning,
       });
-      if (duplicateRetries > MAX_DUPLICATE_RETRIES) {
-        stoppedReason = "duplicate_budget_exhausted";
-        break;
-      }
-      continue;
     }
 
-    // The completion can come back with the deadline already past. Running four
-    // more Apollo calls for a round nobody is waiting for only overshoots the
-    // bound — stop here and report what was explored.
-    if (Date.now() >= deadlineAt) {
+    // The completion can come back with the deadline already past. Running more
+    // Apollo calls for rounds nobody is waiting for only overshoots the bound —
+    // stop here and report what was explored.
+    if (accepted.length > 0 && Date.now() >= deadlineAt) {
       stopOnDeadline();
       break;
     }
 
-    // A valid, not-yet-run filter set we can dry-run — this consumes one round.
-    rounds += 1;
-    seenEncodings.set(key, rounds);
+    // Every accepted set of the turn is a round, dry-run CONCURRENTLY. Free, and
+    // only when a round excluded something: what those exclusions removed.
+    // Without it the cost of an exclusion is the one thing the loop's feedback
+    // cannot show.
     const alertIdentity = toCreditAlertIdentity(input.tracking);
-    const { count, sample } = await dryRunSample(input.apolloApiKey, validFilters, alertIdentity);
-    // Free, and only when the round excluded something: what those exclusions
-    // removed. Without it the cost of an exclusion is the one thing the loop's
-    // feedback cannot show.
-    const exclusions = await probeExclusions(input.apolloApiKey, validFilters, alertIdentity);
-
-    trace.push({
-      iteration: step,
-      action: "round",
-      filters: validFilters,
-      count,
-      sample,
-      exclusions,
-      toContinue: toContinue !== false,
-      notes: {
-        whatWorked: whatWorked ?? "",
-        whatToImprove: whatToImprove ?? "",
-        nextExperiment: nextExperiment ?? "",
-      },
-      reasoning: reasoning ?? "",
+    const results = await Promise.all(
+      accepted.map(async (a) => {
+        const [{ count, sample }, exclusions] = await Promise.all([
+          dryRunSample(input.apolloApiKey, a.filters, alertIdentity),
+          probeExclusions(input.apolloApiKey, a.filters, alertIdentity),
+        ]);
+        return { count, sample, exclusions };
+      }),
+    );
+    const toContinue = parsed.data.toContinue !== false;
+    accepted.forEach((a, i) => {
+      rounds += 1;
+      step += 1;
+      trace.push({
+        iteration: step,
+        action: "round",
+        filters: a.filters,
+        count: results[i].count,
+        sample: results[i].sample,
+        exclusions: results[i].exclusions,
+        toContinue,
+        notes: a.notes,
+        reasoning: a.reasoning,
+      });
     });
 
-    if (toContinue === false) {
+    if (budgetExhausted) break;
+    if (!toContinue && accepted.length > 0) {
       stoppedReason = "model_stopped";
       break;
     }

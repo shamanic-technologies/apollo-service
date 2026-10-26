@@ -136,19 +136,23 @@ const FINAL_FILTERS = { personSeniorities: ["head"], personTitles: ["Head of Gro
 const FIRST_ENCODING = { personSeniorities: ["head"], qOrganizationKeywordTags: ["fintech"] };
 
 const chatRes = (json: unknown) => ({ json, content: "", tokensInput: 1, tokensOutput: 1, model: "m" });
-/** One model turn: a filter set plus the two booleans and the three notes. */
+/** One model turn proposing ONE filter set (with its three notes). `toContinue`
+ * in `extra` is the turn's; every other extra field lands on the set. */
 const round = (
   filters: Record<string, unknown>,
   extra: Record<string, unknown> = {},
-) =>
+) => {
+  const { toContinue = true, ...setExtra } = extra;
+  return chatRes({
+    sets: [{ filters, whatWorked: "w", whatToImprove: "i", nextExperiment: "n", reasoning: "r", ...setExtra }],
+    toContinue,
+  });
+};
+/** One model turn proposing SEVERAL filter sets at once. */
+const batch = (sets: Array<Record<string, unknown>>, toContinue = true) =>
   chatRes({
-    filters,
-    toContinue: true,
-    whatWorked: "w",
-    whatToImprove: "i",
-    nextExperiment: "n",
-    reasoning: "r",
-    ...extra,
+    sets: sets.map((filters, i) => ({ filters, whatWorked: `w${i}`, whatToImprove: `i${i}`, nextExperiment: `n${i}` })),
+    toContinue,
   });
 /** The model's last round: satisfied, stop here. */
 const stop = (filters: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
@@ -211,11 +215,15 @@ describe("Apollo audience endpoints", () => {
     expect(mockChatComplete.mock.calls[0][0].temperature).toBeUndefined();
     // Thinking at its lowest effort (it cannot be turned off).
     expect(mockChatComplete.mock.calls[0][0].disableThinking).toBe(true);
-    // Anthropic JSON mode requires a STRICT schema; filters travel as a string.
+    // Anthropic JSON mode requires a STRICT schema; a turn is a batch of sets
+    // and each set's filters travel as a string.
     const schema = mockChatComplete.mock.calls[0][0].responseSchema;
     expect(schema.additionalProperties).toBe(false);
-    expect(schema.properties.filters).toEqual({ type: "string" });
     expect([...schema.required].sort()).toEqual(Object.keys(schema.properties).sort());
+    const setSchema = schema.properties.sets.items;
+    expect(setSchema.additionalProperties).toBe(false);
+    expect(setSchema.properties.filters).toEqual({ type: "string" });
+    expect([...setSchema.required].sort()).toEqual(Object.keys(setSchema.properties).sort());
     // Each candidate was dry-run for free via Apollo per_page=1.
     expect(mockSearchPeople).toHaveBeenCalledWith("apollo-key", expect.objectContaining({ per_page: 1 }), expect.anything());
     // Stored row carries the winning filters + count snapshot + the sample.
@@ -688,7 +696,7 @@ describe("Apollo audience endpoints", () => {
     mockChatComplete
       .mockReset()
       .mockResolvedValue(
-        chatRes({ filters: JSON.stringify(FINAL_FILTERS), showable: true, toContinue: false, reasoning: "r" }),
+        chatRes({ sets: [{ filters: JSON.stringify(FINAL_FILTERS), showable: true, reasoning: "r" }], toContinue: false }),
       );
     setCounts(42000);
 
@@ -705,7 +713,7 @@ describe("Apollo audience endpoints", () => {
   it("a filters string that is not a JSON object burns the retry budget, not a round", async () => {
     mockChatComplete
       .mockReset()
-      .mockResolvedValueOnce(chatRes({ filters: "not json at all", showable: false, toContinue: true }))
+      .mockResolvedValueOnce(chatRes({ sets: [{ filters: "not json at all", showable: false }], toContinue: true }))
       .mockResolvedValue(stop(FINAL_FILTERS));
     setCounts(42000);
 
@@ -994,6 +1002,115 @@ describe("Apollo audience endpoints", () => {
       .expect(200);
     expect(big.body.count).toBe(180000);
     expect(big.body.degraded).toBe(true);
+  });
+
+  // ONBOARDING-SEARCH-SPEED-1026: a turn proposes several sets, all dry-run in
+  // parallel — the six rounds no longer wait in line behind six model turns.
+  describe("batched turns (ONBOARDING-SEARCH-SPEED-1026)", () => {
+    const SIX = [1, 2, 3, 4, 5, 6].map((i) => ({ personTitles: [`Title ${i}`] }));
+
+    it("one turn of six sets runs all six rounds on ONE model call, in proposal order, each with its notes", async () => {
+      mockChatComplete.mockReset().mockResolvedValue(batch(SIX));
+      setCounts(10, 20, 30, 40, 50, 60);
+
+      const res = await request(app)
+        .post("/audiences/suggest-from-segment")
+        .set(HEADERS)
+        .send({ name: "n", description: "d", brandId: null })
+        .expect(200);
+
+      expect(mockChatComplete).toHaveBeenCalledTimes(1);
+      expect(res.body.candidates.map((c: any) => c.round)).toEqual([1, 2, 3, 4, 5, 6]);
+      expect(res.body.candidates.map((c: any) => c.filters)).toEqual(SIX);
+      expect(res.body.candidates.map((c: any) => c.count)).toEqual([10, 20, 30, 40, 50, 60]);
+      expect(res.body.candidates[2].notes).toEqual({ whatWorked: "w2", whatToImprove: "i2", nextExperiment: "n2" });
+      expect(res.body.stoppedReason).toBe("rounds_exhausted");
+    });
+
+    it("the sets of a turn are dry-run CONCURRENTLY, and so are a sample's pages", async () => {
+      mockChatComplete.mockReset().mockResolvedValue(batch(SIX));
+      let inFlight = 0;
+      let peak = 0;
+      mockSearchPeople.mockImplementation(async (key: unknown, params: any) => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await new Promise((r) => setTimeout(r, 5));
+        inFlight -= 1;
+        return apolloImpl(key, params);
+      });
+
+      await request(app)
+        .post("/audiences/suggest-from-segment")
+        .set(HEADERS)
+        .send({ name: "n", description: "d", brandId: null })
+        .expect(200);
+
+      // Six counts at once, then up to eighteen sample pages at once.
+      expect(peak).toBeGreaterThanOrEqual(6);
+      expect(peak).toBeGreaterThan(6);
+    });
+
+    it("an unusable or repeated set is skipped, its valid siblings still run, and the rounds left get a second turn with feedback", async () => {
+      mockChatComplete
+        .mockReset()
+        .mockResolvedValueOnce(
+          chatRes({
+            sets: [
+              { filters: SIX[0] },
+              { filters: "not json" },
+              { filters: { personTitles: ["Title 1"] } }, // same query as the first set
+              { filters: SIX[1] },
+            ],
+            toContinue: true,
+          }),
+        )
+        .mockResolvedValue(batch([SIX[2], SIX[3], SIX[4], SIX[5]]));
+      setCounts(100);
+
+      const res = await request(app)
+        .post("/audiences/suggest-from-segment")
+        .set(HEADERS)
+        .send({ name: "n", description: "d", brandId: null })
+        .expect(200);
+
+      expect(mockChatComplete).toHaveBeenCalledTimes(2);
+      expect(res.body.candidates.map((c: any) => c.filters)).toEqual(SIX);
+      const actions = state.inserted.refineTrace.map((t: any) => t.action);
+      expect(actions.slice(0, 4).sort()).toEqual(["duplicate", "invalid", "round", "round"]);
+      // The second turn is asked only for the four rounds left, and it sees the
+      // first turn's counts.
+      const second = mockChatComplete.mock.calls[1][0].message;
+      expect(second).toContain("Round 3 of 6 (4 left)");
+      expect(second).toContain("Propose the next 4 filter set(s)");
+      expect(second).toContain("count=100");
+    });
+
+    it("a turn never runs more sets than the rounds left", async () => {
+      mockChatComplete
+        .mockReset()
+        .mockResolvedValue(batch([...SIX, { personTitles: ["Title 7"] }, { personTitles: ["Title 8"] }]));
+
+      const res = await request(app)
+        .post("/audiences/suggest-from-segment")
+        .set(HEADERS)
+        .send({ name: "n", description: "d", brandId: null })
+        .expect(200);
+
+      expect(res.body.candidates).toHaveLength(6);
+      expect(mockChatComplete).toHaveBeenCalledTimes(1);
+    });
+
+    it("the prompt says a turn proposes up to six DIFFERENT sets, run in parallel", async () => {
+      await request(app)
+        .post("/audiences/suggest-from-segment")
+        .set(HEADERS)
+        .send({ name: "n", description: "d", brandId: null })
+        .expect(200);
+      const [[opts]] = mockChatComplete.mock.calls;
+      expect(opts.systemPrompt).toContain("Each turn you propose up to 6 DIFFERENT filter sets at once");
+      expect(opts.systemPrompt).toContain("run in parallel");
+      expect(opts.message).toContain("Propose your first 6 filter set(s)");
+    });
   });
 
   // PLATFORM-CALLER-RUN-1024: every LLM call of the refine loop rides THIS
