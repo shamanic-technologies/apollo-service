@@ -36,6 +36,7 @@ import { getOrganizationJobPostings, type ApolloJobPosting } from "./apollo-clie
 import { withTregFallback, tregCostItems } from "./apollo-reveal-route.js";
 import { addDays, readSignalSpec, toDay, utcDay, type BuyingSignalSpec, type BuyingSignalType } from "./buying-signal-spec.js";
 import { advisoryXactLock } from "./advisory-lock.js";
+import { chunkRows } from "./bulk-params.js";
 import { decryptKey } from "./keys-client.js";
 import { assertKeySource } from "./validators.js";
 import { addCosts, createRun, updateCostStatus, updateRun, type IdentityHeaders } from "./runs-client.js";
@@ -305,16 +306,38 @@ export function pickMatchedSignal(spec: BuyingSignalSpec, signals: SilverSignal[
   return inWindow[0] ?? null;
 }
 
+/**
+ * Every signal lands, whatever the employer's size: one statement per chunk
+ * (BIG-COMPANY-SIGNALS-1027, Amazon's ~9,000 postings bound ~81,600 parameters
+ * and failed the whole /enrich), all chunks in one transaction so silver never
+ * holds half an employer. Rows are deduped on the conflict key first: a key
+ * repeated inside one statement makes ON CONFLICT DO UPDATE fail.
+ */
 export async function upsertSilverSignals(signals: SilverSignal[]): Promise<void> {
   if (signals.length === 0) return;
-  await db
-    .insert(buyingSignals)
-    .values(signals)
-    .onConflictDoUpdate({
-      target: [buyingSignals.signalType, buyingSignals.source, buyingSignals.sourceRef],
-      set: { lastSeenAt: new Date(), fact: sql`excluded.fact`, occurredOn: sql`excluded.occurred_on`, sourceUrl: sql`excluded.source_url`, detail: sql`excluded.detail` },
-    });
+  const byKey = new Map<string, SilverSignal>();
+  for (const s of signals) byKey.set(`${s.signalType}\u0000${s.source}\u0000${s.sourceRef}`, s);
+  const rows = [...byKey.values()];
+  const chunks = chunkRows(rows, SILVER_SIGNAL_COLUMNS);
+  const write = async (exec: Pick<typeof db, "insert">, chunk: SilverSignal[]) =>
+    exec
+      .insert(buyingSignals)
+      .values(chunk)
+      .onConflictDoUpdate({
+        target: [buyingSignals.signalType, buyingSignals.source, buyingSignals.sourceRef],
+        set: { lastSeenAt: new Date(), fact: sql`excluded.fact`, occurredOn: sql`excluded.occurred_on`, sourceUrl: sql`excluded.source_url`, detail: sql`excluded.detail` },
+      });
+  if (chunks.length === 1) {
+    await write(db, chunks[0]);
+    return;
+  }
+  await db.transaction(async (tx) => {
+    for (const chunk of chunks) await write(tx, chunk);
+  });
 }
+
+/** Bound parameters per silver row: the SilverSignal fields + last_seen_at. */
+const SILVER_SIGNAL_COLUMNS = 10;
 
 function toEvidence(s: SilverSignal): BuyingSignalEvidence {
   return { type: s.signalType, occurredOn: s.occurredOn, fact: s.fact, source: s.source, sourceUrl: s.sourceUrl };

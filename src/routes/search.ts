@@ -21,6 +21,7 @@ import { authorizeCredit } from "../lib/billing-client.js";
 import { creditRefusalBody } from "../lib/credit-refusal.js";
 import { transformApolloPerson, toEnrichmentDbValues, transformCachedEnrichment, toApolloSearchParams } from "../lib/transform.js";
 import { assertKeySource } from "../lib/validators.js";
+import { pgTextArray } from "../lib/bulk-params.js";
 import { SearchNextRequestSchema, SearchDryRunRequestSchema, EnrichRequestSchema, StatsRequestSchema, ApolloNativeSearchFiltersSchema } from "../schemas.js";
 import { buildFiltersPrompt, computeFiltersPromptVersion, APOLLO_UNDOCUMENTED_FILTERS_ENCART } from "../lib/filters-prompt.js";
 import { traceEvent } from "../lib/trace-event.js";
@@ -1010,7 +1011,8 @@ router.post("/stats", serviceAuth, async (req: AuthenticatedRequest, res) => {
     // Helper to build conditions for a table
     const buildConditions = (table: typeof apolloPeopleEnrichments | typeof apolloPeopleSearches) => {
       const conditions = [eq(table.orgId, req.orgId!)];
-      if (runIds?.length) conditions.push(inArray(table.runId, runIds));
+      // One text[] parameter, not one per id: a caller-sized list must not hit the 65,534-parameter cap.
+      if (runIds?.length) conditions.push(sql`${table.runId} = ANY(${pgTextArray(runIds)}::text[])`);
       if (brandIds?.length) conditions.push(arrayOverlaps(table.brandIds, brandIds));
       if (campaignId) conditions.push(eq(table.campaignId, campaignId));
       // Dynasty slug takes priority over exact slug
