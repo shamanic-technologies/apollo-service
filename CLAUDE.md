@@ -392,6 +392,12 @@ other. `src/lib/buying-signal-spec.ts` (pure) + `src/lib/buying-signals.ts`.
   lands in silver `buying_signals` (global). No dated evidence in the window =
   null, never invented. job_change allows 31 days of slack for Apollo's
   month-precision start dates.
+- **Silver upsert is CHUNKED (BIG-COMPANY-SIGNALS-1027).** A big employer's job postings
+  (Amazon ~9,000) bound ~81,600 parameters in one insert, over postgres' 65,534 cap, and
+  502'd the whole `/enrich`. `upsertSilverSignals` dedupes on the conflict key and writes
+  chunks (`src/lib/bulk-params.ts`) in one transaction. Any insert or IN-list whose length
+  a provider or caller controls goes through `chunkRows` / `pgTextArray` (one `text[]`
+  param), never one statement of unbounded rows.
 - **Endpoints:** `POST /audiences/signal-coverage` (free people AND distinct
   companies per signal x window for an ICP, the "is it worth it" check; read
   companies, not people: "recently funded" crypto market makers were 217 people
