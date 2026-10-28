@@ -1157,6 +1157,33 @@
             ],
             "description": "source=linkedin_engagement only (absent everywhere else). WHY done is what it is: null while done=false; when done=true, no_recent_posts = no competitor page has a post published inside the audience's window (nothing to read engagers from: NOT exhaustion of an engaged pool, new posts may come), no_engagers = posts exist inside the window but nobody reacted or commented, all_served = there were engagers and every one was already considered for this audience (served, competitor employee or profile unreadable)."
           },
+          "unreadablePages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "page": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "not_found",
+                    "unreadable"
+                  ]
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "page",
+                "state",
+                "reason"
+              ]
+            },
+            "description": "source=linkedin_engagement only. Competitor pages no posts provider can read (not_found = every provider says the page does not exist; unreadable = one says so and the others refuse it). Permanent: re-checked once a day, and they never keep done=false, so done/doneReason describe the READABLE pages. A page that failed transiently (rate limit, outage, timeout) is not listed and keeps done=false."
+          },
           "source": {
             "type": "string",
             "enum": [

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { POSTS_PROVIDERS, postsVerdict, isToolUnavailable } from "../../src/lib/linkedin-company-posts.js";
+import { POSTS_PROVIDERS, postsVerdict, isToolUnavailable, settlePageRead } from "../../src/lib/linkedin-company-posts.js";
 import { parseCompetitorPage } from "../../src/lib/linkedin-engagement-spec.js";
 
 /** Bodies captured live through treg on 2026-10-04 (trimmed). */
@@ -42,9 +42,33 @@ describe("posts providers", () => {
     expect(postsVerdict(tikhub, 503, null).kind).toBe("next");
   });
 
-  it("any other 4xx or an unreadable 200 fails loud (never retried elsewhere, never guessed)", () => {
-    expect(postsVerdict(scrapecreators, 400, { error: "bad url" }).kind).toBe("fail");
+  it("an unreadable 200 fails loud (never retried elsewhere, never guessed)", () => {
     expect(postsVerdict(scrapecreators, 200, { success: true }).kind).toBe("fail");
     expect(postsVerdict(harvestapi, 200, { elements: null, error: "Something else" }).kind).toBe("fail");
+  });
+});
+
+describe("a page no provider reads (LI-ENGAGEMENT-NEVER-DONE-1029)", () => {
+  // Live 2026-10-28 for diffco-us: tikhub 400s EVERY page (docketwise-software too).
+  const tikhub400 = { detail: { code: 400, message: "Request failed. Please retry. Check the docs below to verify your parameters, test with the default demo parameters, and send the response JSON to support. You won't be charged for this request." } };
+
+  it("a provider 4xx is a refusal: the next provider is asked, it is not transient", () => {
+    expect(postsVerdict(tikhub, 400, tikhub400).kind).toBe("refused");
+    expect(postsVerdict(scrapecreators, 400, { error: "bad url" }).kind).toBe("refused");
+    expect(postsVerdict(harvestapi, 200, { elements: null, error: ["Company not found: diffco-us"], status: 400 }).kind).toBe("not_found");
+  });
+
+  it("not found + refused, nobody transient = unreadable (permanent)", () => {
+    expect(settlePageRead({ notFound: ["sc 404", "hv not found"], refused: ["tk 400"], transient: [] }, 3).kind).toBe("unreadable");
+  });
+
+  it("every provider not found = not_found", () => {
+    expect(settlePageRead({ notFound: ["a", "b", "c"], refused: [], transient: [] }, 3).kind).toBe("not_found");
+  });
+
+  it("any transient answer, or nobody saying not found, = failed (retried soon)", () => {
+    expect(settlePageRead({ notFound: ["sc 404"], refused: ["tk 400"], transient: ["hv 503"] }, 3).kind).toBe("failed");
+    expect(settlePageRead({ notFound: [], refused: ["a", "b", "c"], transient: [] }, 3).kind).toBe("failed");
+    expect(settlePageRead({ notFound: [], refused: [], transient: ["a", "b", "c"] }, 3).kind).toBe("failed");
   });
 });

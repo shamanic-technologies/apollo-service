@@ -27,7 +27,16 @@
  * provider is asked. "Page not found" passes to the next provider too: it is a
  * fact about that provider's coverage, not about the page (scrapecreators did
  * not know oxblue-corporation, tikhub listed 50 of its posts). A page is dead
- * only when every provider says so. Any other 4xx fails loud.
+ * only when every provider says so.
+ *
+ * Any other 4xx is the provider REFUSING the call: it says nothing about the
+ * page either, so the next provider is asked, but it is not transient. tikhub
+ * answers 400 "Request failed. Please retry ... You won't be charged" for EVERY
+ * page since 2026-10-28 (docketwise-software too), and that answer used to stop
+ * the chain, so harvestapi was never asked. A page no provider reads while at
+ * least one says "not found" and the rest refused (none throttled, down or slow)
+ * is UNREADABLE: permanent, re-checked daily like a not_found
+ * (LI-ENGAGEMENT-NEVER-DONE-1029). An unreadable 200 body still fails loud.
  */
 import type { WirePost } from "./linkedin-engagement-spec.js";
 import type { CompetitorPage } from "./linkedin-engagement-spec.js";
@@ -105,8 +114,10 @@ export const POSTS_PROVIDERS: PostsProvider[] = [
 export type PostsVerdict =
   | { kind: "posts"; posts: WirePost[] }
   | { kind: "not_found"; reason: string }
-  /** Says nothing about the page: ask the next provider. */
+  /** Says nothing about the page, transiently (rate limit, outage, withdrawn tool): ask the next provider. */
   | { kind: "next"; reason: string }
+  /** The provider refused the call (a 4xx): says nothing about the page, not transient. Ask the next provider. */
+  | { kind: "refused"; reason: string }
   /** An answer we do not understand: fail loud, do not guess. */
   | { kind: "fail"; reason: string };
 
@@ -131,5 +142,24 @@ export function postsVerdict(provider: PostsProvider, status: number, body: Reco
   }
   // The provider answered that the page does not exist (scrapecreators: 404 {"error":"not_found","message":"Company not found"}).
   if (status === 404 && /not.?found/i.test(`${body?.error ?? ""} ${body?.message ?? ""}`)) return { kind: "not_found", reason: why };
+  if (status >= 400 && status < 500) return { kind: "refused", reason: why };
   return { kind: "fail", reason: why };
+}
+
+/** What a page is once every provider was asked and none returned posts. */
+export type PageReadVerdict = { kind: "not_found"; reason: string } | { kind: "unreadable"; reason: string } | { kind: "failed"; reason: string };
+
+/**
+ * not_found = every provider said the page does not exist. unreadable = at least
+ * one said so and every other one REFUSED (4xx): nobody can read it and waiting
+ * an hour will not change that (permanent, re-checked daily). failed = any
+ * provider was throttled, down or slow, or none said "not found": retried soon.
+ */
+export function settlePageRead(answers: { notFound: string[]; refused: string[]; transient: string[] }, providerCount: number): PageReadVerdict {
+  const { notFound, refused, transient } = answers;
+  if (notFound.length === providerCount) return { kind: "not_found", reason: `no posts provider knows the page: ${notFound.join(" | ")}` };
+  if (transient.length === 0 && notFound.length > 0 && notFound.length + refused.length === providerCount) {
+    return { kind: "unreadable", reason: `no posts provider can read the page: ${[...notFound, ...refused].join(" | ")}` };
+  }
+  return { kind: "failed", reason: `no posts provider could read the page: ${[...notFound, ...refused, ...transient].join(" | ")}` };
 }
