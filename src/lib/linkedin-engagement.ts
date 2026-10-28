@@ -69,7 +69,7 @@ import {
   type WireEngagement,
   type WirePost,
 } from "./linkedin-engagement-spec.js";
-import { POSTS_PROVIDERS, postsVerdict, type PostsProvider } from "./linkedin-company-posts.js";
+import { POSTS_PROVIDERS, postsVerdict, settlePageRead, type PageReadVerdict, type PostsProvider } from "./linkedin-company-posts.js";
 
 const TREG_BASE = "https://treg.to/call/";
 export const ENGAGEMENT_ENDPOINT = "fetchinio.linkedin.post.engagement";
@@ -430,7 +430,7 @@ function failure(endpoint: string, answer: TregAnswer): LinkedinTregError {
 // ─── Harvest (posts + engagement → silver) ───────────────────────────────────
 
 /** A page's state after the posts step of one serve. */
-export type PageOutcome = { page: CompetitorPage; state: "readable" } | { page: CompetitorPage; state: "not_found" | "failed"; reason: string };
+export type PageOutcome = { page: CompetitorPage; state: "readable" } | { page: CompetitorPage; state: "not_found" | "unreadable" | "failed"; reason: string };
 
 /**
  * Ask the providers in order until one returns the page's posts. A provider
@@ -440,26 +440,25 @@ export type PageOutcome = { page: CompetitorPage; state: "readable" } | { page: 
  * posts, 2026-10-04). The page is not_found only when EVERY provider said so; a
  * mix of not-found and failures is a failure (retried, never remembered).
  */
-async function readPosts(meter: EngagementMeter, page: CompetitorPage, providers: PostsProvider[]): Promise<{ kind: "posts"; posts: WirePost[] } | { kind: "not_found"; reason: string } | { kind: "failed"; reason: string }> {
-  const skipped: string[] = [];
-  const notFound: string[] = [];
+async function readPosts(meter: EngagementMeter, page: CompetitorPage, providers: PostsProvider[]): Promise<{ kind: "posts"; posts: WirePost[] } | PageReadVerdict> {
+  const answers = { notFound: [] as string[], refused: [] as string[], transient: [] as string[] };
   for (const provider of providers) {
     let answer: TregAnswer;
     try {
       answer = await meter.call(provider.endpoint, { method: "GET", query: provider.query(page), maxMicro: provider.maxMicro, routed: false });
     } catch (err) {
       if (!(err instanceof LinkedinTregTransientError)) throw err;
-      skipped.push(messageOf(err));
+      answers.transient.push(messageOf(err));
       continue;
     }
     const verdict = postsVerdict(provider, answer.status, answer.body);
-    if (verdict.kind === "next") {
-      skipped.push(verdict.reason);
+    if (verdict.kind === "next" || verdict.kind === "refused") {
+      (verdict.kind === "next" ? answers.transient : answers.refused).push(verdict.reason);
       console.warn(`[Apollo Service][linkedin-engagement] posts provider skipped for ${page.url}: ${verdict.reason}`);
       continue;
     }
     if (verdict.kind === "not_found") {
-      notFound.push(verdict.reason);
+      answers.notFound.push(verdict.reason);
       continue;
     }
     // An answer we do not understand stops the chain (no other provider is paid) and
@@ -467,14 +466,14 @@ async function readPosts(meter: EngagementMeter, page: CompetitorPage, providers
     if (verdict.kind === "fail") return { kind: "failed", reason: verdict.reason };
     return verdict;
   }
-  if (notFound.length === providers.length) return { kind: "not_found", reason: `no posts provider knows the page: ${notFound.join(" | ")}` };
-  return { kind: "failed", reason: `no posts provider could read the page: ${[...notFound, ...skipped].join(" | ")}` };
+  return settlePageRead(answers, providers.length);
 }
 
 /** The page's remembered posts answer while it is fresh; null = due for a read. */
 export function freshPostsOutcome(row: typeof linkedinCompanyPages.$inferSelect | undefined, page: CompetitorPage, now: Date): PageOutcome | null {
   if (row?.postsFetchedAt && now.getTime() - row.postsFetchedAt.getTime() < POSTS_REFRESH_MS) {
-    return row.postsStatus === "not_found" ? { page, state: "not_found", reason: row.postsError ?? "not found" } : { page, state: "readable" };
+    if (row.postsStatus === "not_found" || row.postsStatus === "unreadable") return { page, state: row.postsStatus, reason: row.postsError ?? row.postsStatus };
+    return { page, state: "readable" };
   }
   // Due, but every provider failed on it a moment ago: skipped, no provider call.
   const failedAt = row?.postsFailedAt;
@@ -511,11 +510,11 @@ async function readPageUnderLock(meter: EngagementMeter, page: CompetitorPage, n
       await tx.insert(linkedinCompanyPages).values({ slug: page.slug, url: page.url, ...failed }).onConflictDoUpdate({ target: linkedinCompanyPages.slug, set: failed });
       return { page, state: "failed", reason: read.reason };
     }
-    if (read.kind === "not_found") {
+    if (read.kind === "not_found" || read.kind === "unreadable") {
       // A permanent answer: remembered for the refresh period so no serve pays to re-learn it.
-      const set = { postsFetchedAt: now, postsCount: 0, postsStatus: "not_found", postsError: read.reason.slice(0, 1000), postsFailedAt: null, postsFailure: null };
+      const set = { postsFetchedAt: now, postsCount: 0, postsStatus: read.kind, postsError: read.reason.slice(0, 1000), postsFailedAt: null, postsFailure: null };
       await tx.insert(linkedinCompanyPages).values({ slug: page.slug, url: page.url, ...set }).onConflictDoUpdate({ target: linkedinCompanyPages.slug, set });
-      return { page, state: "not_found", reason: read.reason };
+      return { page, state: read.kind, reason: read.reason };
     }
 
     for (const p of read.posts) {
@@ -602,7 +601,7 @@ export async function harvest(meter: EngagementMeter, pages: CompetitorPage[], s
   const skipped = outcomes.flatMap((o) => (o.state === "readable" ? [] : [{ page: o.page.url, state: o.state, reason: o.reason }]));
   for (const s of skipped) console.warn(`[Apollo Service][linkedin-engagement] competitor page SKIPPED (${s.state}) ${s.page}: ${s.reason}`);
   if (skipped.length === pages.length) {
-    throw new LinkedinCompetitorPagesUnreadableError(skipped.map((s) => ({ page: s.page, reason: s.reason })), skipped.every((s) => s.state === "not_found"));
+    throw new LinkedinCompetitorPagesUnreadableError(skipped.map((s) => ({ page: s.page, reason: s.reason })), !outcomes.some(blocksCompletion));
   }
   const stale = new Date(now.getTime() - ENGAGEMENT_REFRESH_MS);
   const due = await db
@@ -626,8 +625,19 @@ export async function harvest(meter: EngagementMeter, pages: CompetitorPage[], s
   });
   const failed = read.find((r) => r?.status === "rejected") as PromiseRejectedResult | undefined;
   if (failed) throw failed.reason;
-  // A page that failed transiently may still hold engagers: not exhausted yet.
-  return { complete: complete && !skipped.some((s) => s.state === "failed"), skipped };
+  // A page that failed transiently may still hold engagers: not exhausted yet. A
+  // not_found or unreadable page is permanent (re-checked daily): it holds nobody
+  // we can reach, so it never keeps the serve from ending.
+  return { complete: complete && !outcomes.some(blocksCompletion), skipped };
+}
+
+/**
+ * Only a TRANSIENT failure keeps a harvest incomplete. Before (LI-ENGAGEMENT-NEVER-DONE-1029)
+ * a page every provider refused counted as failed forever: Beyond Logic's diffco-us
+ * kept its audience answering "nothing yet, not done" to ~18k serves an hour.
+ */
+export function blocksCompletion(outcome: PageOutcome): boolean {
+  return outcome.state === "failed";
 }
 
 // ─── Serve ───────────────────────────────────────────────────────────────────
@@ -783,7 +793,7 @@ export interface EngagementServeResult {
   unresolvable: number;
   /** Lookups that failed transiently: released, retried by a later serve. */
   deferred: number;
-  /** Competitor pages not read this serve: `not_found` (no provider knows the page) or `failed` (every provider failed). */
+  /** Competitor pages not read this serve: `not_found` (no provider knows the page), `unreadable` (one says not found, the others refuse) or `failed` (transient: retried). */
   skippedPages: Array<{ page: string; state: string; reason: string }>;
   calls: number;
   chargedMicro: number;

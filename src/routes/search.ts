@@ -723,6 +723,7 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
         people: served.people,
         done: served.done,
         doneReason: served.doneReason,
+        unreadablePages: served.skippedPages.filter((s) => s.state !== "failed").map((s) => ({ page: s.page, state: s.state, reason: s.reason })),
         totalEntries: served.poolSize,
         page: 1,
         totalPages: 1,

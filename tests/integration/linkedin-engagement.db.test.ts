@@ -362,11 +362,12 @@ describe.skipIf(!DB_URL)("linkedin_engagement serve loop on a real database", ()
       const diffco = { ...spec, competitor_pages: ["https://www.linkedin.com/company/diffco-us/"] };
       scrapecreators = { "diffco-us": "not_found" };
       tikhub400 = new Set(["diffco-us"]);
+      down = new Set(["harvestapi"]);
       const first = await mod.serveLinkedinEngagers({ ctx: ctx("aud-diffco"), campaignId: "c15", spec: diffco, now: NOW }).catch((e: unknown) => e);
       expect(first).toBeInstanceOf(mod.LinkedinCompetitorPagesUnreadableError);
       expect(first).toMatchObject({ permanent: false });
-      // tikhub's 400 is an answer we do not read: the chain stops there, harvestapi is never paid.
-      expect(calls.filter((c) => c.startsWith("posts"))).toEqual(["posts:scrapecreators:diffco-us", "posts:tikhub:diffco-us"]);
+      // tikhub's 400 is a refusal: the next provider is asked; harvestapi is down, so the page is parked.
+      expect(calls.filter((c) => c.startsWith("posts"))).toEqual(["posts:scrapecreators:diffco-us", "posts:tikhub:diffco-us", "posts:harvestapi:diffco-us"]);
 
       calls.length = 0;
       const again = await mod.serveLinkedinEngagers({ ctx: ctx("aud-diffco"), campaignId: "c15", spec: diffco, now: new Date(NOW.getTime() + 30 * 60_000) }).catch((e: unknown) => e);
@@ -376,12 +377,37 @@ describe.skipIf(!DB_URL)("linkedin_engagement serve loop on a real database", ()
 
       // Past the retry period it is read again (and recovers when a provider answers).
       tikhub400 = new Set();
+      down = new Set();
       scrapecreators = {};
       const later = new Date(NOW.getTime() + mod.POSTS_FAILED_RETRY_MS + 60_000);
       await mod.serveLinkedinEngagers({ ctx: ctx("aud-diffco"), campaignId: "c15", spec: diffco, now: later });
       expect(calls.filter((c) => c.startsWith("posts"))).toEqual(["posts:scrapecreators:diffco-us"]);
       const [page] = await q`SELECT posts_status, posts_failed_at FROM linkedin_company_pages WHERE slug = 'diffco-us'`;
       expect(page).toMatchObject({ posts_status: "ok", posts_failed_at: null });
+    });
+
+    it("LI-ENGAGEMENT-NEVER-DONE-1029: a page one provider calls not found and the others refuse is UNREADABLE: it never keeps the serve not-done", async () => {
+      await freshPages();
+      // Beyond Logic, live 2026-10-28: scrapecreators 404, tikhub 400 on every page, harvestapi "not found".
+      const withDead = { ...spec, competitor_pages: ["https://www.linkedin.com/company/lemlist/", "https://www.linkedin.com/company/diffco-us/"] };
+      scrapecreators = { "diffco-us": "not_found" };
+      tikhub400 = new Set(["diffco-us"]);
+      let res = await mod.serveLinkedinEngagers({ ctx: ctx("aud-never-done"), campaignId: "c19", spec: withDead, now: NOW });
+      expect(calls.filter((c) => c.includes("diffco-us"))).toEqual(["posts:scrapecreators:diffco-us", "posts:tikhub:diffco-us", "posts:harvestapi:diffco-us"]);
+      expect(res.skippedPages).toEqual([expect.objectContaining({ page: "https://www.linkedin.com/company/diffco-us/", state: "unreadable" })]);
+      const [page] = await q`SELECT posts_status, posts_failed_at FROM linkedin_company_pages WHERE slug = 'diffco-us'`;
+      expect(page).toMatchObject({ posts_status: "unreadable", posts_failed_at: null });
+
+      // Serve the readable page out: the serve ENDS, with a reason, and the dead page costs no call.
+      for (let i = 0; i < 10 && !res.done; i++) res = await mod.serveLinkedinEngagers({ ctx: ctx("aud-never-done"), campaignId: "c19", spec: withDead, now: NOW });
+      expect(res).toMatchObject({ done: true, doneReason: "all_served" });
+      calls.length = 0;
+      await mod.serveLinkedinEngagers({ ctx: ctx("aud-never-done"), campaignId: "c19", spec: withDead, now: new Date(NOW.getTime() + 2 * 3_600_000) });
+      expect(calls.filter((c) => c.startsWith("posts:") && c.includes("diffco-us"))).toEqual([]);
+
+      // Alone, it is a PERMANENT refusal (422), never a retryable one.
+      const alone = await mod.serveLinkedinEngagers({ ctx: ctx("aud-never-done-2"), campaignId: "c20", spec: { ...spec, competitor_pages: ["https://www.linkedin.com/company/diffco-us/"] }, now: NOW }).catch((e: unknown) => e);
+      expect(alone).toMatchObject({ permanent: true });
     });
 
     it("a page read OK before and failing when due is parked too, its posts kept", async () => {
