@@ -758,6 +758,12 @@ const SearchNextResponseSchema = z
     doneReason: z.enum(["no_recent_posts", "no_engagers", "all_served"]).nullable().optional().openapi({
       description: "source=linkedin_engagement only (absent everywhere else). WHY done is what it is: null while done=false; when done=true, no_recent_posts = no competitor page has a post published inside the audience's window (nothing to read engagers from: NOT exhaustion of an engaged pool, new posts may come), no_engagers = posts exist inside the window but nobody reacted or commented, all_served = there were engagers and every one was already considered for this audience (served, competitor employee or profile unreadable).",
     }),
+    unreadablePages: z
+      .array(z.object({ page: z.string(), state: z.enum(["not_found", "unreadable"]), reason: z.string() }))
+      .optional()
+      .openapi({
+        description: "source=linkedin_engagement only. Competitor pages no posts provider can read (not_found = every provider says the page does not exist; unreadable = one says so and the others refuse it). Permanent: re-checked once a day, and they never keep done=false, so done/doneReason describe the READABLE pages. A page that failed transiently (rate limit, outage, timeout) is not listed and keeps done=false.",
+      }),
     source: z.enum(["quickenrich", "linkedin_engagement"]).optional().openapi({
       description: "quickenrich: this page came from the FREE QuickEnrich search (the audience is switched to quickenrich); those people carry an id `qe:<emp_id>`, their full name, LinkedIn URL and company domain. linkedin_engagement: the filters carry a linkedin_engagement buying_signal; up to 5 engagers of the competitor pages per call, each with an id `li:<profileId>`, full name, title, headline, employer and LinkedIn URL, never the same person twice for the audience (x-audience-id, else the campaign), competitor employees excluded; done=true only once nobody is left. For both, POST /enrich with that id finds the email with treg and verifies it. Absent = the Apollo walk, unchanged.",
     }),

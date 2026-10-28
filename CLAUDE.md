@@ -442,6 +442,14 @@ window. `src/lib/linkedin-engagement-spec.ts` (pure) + `src/lib/linkedin-engagem
   ~1,000 reads/h from lead-service's serve loop) is skipped WITHOUT a call for
   `POSTS_FAILED_RETRY_MS` (1h), same answer; an unreadable 200/4xx stops the chain.
   No provider resolves `showcase/eimmigration` (all three probed).
+  **A provider 4xx (other than its own "not found" / treg "no tool") is a REFUSAL: next
+  provider, not transient** (LI-ENGAGEMENT-NEVER-DONE-1029: tikhub 400s "Request failed.
+  Please retry" on EVERY page since 2026-10-28 and used to stop the chain). One says not
+  found + the rest refused, none throttled/down/slow = `posts_status = unreadable`:
+  permanent like not_found (re-read after 24h, ~$0.002/day/page), NEVER keeps the serve
+  not-done, and listed in the response's additive `unreadablePages`. Only a TRANSIENT
+  failure keeps `done=false` (diffco-us kept Beyond Logic's audience not-done to ~18k
+  serves/hour).
 - **`doneReason` says WHY a serve is done** (`/search/next`, engagement only, null
   while `done=false`): `no_recent_posts` = no competitor page has a post published
   in the window (nothing to read engagers from; NOT exhaustion, new posts may
