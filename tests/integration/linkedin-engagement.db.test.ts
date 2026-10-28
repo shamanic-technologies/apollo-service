@@ -40,6 +40,9 @@ const SC_NOT_FOUND = { success: true, credits_charged: 0, error: "not_found", er
 let scrapecreators: Record<string, "posts" | "withdrawn" | "not_found" | "502"> = {};
 /** tikhub / harvestapi answering 503 (an outage). */
 let down = new Set<string>();
+/** Pages tikhub answers 400 "Request failed. Please retry" for (diffco-us, prod 2026-10-27/28). */
+let tikhub400 = new Set<string>();
+const TIKHUB_400 = { detail: { code: 400, message: "Request failed. Please retry. Check the docs below to verify your parameters, test with the default demo parameters, and send the response JSON to support. You won't be charged for this request.", params: { url: "https://www.linkedin.com/company/diffco-us/" } } };
 const actor = (id: string, name: string, headline: string, url?: string) => ({ urn: `urn:li:fsd_profile:${id}`, name, headline, profileUrl: url ?? `https://www.linkedin.com/in/${id}`, profileId: id });
 const ENGAGEMENT_111 = {
   reactions: [
@@ -114,6 +117,7 @@ describe.skipIf(!DB_URL)("linkedin_engagement serve loop on a real database", ()
         const slug = new URL(url).searchParams.get("url")!.split("/").filter(Boolean).pop()!;
         calls.push(`posts:tikhub:${slug}`);
         if (down.has("tikhub")) return reply(503, { detail: "unavailable" }, "0");
+        if (tikhub400.has(slug)) return reply(400, TIKHUB_400, "0");
         return reply(200, slug === "lemlist" ? TIKHUB_POSTS : { code: 200, data: { data: null } }, "1000");
       }
       if (url.includes("harvestapi.linkedin.company.posts")) {
@@ -150,6 +154,7 @@ describe.skipIf(!DB_URL)("linkedin_engagement serve loop on a real database", ()
     calls.length = 0;
     scrapecreators = {};
     down = new Set();
+    tikhub400 = new Set();
   });
 
   it("serves the prospects of in-window posts, drops the employee and the unreadable, pays each fact once", async () => {
@@ -303,7 +308,10 @@ describe.skipIf(!DB_URL)("linkedin_engagement serve loop on a real database", ()
       const err = await mod.serveLinkedinEngagers({ ctx: ctx("aud-mixed"), campaignId: "c12", spec, now: NOW }).catch((e: unknown) => e);
       expect(err).toBeInstanceOf(mod.LinkedinCompetitorPagesUnreadableError);
       expect(err).toMatchObject({ permanent: false });
-      expect(await q`SELECT 1 FROM linkedin_company_pages WHERE slug = 'lemlist'`).toHaveLength(0);
+      // Not dead: only parked for POSTS_FAILED_RETRY_MS.
+      const [page] = await q`SELECT posts_status, posts_fetched_at, posts_failed_at FROM linkedin_company_pages WHERE slug = 'lemlist'`;
+      expect(page).toMatchObject({ posts_status: null, posts_fetched_at: null });
+      expect(page.posts_failed_at).not.toBeNull();
     });
 
     const twoPages = { ...spec, competitor_pages: ["https://www.linkedin.com/company/lemlist/", "https://www.linkedin.com/showcase/eimmigration/"] };
@@ -336,7 +344,7 @@ describe.skipIf(!DB_URL)("linkedin_engagement serve loop on a real database", ()
       expect(err.pages.map((p: { page: string }) => p.page).sort()).toEqual(["https://www.linkedin.com/company/gone-co/", "https://www.linkedin.com/showcase/eimmigration/"]);
     });
 
-    it("every provider down: a named, RETRYABLE failure, and nothing remembered about the page", async () => {
+    it("every provider down: a named, RETRYABLE failure; the page is parked, never remembered as dead", async () => {
       await freshPages();
       scrapecreators = { lemlist: "withdrawn" };
       down = new Set(["tikhub", "harvestapi"]);
@@ -344,7 +352,53 @@ describe.skipIf(!DB_URL)("linkedin_engagement serve loop on a real database", ()
       expect(err).toBeInstanceOf(mod.LinkedinCompetitorPagesUnreadableError);
       expect(err).toMatchObject({ permanent: false });
       expect(calls.filter((c) => c.startsWith("posts"))).toEqual(["posts:scrapecreators:lemlist", "posts:tikhub:lemlist", "posts:harvestapi:lemlist"]);
-      expect(await q`SELECT 1 FROM linkedin_company_pages WHERE slug = 'lemlist'`).toHaveLength(0);
+      const [page] = await q`SELECT posts_status, posts_failed_at FROM linkedin_company_pages WHERE slug = 'lemlist'`;
+      expect(page.posts_status).toBeNull();
+      expect(page.posts_failed_at).not.toBeNull();
+    });
+
+    it("BOX-LOAD-1028: a page every provider failed on is skipped WITHOUT a call for an hour, with the same answer, then read again", async () => {
+      await freshPages();
+      const diffco = { ...spec, competitor_pages: ["https://www.linkedin.com/company/diffco-us/"] };
+      scrapecreators = { "diffco-us": "not_found" };
+      tikhub400 = new Set(["diffco-us"]);
+      const first = await mod.serveLinkedinEngagers({ ctx: ctx("aud-diffco"), campaignId: "c15", spec: diffco, now: NOW }).catch((e: unknown) => e);
+      expect(first).toBeInstanceOf(mod.LinkedinCompetitorPagesUnreadableError);
+      expect(first).toMatchObject({ permanent: false });
+      // tikhub's 400 is an answer we do not read: the chain stops there, harvestapi is never paid.
+      expect(calls.filter((c) => c.startsWith("posts"))).toEqual(["posts:scrapecreators:diffco-us", "posts:tikhub:diffco-us"]);
+
+      calls.length = 0;
+      const again = await mod.serveLinkedinEngagers({ ctx: ctx("aud-diffco"), campaignId: "c15", spec: diffco, now: new Date(NOW.getTime() + 30 * 60_000) }).catch((e: unknown) => e);
+      expect(again).toBeInstanceOf(mod.LinkedinCompetitorPagesUnreadableError);
+      expect(again).toMatchObject({ permanent: false, pages: first.pages });
+      expect(calls.filter((c) => c.startsWith("posts"))).toEqual([]);
+
+      // Past the retry period it is read again (and recovers when a provider answers).
+      tikhub400 = new Set();
+      scrapecreators = {};
+      const later = new Date(NOW.getTime() + mod.POSTS_FAILED_RETRY_MS + 60_000);
+      await mod.serveLinkedinEngagers({ ctx: ctx("aud-diffco"), campaignId: "c15", spec: diffco, now: later });
+      expect(calls.filter((c) => c.startsWith("posts"))).toEqual(["posts:scrapecreators:diffco-us"]);
+      const [page] = await q`SELECT posts_status, posts_failed_at FROM linkedin_company_pages WHERE slug = 'diffco-us'`;
+      expect(page).toMatchObject({ posts_status: "ok", posts_failed_at: null });
+    });
+
+    it("a page read OK before and failing when due is parked too, its posts kept", async () => {
+      await freshPages();
+      await mod.serveLinkedinEngagers({ ctx: ctx("aud-park-ok"), campaignId: "c16", spec, now: NOW });
+      const due = new Date(NOW.getTime() + mod.POSTS_REFRESH_MS + 60_000);
+      scrapecreators = { lemlist: "withdrawn" };
+      down = new Set(["tikhub", "harvestapi"]);
+      calls.length = 0;
+      await mod.serveLinkedinEngagers({ ctx: ctx("aud-park-ok2"), campaignId: "c17", spec, now: due }).catch(() => null);
+      expect(calls.filter((c) => c.startsWith("posts"))).toHaveLength(3);
+      calls.length = 0;
+      await mod.serveLinkedinEngagers({ ctx: ctx("aud-park-ok3"), campaignId: "c18", spec, now: new Date(due.getTime() + 60_000) }).catch(() => null);
+      expect(calls.filter((c) => c.startsWith("posts"))).toEqual([]);
+      const [page] = await q`SELECT posts_status, posts_count FROM linkedin_company_pages WHERE slug = 'lemlist'`;
+      expect(page.posts_status).toBe("ok");
+      expect(page.posts_count).toBeGreaterThan(0);
     });
 
     it("BOX-DB-LOAD-1028: concurrent serves of one unreadable page share ONE read and get the same answer", async () => {

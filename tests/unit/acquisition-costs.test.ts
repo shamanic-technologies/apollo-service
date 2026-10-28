@@ -20,6 +20,9 @@ import {
   priceRuns,
   mapWithConcurrency,
   __resetRunCostCache,
+  __resetAcquisitionRowsCache,
+  findAcquisitionRows,
+  ACQUISITION_ROWS_TTL_MS,
   RUNS_BATCH_CHUNK,
   RUNS_BATCH_CONCURRENCY,
   type AcquisitionRow,
@@ -97,6 +100,8 @@ describe("attributeAcquisitions", () => {
 describe("POST /internal/acquisition-costs", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    __resetAcquisitionRowsCache();
+    __resetRunCostCache();
   });
 
   it("401 without the service key", async () => {
@@ -115,8 +120,8 @@ describe("POST /internal/acquisition-costs", () => {
 
   it("prices found acquisitions per paying org and totals per campaign", async () => {
     mockExecute.mockResolvedValue([
-      { idx: 0, kind: "apollo_reveal", run_id: R1, org_id: ORG },
-      { idx: 1, kind: "apollo_reveal", run_id: R2, org_id: ORG },
+      { by: "pid", key: "p1", kind: "apollo_reveal", run_id: R1, org_id: ORG },
+      { by: "email", key: "b@x.com", kind: "apollo_reveal", run_id: R2, org_id: ORG },
     ]);
     mockRunsBatch.mockResolvedValue([run(R1, EARLIER, "2026-09-29T00:00:00Z", "8.8"), run(R2, SERVING, "2026-10-15T00:00:00Z", "5.6")]);
     const res = await request(app())
@@ -202,7 +207,8 @@ describe("priceRuns (chunked, bounded concurrency, cached)", () => {
   });
 
   it("the route answers 500 with the named error when runs-service fails", async () => {
-    mockExecute.mockResolvedValue([{ idx: 0, kind: "apollo_reveal", run_id: R1, org_id: ORG }]);
+    __resetAcquisitionRowsCache();
+    mockExecute.mockResolvedValue([{ by: "pid", key: "p1", kind: "apollo_reveal", run_id: R1, org_id: ORG }]);
     mockRunsBatch.mockRejectedValue(new Error("runs-service POST /v1/runs/batch timed out after 20000ms"));
     const res = await request(app())
       .post("/internal/acquisition-costs")
@@ -230,5 +236,62 @@ describe("mapWithConcurrency", () => {
 
   it("an empty list resolves at once", async () => {
     expect(await mapWithConcurrency([], 4, async () => 1)).toEqual([]);
+  });
+});
+
+describe("findAcquisitionRows (BOX-LOAD-1028: per-person rows kept for a few minutes)", () => {
+  const lead = (pid: string | undefined, email: string | undefined) => ({ servedCampaignId: SERVING, servedAt: "2026-10-15T00:00:00Z", apolloPersonId: pid, email });
+
+  beforeEach(() => {
+    mockExecute.mockReset();
+    __resetAcquisitionRowsCache();
+    vi.useRealTimers();
+  });
+
+  it("maps rows back to every asked person, deduped like the old UNION, id and email merged", async () => {
+    mockExecute.mockResolvedValue([
+      { by: "pid", key: "p1", kind: "apollo_reveal", run_id: R1, org_id: ORG },
+      { by: "email", key: "a@x.com", kind: "apollo_reveal", run_id: R1, org_id: ORG },
+      { by: "email", key: "a@x.com", kind: "email_verification", run_id: R2, org_id: OTHER_ORG },
+    ]);
+    const rows = await findAcquisitionRows([lead("p1", " A@x.com "), lead(undefined, "a@x.com"), lead("p9", undefined)]);
+    expect(rows).toEqual([
+      { idx: 0, kind: "apollo_reveal", runId: R1, orgId: ORG },
+      { idx: 0, kind: "email_verification", runId: R2, orgId: OTHER_ORG },
+      { idx: 1, kind: "apollo_reveal", runId: R1, orgId: ORG },
+      { idx: 1, kind: "email_verification", runId: R2, orgId: OTHER_ORG },
+    ]);
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it("a person asked again within the TTL is answered from memory (empty answers too); only new keys hit Postgres", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-28T10:00:00Z"));
+    mockExecute.mockResolvedValueOnce([{ by: "pid", key: "p1", kind: "apollo_reveal", run_id: R1, org_id: ORG }]);
+    await findAcquisitionRows([lead("p1", undefined), lead("p2", undefined)]);
+    mockExecute.mockResolvedValueOnce([{ by: "pid", key: "p3", kind: "email_find", run_id: R3, org_id: ORG }]);
+    const rows = await findAcquisitionRows([lead("p1", undefined), lead("p2", undefined), lead("p3", undefined)]);
+    expect(rows).toEqual([
+      { idx: 0, kind: "apollo_reveal", runId: R1, orgId: ORG },
+      { idx: 2, kind: "email_find", runId: R3, orgId: ORG },
+    ]);
+    expect(mockExecute).toHaveBeenCalledTimes(2);
+
+    mockExecute.mockClear();
+    await findAcquisitionRows([lead("p1", undefined), lead("p2", undefined), lead("p3", undefined)]);
+    expect(mockExecute).not.toHaveBeenCalled();
+
+    vi.setSystemTime(new Date(Date.now() + ACQUISITION_ROWS_TTL_MS + 1));
+    mockExecute.mockResolvedValueOnce([]);
+    await findAcquisitionRows([lead("p1", undefined)]);
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failed read caches nothing", async () => {
+    mockExecute.mockRejectedValueOnce(new Error("db down"));
+    await expect(findAcquisitionRows([lead("p1", undefined)])).rejects.toThrow(/db down/);
+    mockExecute.mockResolvedValueOnce([]);
+    await findAcquisitionRows([lead("p1", undefined)]);
+    expect(mockExecute).toHaveBeenCalledTimes(2);
   });
 });
