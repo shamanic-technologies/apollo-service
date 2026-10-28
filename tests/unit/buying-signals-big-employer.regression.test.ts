@@ -47,10 +47,14 @@ vi.mock("../../src/db/index.js", () => {
     select: () => select(() => [{ responseBody: { organization_job_postings: cachedPostings } }]),
     insert: () => insertChain(),
   };
+  // First db.select = the signal serve; the next = loadJobPostings' lock-free cache read.
+  let dbSelects = 0;
   return {
     db: {
       select: () =>
-        select(() => [{ signal: { type: "hiring", window_days: 30, as_of: "2026-10-27" }, servedAt: new Date() }]),
+        dbSelects++ === 0
+          ? select(() => [{ signal: { type: "hiring", window_days: 30, as_of: "2026-10-27" }, servedAt: new Date() }])
+          : select(() => [{ responseBody: { organization_job_postings: cachedPostings } }]),
       insert: () => insertChain(),
       transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
     },

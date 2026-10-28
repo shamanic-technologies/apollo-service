@@ -346,5 +346,20 @@ describe.skipIf(!DB_URL)("linkedin_engagement serve loop on a real database", ()
       expect(calls.filter((c) => c.startsWith("posts"))).toEqual(["posts:scrapecreators:lemlist", "posts:tikhub:lemlist", "posts:harvestapi:lemlist"]);
       expect(await q`SELECT 1 FROM linkedin_company_pages WHERE slug = 'lemlist'`).toHaveLength(0);
     });
+
+    it("BOX-DB-LOAD-1028: concurrent serves of one unreadable page share ONE read and get the same answer", async () => {
+      await freshPages();
+      scrapecreators = { lemlist: "withdrawn" };
+      down = new Set(["tikhub", "harvestapi"]);
+      const [a, b] = await Promise.all(
+        ["c13", "c14"].map((c) => mod.serveLinkedinEngagers({ ctx: ctx(`aud-${c}`), campaignId: c, spec, now: NOW }).catch((e: unknown) => e)),
+      );
+      for (const err of [a, b]) {
+        expect(err).toBeInstanceOf(mod.LinkedinCompetitorPagesUnreadableError);
+        expect(err).toMatchObject({ permanent: false });
+      }
+      expect(a.pages).toEqual(b.pages);
+      expect(calls.filter((c) => c.startsWith("posts"))).toEqual(["posts:scrapecreators:lemlist", "posts:tikhub:lemlist", "posts:harvestapi:lemlist"]);
+    });
   });
 });

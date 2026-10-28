@@ -326,10 +326,22 @@ async function enrichOrganizations(args: {
   const orgs = new Map<string, ApolloOrganization>();
   if (ids.length === 0) return { kind: "ok", orgs, creditsCharged: 0 };
 
+  const freshAfter = new Date(Date.now() - ORG_CACHE_DAYS * 24 * 60 * 60 * 1000);
+  // Lock-free fast path (BOX-DB-LOAD-1028): when every company is cached there is
+  // nothing to buy, so no lock and no transaction. Otherwise lock and re-read.
+  const seen = await db
+    .select()
+    .from(apolloOrganizations)
+    .where(and(inArray(apolloOrganizations.id, ids), gt(apolloOrganizations.fetchedAt, freshAfter)));
+  const seenIds = new Set(seen.map((row) => row.id));
+  if (ids.every((id) => seenIds.has(id))) {
+    for (const row of seen) orgs.set(row.id, row.raw as ApolloOrganization);
+    return { kind: "ok", orgs, creditsCharged: 0 };
+  }
+
   return db.transaction(async (tx) => {
     await advisoryXactLock(tx, `apollo-audience-companies:${args.audienceRowId}`);
 
-    const freshAfter = new Date(Date.now() - ORG_CACHE_DAYS * 24 * 60 * 60 * 1000);
     const cached = await tx
       .select()
       .from(apolloOrganizations)
