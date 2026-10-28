@@ -15,7 +15,8 @@ vi.mock("../../src/db/schema.js", () => ({
   personRoleLookups: { __t: "person", personKey: "personKey" },
 }));
 vi.mock("drizzle-orm", () => ({ eq: (_col: unknown, v: unknown) => ({ v }) }));
-vi.mock("../../src/lib/advisory-lock.js", () => ({ advisoryXactLock: async () => undefined }));
+const lockKeys = vi.hoisted(() => [] as string[]);
+vi.mock("../../src/lib/advisory-lock.js", () => ({ advisoryXactLock: async (_tx: unknown, key: string) => void lockKeys.push(key) }));
 function keyOf(t: string, v: any) {
   return t === "company" ? v.domain : v.personKey;
 }
@@ -95,6 +96,7 @@ const post = async (body: unknown, key = "svc-key") =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  lockKeys.length = 0;
   tables.company.clear();
   tables.person.clear();
   let n = 0;
@@ -108,6 +110,21 @@ beforeEach(() => {
 });
 
 describe("POST /internal/company-firmographics", () => {
+  it("BOX-DB-LOAD-1028: a cached repeat takes no advisory lock; only the paid miss does", async () => {
+    await post({ domain: "stripe.com", firstName: "Patrick", lastName: "Collison" });
+    expect(lockKeys).toHaveLength(2);
+    expect(lockKeys).toContain("company-firmographics:stripe.com");
+    expect(lockKeys.some((k) => k.startsWith("person-role:"))).toBe(true);
+    lockKeys.length = 0;
+    vi.clearAllMocks();
+    const again = await post({ domain: "stripe.com", firstName: "Patrick", lastName: "Collison" });
+    expect(again.status).toBe(200);
+    expect(again.body.cached).toEqual({ company: true, person: true });
+    expect(lockKeys).toEqual([]);
+    expect(mockEnrichOrg).not.toHaveBeenCalled();
+    expect(mockMatchPerson).not.toHaveBeenCalled();
+  });
+
   it("answers a real company, declares 1 apollo-credit on a platform run, and serves the repeat from cache", async () => {
     const res = await post({ domain: "https://www.Stripe.com/pricing" });
     expect(res.status).toBe(200);

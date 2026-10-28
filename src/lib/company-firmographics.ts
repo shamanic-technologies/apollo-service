@@ -297,6 +297,10 @@ function isFresh(fetchedAt: Date, found: boolean): boolean {
 }
 
 async function lookupCompanyRow(domain: string, getKey: () => Promise<string>): Promise<{ row: CompanyRow; cached: boolean }> {
+  // Lock-free fast path (BOX-DB-LOAD-1028): a fresh row needs no lock; only a
+  // miss takes it, and re-reads under it before paying.
+  const [seen] = await db.select().from(companyDomainLookups).where(eq(companyDomainLookups.domain, domain)).limit(1);
+  if (seen && isFresh(seen.fetchedAt, seen.raw !== null)) return { row: seen, cached: true };
   return db.transaction(async (tx) => {
     await advisoryXactLock(tx, `company-firmographics:${domain}`);
     const [existing] = await tx.select().from(companyDomainLookups).where(eq(companyDomainLookups.domain, domain)).limit(1);
@@ -396,6 +400,9 @@ async function lookupPersonRow(
   args: { email?: string; firstName?: string; lastName?: string; domain: string },
   getKey: () => Promise<string>,
 ): Promise<{ row: PersonRow; cached: boolean }> {
+  // Lock-free fast path (BOX-DB-LOAD-1028), as for the company.
+  const [seen] = await db.select().from(personRoleLookups).where(eq(personRoleLookups.personKey, key)).limit(1);
+  if (seen && isFresh(seen.fetchedAt, seen.matched)) return { row: seen, cached: true };
   return db.transaction(async (tx) => {
     await advisoryXactLock(tx, `person-role:${key}`);
     const [existing] = await tx.select().from(personRoleLookups).where(eq(personRoleLookups.personKey, key)).limit(1);

@@ -35,7 +35,7 @@ import { apolloJobPostingsFetches, apolloSearchCursors, apolloSignalServes, buyi
 import { getOrganizationJobPostings, type ApolloJobPosting } from "./apollo-client.js";
 import { withTregFallback, tregCostItems } from "./apollo-reveal-route.js";
 import { addDays, readSignalSpec, toDay, utcDay, type BuyingSignalSpec, type BuyingSignalType } from "./buying-signal-spec.js";
-import { advisoryXactLock } from "./advisory-lock.js";
+import { advisoryXactLock, singleFlight } from "./advisory-lock.js";
 import { chunkRows } from "./bulk-params.js";
 import { decryptKey } from "./keys-client.js";
 import { assertKeySource } from "./validators.js";
@@ -351,6 +351,18 @@ interface EvidenceContext {
   alertIdentity?: CreditAlertIdentity;
 }
 
+/** The company's latest job-postings fetch under JOB_POSTINGS_CACHE_DAYS, or null. */
+async function cachedJobPostings(exec: Pick<typeof db, "select">, apolloOrganizationId: string): Promise<ApolloJobPosting[] | null> {
+  const freshAfter = new Date(Date.now() - JOB_POSTINGS_CACHE_DAYS * 86_400_000);
+  const [cached] = await exec
+    .select()
+    .from(apolloJobPostingsFetches)
+    .where(and(eq(apolloJobPostingsFetches.apolloOrganizationId, apolloOrganizationId), gt(apolloJobPostingsFetches.fetchedAt, freshAfter)))
+    .orderBy(desc(apolloJobPostingsFetches.fetchedAt))
+    .limit(1);
+  return cached ? ((cached.responseBody as { organization_job_postings?: ApolloJobPosting[] }).organization_job_postings ?? []) : null;
+}
+
 /**
  * The company's job postings: the latest bronze fetch under
  * JOB_POSTINGS_CACHE_DAYS, else bought from Apollo under provision → authorize
@@ -358,16 +370,21 @@ interface EvidenceContext {
  * keeps two concurrent reveals at the same company from paying twice.
  */
 async function loadJobPostings(apolloOrganizationId: string, ctx: EvidenceContext, subject: OutcomePerson): Promise<ApolloJobPosting[]> {
+  // Lock-free fast path (BOX-DB-LOAD-1028): a cached company needs no lock, so
+  // reveals of many people at one big employer stop queuing behind each other.
+  // Only a miss takes the lock, and re-reads under it before paying.
+  const hit = await cachedJobPostings(db, apolloOrganizationId);
+  if (hit) return hit;
+  // Concurrent misses at one company share the one paid fetch (a follower used to
+  // wait on the lock, then read the row the leader wrote: same postings).
+  return singleFlight(`apollo-job-postings:${apolloOrganizationId}`, () => fetchJobPostingsUnderLock(apolloOrganizationId, ctx, subject));
+}
+
+async function fetchJobPostingsUnderLock(apolloOrganizationId: string, ctx: EvidenceContext, subject: OutcomePerson): Promise<ApolloJobPosting[]> {
   return db.transaction(async (tx) => {
     await advisoryXactLock(tx, `apollo-job-postings:${apolloOrganizationId}`);
-    const freshAfter = new Date(Date.now() - JOB_POSTINGS_CACHE_DAYS * 86_400_000);
-    const [cached] = await tx
-      .select()
-      .from(apolloJobPostingsFetches)
-      .where(and(eq(apolloJobPostingsFetches.apolloOrganizationId, apolloOrganizationId), gt(apolloJobPostingsFetches.fetchedAt, freshAfter)))
-      .orderBy(desc(apolloJobPostingsFetches.fetchedAt))
-      .limit(1);
-    if (cached) return ((cached.responseBody as { organization_job_postings?: ApolloJobPosting[] }).organization_job_postings ?? []);
+    const cached = await cachedJobPostings(tx, apolloOrganizationId);
+    if (cached) return cached;
 
     const { identity } = ctx;
     const { key, keySource } = await decryptKey(identity.orgId, identity.userId!, "apollo", { callerMethod: "POST", callerPath: "/enrich" }, identity);

@@ -1495,6 +1495,19 @@ both `/search/filters-prompt` and the audience-refine system prompt. If you ever
 "re-sync `SearchFiltersSchema` to the official Apollo doc", **keep these fields +
 the encart** — they are not in the doc by design, but they work.
 
+## Advisory locks: read the cache lock-free FIRST, lock only on a miss (BOX-DB-LOAD-1028)
+
+`advisoryXactLock` (lib/advisory-lock.ts) collapses a paid-call stampede. Every
+caller reads its cache row OUTSIDE a transaction first and returns on a fresh hit;
+only a miss opens the transaction, takes the lock and RE-READS under it before
+paying (/enrich, /match, firmographics, job postings, audience companies, LinkedIn
+pages). A new caller follows the same shape: a lock taken before the cache check
+makes every hit a transaction + lock, and a waiter holds a pool connection and a
+Postgres backend for the whole wait. Where a miss is slow and NEVER cached (a
+LinkedIn page no provider can read is re-read by every serve, ~2.4 s under the
+lock), wrap the locked part in `singleFlight(key, …)`: concurrent callers in this
+process share the one read; a follower whose leader threw runs its own.
+
 ## U+0000 in provider data is stripped at the DRIVER, never per field
 
 Postgres rejects NUL in text (`invalid byte sequence 0x00`) and in json/jsonb
