@@ -178,40 +178,101 @@ export function attributeAcquisitions(
 }
 
 interface RawRow {
-  idx: number | string;
+  by: "pid" | "email";
+  key: string;
   kind: AcquisitionKind;
   run_id: string;
   org_id: string;
 }
 
+type FoundAcquisition = Omit<AcquisitionRow, "idx">;
+
+/**
+ * BOX-LOAD-1028: lead-service re-asks the same orgs' whole served stock every few
+ * minutes (features-service polls it), ~1,300 people per call, and this lookup was
+ * the biggest apollo statement on the box (~1.6 s mean, 14k calls in 40 h). What an
+ * EARLIER run paid for a person only grows by new acquisitions, which start after
+ * the serves already asked about, so a person's paid rows are kept per lookup key
+ * (apollo person id / normalized email) for ACQUISITION_ROWS_TTL_MS, empty answers
+ * included, and only keys not seen recently go to Postgres. Same TTL as the run
+ * prices (RUN_COST_TTL_MS): a new acquisition shows within 10 minutes.
+ */
+export const ACQUISITION_ROWS_TTL_MS = 10 * 60_000;
+const ACQUISITION_ROWS_CACHE_MAX = 200_000;
+const acquisitionRowsCache = new Map<string, { rows: FoundAcquisition[]; until: number }>();
+const pidKey = (pid: string) => `pid:${pid}`;
+const emailKey = (email: string) => `email:${email}`;
+
+/** Test seam. */
+export function __resetAcquisitionRowsCache(): void {
+  acquisitionRowsCache.clear();
+}
+
 /** Every PAID acquisition of the asked people in our tables, any org. */
 export async function findAcquisitionRows(people: ServedLead[]): Promise<AcquisitionRow[]> {
-  const asked = people.map((p, idx) => ({ idx, pid: p.apolloPersonId ?? null, email: normEmail(p.email) }));
-  const rows = (await db.execute(sql`
-    WITH asked AS (
-      SELECT * FROM jsonb_to_recordset(${JSON.stringify(asked)}::jsonb) AS a(idx int, pid text, email text)
-    )
-    SELECT a.idx, 'apollo_reveal' AS kind, e.enrichment_run_id AS run_id, e.org_id::text AS org_id
-      FROM asked a JOIN apollo_people_enrichments e ON e.apollo_person_id = a.pid
-      WHERE a.pid IS NOT NULL AND e.enrichment_run_id IS NOT NULL
-    UNION
-    SELECT a.idx, 'apollo_reveal', e.enrichment_run_id, e.org_id::text
-      FROM asked a JOIN apollo_people_enrichments e ON lower(btrim(e.email)) = a.email
-      WHERE a.email IS NOT NULL AND e.enrichment_run_id IS NOT NULL
-    UNION
-    SELECT a.idx, 'email_find', f.find_run_id, f.org_id::text
-      FROM asked a JOIN email_findings f ON f.apollo_person_id = a.pid
-      WHERE a.pid IS NOT NULL AND f.find_run_id IS NOT NULL
-    UNION
-    SELECT a.idx, 'email_find', f.find_run_id, f.org_id::text
-      FROM asked a JOIN email_findings f ON lower(btrim(f.email)) = a.email
-      WHERE a.email IS NOT NULL AND f.find_run_id IS NOT NULL
-    UNION
-    SELECT a.idx, 'email_verification', v.verify_run_id, v.org_id::text
-      FROM asked a JOIN email_verifications v ON v.email = a.email
-      WHERE a.email IS NOT NULL AND v.billed AND v.verify_run_id IS NOT NULL
-  `)) as unknown as RawRow[];
-  return rows.map((r) => ({ idx: Number(r.idx), kind: r.kind, runId: r.run_id, orgId: r.org_id }));
+  const now = Date.now();
+  const asked = people.map((p) => ({ pid: p.apolloPersonId ?? null, email: normEmail(p.email) }));
+  const pids = new Set<string>();
+  const emails = new Set<string>();
+  for (const a of asked) {
+    if (a.pid !== null && !((acquisitionRowsCache.get(pidKey(a.pid))?.until ?? 0) > now)) pids.add(a.pid);
+    if (a.email !== null && !((acquisitionRowsCache.get(emailKey(a.email))?.until ?? 0) > now)) emails.add(a.email);
+  }
+
+  const fresh = new Map<string, FoundAcquisition[]>();
+  if (pids.size > 0 || emails.size > 0) {
+    // Each branch matches on exactly the predicate of its covering index
+    // (migration 0047), so every lookup is an index-only scan.
+    const rows = (await db.execute(sql`
+      WITH pids AS (
+        SELECT value AS pid FROM jsonb_array_elements_text(${JSON.stringify([...pids])}::jsonb)
+      ), emails AS (
+        SELECT value AS email FROM jsonb_array_elements_text(${JSON.stringify([...emails])}::jsonb)
+      )
+      SELECT 'pid' AS by, a.pid AS key, 'apollo_reveal' AS kind, e.enrichment_run_id AS run_id, e.org_id::text AS org_id
+        FROM pids a JOIN apollo_people_enrichments e ON e.apollo_person_id = a.pid
+        WHERE e.enrichment_run_id IS NOT NULL
+      UNION
+      SELECT 'email', a.email, 'apollo_reveal', e.enrichment_run_id, e.org_id::text
+        FROM emails a JOIN apollo_people_enrichments e ON lower(btrim(e.email)) = a.email
+        WHERE e.email IS NOT NULL AND e.enrichment_run_id IS NOT NULL
+      UNION
+      SELECT 'pid', a.pid, 'email_find', f.find_run_id, f.org_id::text
+        FROM pids a JOIN email_findings f ON f.apollo_person_id = a.pid
+        WHERE f.find_run_id IS NOT NULL
+      UNION
+      SELECT 'email', a.email, 'email_find', f.find_run_id, f.org_id::text
+        FROM emails a JOIN email_findings f ON lower(btrim(f.email)) = a.email
+        WHERE f.find_run_id IS NOT NULL
+      UNION
+      SELECT 'email', a.email, 'email_verification', v.verify_run_id, v.org_id::text
+        FROM emails a JOIN email_verifications v ON v.email = a.email
+        WHERE v.billed AND v.verify_run_id IS NOT NULL
+    `)) as unknown as RawRow[];
+    for (const pid of pids) fresh.set(pidKey(pid), []);
+    for (const email of emails) fresh.set(emailKey(email), []);
+    for (const r of rows) {
+      const key = r.by === "pid" ? pidKey(r.key) : emailKey(r.key);
+      fresh.get(key)?.push({ kind: r.kind, runId: r.run_id, orgId: r.org_id });
+    }
+    if (acquisitionRowsCache.size + fresh.size > ACQUISITION_ROWS_CACHE_MAX) acquisitionRowsCache.clear();
+    const until = Date.now() + ACQUISITION_ROWS_TTL_MS;
+    for (const [key, found] of fresh) acquisitionRowsCache.set(key, { rows: found, until });
+  }
+
+  const rowsOf = (key: string): FoundAcquisition[] => fresh.get(key) ?? acquisitionRowsCache.get(key)?.rows ?? [];
+  const out: AcquisitionRow[] = [];
+  asked.forEach((a, idx) => {
+    const seen = new Set<string>();
+    const found = [...(a.pid !== null ? rowsOf(pidKey(a.pid)) : []), ...(a.email !== null ? rowsOf(emailKey(a.email)) : [])];
+    for (const f of found) {
+      const k = `${f.kind}:${f.runId}:${f.orgId}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push({ idx, ...f });
+    }
+  });
+  return out;
 }
 
 /**

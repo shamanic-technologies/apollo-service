@@ -81,6 +81,14 @@ export const PROFILE_MAX_MICRO = 5_000;
 
 export const POSTS_REFRESH_MS = 24 * 3_600_000;
 export const ENGAGEMENT_REFRESH_MS = 24 * 3_600_000;
+/**
+ * A page every provider FAILED on (not a "not found" from all of them) is skipped
+ * without a call for this long, then read again. Before (BOX-LOAD-1028) nothing
+ * remembered it and every serve re-read it: diffco-us drew ~1,000 failed reads an
+ * hour from lead-service's serve loop (tikhub 400 "Request failed. Please retry").
+ * Short on purpose: a provider blip only parks the page for an hour.
+ */
+export const POSTS_FAILED_RETRY_MS = 3_600_000;
 export const PROFILE_CACHE_MS = 30 * 86_400_000;
 /** 100 reactions + 100 comments per page; 5 pages = up to 500 of each per post per day. */
 export const MAX_ENGAGEMENT_PAGES_PER_POST = 5;
@@ -454,7 +462,9 @@ async function readPosts(meter: EngagementMeter, page: CompetitorPage, providers
       notFound.push(verdict.reason);
       continue;
     }
-    if (verdict.kind === "fail") throw new LinkedinTregError(verdict.reason);
+    // An answer we do not understand stops the chain (no other provider is paid) and
+    // fails the page for this serve; it is remembered like any failure.
+    if (verdict.kind === "fail") return { kind: "failed", reason: verdict.reason };
     return verdict;
   }
   if (notFound.length === providers.length) return { kind: "not_found", reason: `no posts provider knows the page: ${notFound.join(" | ")}` };
@@ -462,9 +472,16 @@ async function readPosts(meter: EngagementMeter, page: CompetitorPage, providers
 }
 
 /** The page's remembered posts answer while it is fresh; null = due for a read. */
-function freshPostsOutcome(row: typeof linkedinCompanyPages.$inferSelect | undefined, page: CompetitorPage, now: Date): PageOutcome | null {
-  if (!row?.postsFetchedAt || now.getTime() - row.postsFetchedAt.getTime() >= POSTS_REFRESH_MS) return null;
-  return row.postsStatus === "not_found" ? { page, state: "not_found", reason: row.postsError ?? "not found" } : { page, state: "readable" };
+export function freshPostsOutcome(row: typeof linkedinCompanyPages.$inferSelect | undefined, page: CompetitorPage, now: Date): PageOutcome | null {
+  if (row?.postsFetchedAt && now.getTime() - row.postsFetchedAt.getTime() < POSTS_REFRESH_MS) {
+    return row.postsStatus === "not_found" ? { page, state: "not_found", reason: row.postsError ?? "not found" } : { page, state: "readable" };
+  }
+  // Due, but every provider failed on it a moment ago: skipped, no provider call.
+  const failedAt = row?.postsFailedAt;
+  if (failedAt && now.getTime() - failedAt.getTime() < POSTS_FAILED_RETRY_MS && (!row.postsFetchedAt || failedAt > row.postsFetchedAt)) {
+    return { page, state: "failed", reason: row.postsFailure ?? "every posts provider failed" };
+  }
+  return null;
 }
 
 async function ensurePosts(meter: EngagementMeter, page: CompetitorPage, now: Date): Promise<PageOutcome> {
@@ -473,9 +490,8 @@ async function ensurePosts(meter: EngagementMeter, page: CompetitorPage, now: Da
   const [seen] = await db.select().from(linkedinCompanyPages).where(eq(linkedinCompanyPages.slug, page.slug)).limit(1);
   const known = freshPostsOutcome(seen, page, now);
   if (known) return known;
-  // A page no provider can read is never remembered, so every serve re-reads it
-  // (~2.4 s of provider calls under the lock): concurrent serves of the same page
-  // share that one read instead of queuing on the lock and repeating it.
+  // Concurrent serves of a due page share one read instead of queuing on the lock
+  // and repeating it (a failed read is remembered only once it returns).
   const outcome = await singleFlight(`linkedin-page:${page.slug}`, () => readPageUnderLock(meter, page, now));
   return { ...outcome, page };
 }
@@ -488,10 +504,16 @@ async function readPageUnderLock(meter: EngagementMeter, page: CompetitorPage, n
     if (fresh) return fresh;
 
     const read = await readPosts(meter, page, POSTS_PROVIDERS);
-    if (read.kind === "failed") return { page, state: "failed", reason: read.reason };
+    if (read.kind === "failed") {
+      // Remembered for POSTS_FAILED_RETRY_MS so the next serves skip it without a call.
+      // The posts already listed (posts_fetched_at, posts_count, posts_status) stay.
+      const failed = { postsFailedAt: now, postsFailure: read.reason.slice(0, 1000) };
+      await tx.insert(linkedinCompanyPages).values({ slug: page.slug, url: page.url, ...failed }).onConflictDoUpdate({ target: linkedinCompanyPages.slug, set: failed });
+      return { page, state: "failed", reason: read.reason };
+    }
     if (read.kind === "not_found") {
       // A permanent answer: remembered for the refresh period so no serve pays to re-learn it.
-      const set = { postsFetchedAt: now, postsCount: 0, postsStatus: "not_found", postsError: read.reason.slice(0, 1000) };
+      const set = { postsFetchedAt: now, postsCount: 0, postsStatus: "not_found", postsError: read.reason.slice(0, 1000), postsFailedAt: null, postsFailure: null };
       await tx.insert(linkedinCompanyPages).values({ slug: page.slug, url: page.url, ...set }).onConflictDoUpdate({ target: linkedinCompanyPages.slug, set });
       return { page, state: "not_found", reason: read.reason };
     }
@@ -505,7 +527,7 @@ async function readPageUnderLock(meter: EngagementMeter, page: CompetitorPage, n
         .values({ postId, pageSlug: page.slug, postUrl: p.url ?? null, text: p.text ?? null, publishedAt: published && !Number.isNaN(published.getTime()) ? published : null })
         .onConflictDoUpdate({ target: linkedinCompanyPosts.postId, set: { postUrl: sql`excluded.post_url`, text: sql`excluded.text`, lastSeenAt: now } });
     }
-    const set = { postsFetchedAt: now, postsCount: read.posts.length, postsStatus: "ok", postsError: null };
+    const set = { postsFetchedAt: now, postsCount: read.posts.length, postsStatus: "ok", postsError: null, postsFailedAt: null, postsFailure: null };
     await tx.insert(linkedinCompanyPages).values({ slug: page.slug, url: page.url, ...set }).onConflictDoUpdate({ target: linkedinCompanyPages.slug, set });
     return { page, state: "readable" };
   });

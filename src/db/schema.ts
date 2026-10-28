@@ -720,6 +720,11 @@ export const linkedinCompanyPages = pgTable("linkedin_company_pages", {
   // "ok" | "not_found" (no posts provider knows the page; re-checked after the refresh period). null = ok (pre-0036 rows).
   postsStatus: text("posts_status"),
   postsError: text("posts_error"),
+  // Last time EVERY posts provider failed on the page (none said "not found" for all,
+  // none answered posts): the page is skipped without a provider call until
+  // POSTS_FAILED_RETRY_MS has passed (migration 0047). posts_failure = that read's reason.
+  postsFailedAt: timestamp("posts_failed_at", { withTimezone: true }),
+  postsFailure: text("posts_failure"),
 });
 
 // Silver: one post of a company page. `published_at` is APPROXIMATE (LinkedIn
