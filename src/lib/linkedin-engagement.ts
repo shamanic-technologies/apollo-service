@@ -46,7 +46,7 @@ import {
   linkedinProfiles,
   linkedinTregCalls,
 } from "../db/schema.js";
-import { advisoryXactLock } from "./advisory-lock.js";
+import { advisoryXactLock, singleFlight } from "./advisory-lock.js";
 import { authorizeCredit, type AuthorizeCreditResult } from "./billing-client.js";
 import { describeCreditRefusal } from "./credit-refusal.js";
 import { decryptKey, type TrackingContext } from "./keys-client.js";
@@ -461,13 +461,31 @@ async function readPosts(meter: EngagementMeter, page: CompetitorPage, providers
   return { kind: "failed", reason: `no posts provider could read the page: ${[...notFound, ...skipped].join(" | ")}` };
 }
 
+/** The page's remembered posts answer while it is fresh; null = due for a read. */
+function freshPostsOutcome(row: typeof linkedinCompanyPages.$inferSelect | undefined, page: CompetitorPage, now: Date): PageOutcome | null {
+  if (!row?.postsFetchedAt || now.getTime() - row.postsFetchedAt.getTime() >= POSTS_REFRESH_MS) return null;
+  return row.postsStatus === "not_found" ? { page, state: "not_found", reason: row.postsError ?? "not found" } : { page, state: "readable" };
+}
+
 async function ensurePosts(meter: EngagementMeter, page: CompetitorPage, now: Date): Promise<PageOutcome> {
+  // Lock-free fast path (BOX-DB-LOAD-1028): a page read today needs no lock, no
+  // transaction. Only a due page takes the lock, and re-reads under it.
+  const [seen] = await db.select().from(linkedinCompanyPages).where(eq(linkedinCompanyPages.slug, page.slug)).limit(1);
+  const known = freshPostsOutcome(seen, page, now);
+  if (known) return known;
+  // A page no provider can read is never remembered, so every serve re-reads it
+  // (~2.4 s of provider calls under the lock): concurrent serves of the same page
+  // share that one read instead of queuing on the lock and repeating it.
+  const outcome = await singleFlight(`linkedin-page:${page.slug}`, () => readPageUnderLock(meter, page, now));
+  return { ...outcome, page };
+}
+
+async function readPageUnderLock(meter: EngagementMeter, page: CompetitorPage, now: Date): Promise<PageOutcome> {
   return db.transaction(async (tx) => {
     await advisoryXactLock(tx, `linkedin-page:${page.slug}`);
     const [row] = await tx.select().from(linkedinCompanyPages).where(eq(linkedinCompanyPages.slug, page.slug)).limit(1);
-    if (row?.postsFetchedAt && now.getTime() - row.postsFetchedAt.getTime() < POSTS_REFRESH_MS) {
-      return row.postsStatus === "not_found" ? { page, state: "not_found", reason: row.postsError ?? "not found" } : { page, state: "readable" };
-    }
+    const fresh = freshPostsOutcome(row, page, now);
+    if (fresh) return fresh;
 
     const read = await readPosts(meter, page, POSTS_PROVIDERS);
     if (read.kind === "failed") return { page, state: "failed", reason: read.reason };

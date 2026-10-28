@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { advisoryXactLock, enrichLockKey, matchLockKey } from "../../src/lib/advisory-lock.js";
+import { advisoryXactLock, enrichLockKey, matchLockKey, singleFlight } from "../../src/lib/advisory-lock.js";
 import { enrichPerson, matchPersonByName } from "../../src/lib/apollo-client.js";
 
 /**
@@ -28,6 +28,40 @@ describe("advisoryXactLock", () => {
     const flattened = JSON.stringify(sqlArg.queryChunks);
     expect(flattened).toContain("pg_advisory_xact_lock");
     expect(flattened).toContain("hashtext");
+  });
+});
+
+describe("singleFlight (BOX-DB-LOAD-1028)", () => {
+  it("concurrent callers for one key share ONE run of the work", async () => {
+    let runs = 0;
+    let release!: (v: string) => void;
+    const work = () => {
+      runs++;
+      return new Promise<string>((r) => (release = r));
+    };
+    const a = singleFlight("k", work);
+    const b = singleFlight("k", work);
+    release("answer");
+    expect(await Promise.all([a, b])).toEqual(["answer", "answer"]);
+    expect(runs).toBe(1);
+  });
+
+  it("different keys run independently, and a later call after settle runs again", async () => {
+    let runs = 0;
+    const work = async () => ++runs;
+    await Promise.all([singleFlight("x", work), singleFlight("y", work)]);
+    expect(runs).toBe(2);
+    await singleFlight("x", work);
+    expect(runs).toBe(3);
+  });
+
+  it("a follower whose leader threw runs the work itself", async () => {
+    let reject!: (e: Error) => void;
+    const leader = singleFlight("z", () => new Promise<string>((_, r) => (reject = r)));
+    const follower = singleFlight("z", async () => "own");
+    reject(new Error("leader's org has no credit"));
+    await expect(leader).rejects.toThrow("no credit");
+    expect(await follower).toBe("own");
   });
 });
 
