@@ -438,6 +438,9 @@ window. `src/lib/linkedin-engagement-spec.ts` (pure) + `src/lib/linkedin-engagem
   A dead page (`linkedin_company_pages.posts_status = not_found`, re-checked after
   24h) is SKIPPED with a loud log + warn trace, the other pages served; every page
   dead = 422 `competitor_pages_unreadable` (all providers down = 502, retryable).
+  A page every provider FAILED on (`posts_failed_at`, BOX-LOAD-1028: diffco-us drew
+  ~1,000 reads/h from lead-service's serve loop) is skipped WITHOUT a call for
+  `POSTS_FAILED_RETRY_MS` (1h), same answer; an unreadable 200/4xx stops the chain.
   No provider resolves `showcase/eimmigration` (all three probed).
 - **`doneReason` says WHY a serve is done** (`/search/next`, engagement only, null
   while `done=false`): `no_recent_posts` = no competitor page has a post published
@@ -1137,6 +1140,9 @@ campaign. features-service prices workflows from runs, so it read 11x ROI.
   `actualCostInUsdCents`, descendants included. Other-org spend counts (the
   reveal cache is fleet-wide) and is split out as `paidByOtherOrgsCostInUsdCents`.
   A paying run runs-service does not return lands in `unpricedRunIds`, never as 0.
+- **Fast (BOX-LOAD-1028, was ~1.6 s mean, the top apollo statement):** each person's
+  paid rows are kept in memory per key (person id / email) for 10 min, empty included;
+  each SQL branch hits a covering index (migration 0047). Do not add a branch without one.
 - **Nothing is billed, declared or moved.** Declaring the cost again on the
   serving run would bill the org twice; the earlier payer stays the payer.
 - Prod replay 2026-10-17 (aldhanab campaigns a41c4e52 + 3de6bdb2): 382 served,
@@ -1504,9 +1510,9 @@ paying (/enrich, /match, firmographics, job postings, audience companies, Linked
 pages). A new caller follows the same shape: a lock taken before the cache check
 makes every hit a transaction + lock, and a waiter holds a pool connection and a
 Postgres backend for the whole wait. Where a miss is slow and NEVER cached (a
-LinkedIn page no provider can read is re-read by every serve, ~2.4 s under the
-lock), wrap the locked part in `singleFlight(key, …)`: concurrent callers in this
-process share the one read; a follower whose leader threw runs its own.
+LinkedIn page every provider fails on, before it is parked), wrap the locked part
+in `singleFlight(key, …)`: concurrent callers in this process share the one read; a
+follower whose leader threw runs its own.
 
 ## U+0000 in provider data is stripped at the DRIVER, never per field
 
