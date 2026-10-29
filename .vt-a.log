@@ -1,0 +1,9 @@
+
+ RUN  v4.1.12 /Users/kevinlourd/conductor/worktrees/factory-p3-next-apollo-service
+
+
+ Test Files  80 passed | 3 skipped (83)
+      Tests  852 passed | 32 skipped (884)
+   Start at  21:47:33
+   Duration  34.60s (transform 1.36s, setup 450ms, import 9.29s, tests 18.05s, environment 4ms)
+

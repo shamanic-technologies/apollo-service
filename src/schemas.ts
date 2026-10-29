@@ -2526,6 +2526,51 @@ registry.registerPath({
   },
 });
 
+// ─── FACTORY-P3 next outcomes: the stored verification script's doors ─────
+
+const VerifierCallAnswerSchema = z.object({
+  verificationId: z.string(),
+  verifier: z.string(),
+  verdict: z.string().nullable(),
+  error: z.string().nullable(),
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/email-verifier-calls",
+  summary: "One verifier call for the stored verification script (its door; service key)",
+  description:
+    "FACTORY-P3 next outcomes (email_found). Serves ONLY a verification in flight in this service (`x-caller-run-id` = the run that asked this service, + the address): our own verifier call (ContactOut, BounceVerify, TryKitt, MillionVerifier, or BounceBan with its resume and polling) on the script's run (`x-run-id`), with its billing hold, run, bronze row (naming the caller's run) and email_checked declaration. 409 when nothing is in flight; 502 = refused (billing, key), the refusal reaching the caller as our own error.",
+  request: {
+    headers: z.object({ "x-api-key": z.string(), "x-org-id": z.string(), "x-user-id": z.string(), "x-run-id": z.string(), "x-caller-run-id": z.string() }),
+    body: { required: true, content: { "application/json": { schema: z.object({ verifier: z.enum(["contactout", "bounceverify", "trykitt", "millionverifier", "bounceban"]), email: z.string() }) } } },
+  },
+  responses: {
+    200: { description: "The call's bronze row (error = the verifier did not answer)", content: { "application/json": { schema: VerifierCallAnswerSchema } } },
+    400: { description: "Missing header or field" },
+    409: { description: "No verification of this address in flight for that run" },
+    502: { description: "Refused (billing, key)" },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/email-verifier-calls/apify",
+  summary: "Whether BounceVerify is asked now (Apify not out of usage), for the stored verification script",
+  request: { headers: z.object({ "x-api-key": z.string(), "x-org-id": z.string(), "x-user-id": z.string(), "x-caller-run-id": z.string() }), query: z.object({ email: z.string() }) },
+  responses: { 200: { description: "Availability", content: { "application/json": { schema: z.object({ available: z.boolean() }) } } }, 409: { description: "No verification in flight" } },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/email-verification-decisions/recorded",
+  summary: "Every verification decision with each vendor call and what was decided (service key; personal data)",
+  description:
+    "FACTORY-P3 next outcomes (email_found). Oldest first by `seq`, a row served 60 s after it was written. `path` = `service` (our waterfall on its own `email-verification` run) or `script` (the stored script while switched). `calls` = each vendor call in the stored script's words (`apollo.email.verify` {verifier, email} -> the bronze row; `apollo.apify.available`), `held` = the step-1 verdict reused (then only BounceBan runs), `result` = what was decided. Read by workflow-service's case recorder.",
+  request: { headers: z.object({ "x-api-key": z.string() }), query: z.object({ after: z.string().optional(), limit: z.string().optional().describe("1..1000, default 200") }) },
+  responses: { 200: { description: "One page", content: { "application/json": { schema: z.object({ decisions: z.array(z.record(z.string(), z.unknown())), nextAfter: z.number().int(), hasMore: z.boolean() }) } } } },
+});
+
 // ─── GET /internal/email-verifications/history ───────────────────────────
 
 export const VerificationHistoryQuerySchema = z

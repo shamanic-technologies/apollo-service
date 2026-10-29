@@ -47,6 +47,17 @@ import { apifyCreditsExhausted, type ProviderErrorDetail } from "./provider-erro
 import { reportProviderCreditsExhausted } from "./credit-alert.js";
 import { domainHasMx, MailDomainLookupError } from "./mail-domain.js";
 import { TREG_COST_NAME } from "./email-finders.js";
+import { emailVerificationDecisions } from "../db/schema.js";
+import {
+  decideWithScript,
+  findInFlight,
+  registerInFlight,
+  releaseInFlight,
+  verifyScriptSwitch,
+  VerifyScriptError,
+  type DecisionCall,
+  type InFlight,
+} from "./email-verify-script.js";
 
 export const VERIFY_EMAIL_COST_NAME = "apify-bounceverify-email";
 export const VERIFIER = "bounceverify";
@@ -150,8 +161,14 @@ export interface EmailVerificationResult {
 export interface VerificationContext {
   identity: IdentityHeaders;
   tracking: TrackingContext;
-  /** The caller's run; the verification run hangs under it. */
+  /** The caller's run (recorded on every bronze row; the verification runs hang under it). */
   runId?: string;
+  /**
+   * The run each verifier call's run hangs under when it is not the caller's (FACTORY-P3 next outcomes): the
+   * decision's own `email-verification` run on our waterfall, the stored script's run on its door. Billing, bronze rows
+   * and alerts still name the caller's run.
+   */
+  callRunParentId?: string;
   source: string;
   /** The subject a caller named per (normalized) address; absent = the person's lead in lead-service. */
   subjects?: ReadonlyMap<string, NamedSubject>;
@@ -523,7 +540,7 @@ async function meteredVerification(
     workflowSlug: tracking.workflowSlug,
     serviceName: "apollo-service",
     taskName: plan.taskName,
-    parentRunId: ctx.runId,
+    parentRunId: ctx.callRunParentId ?? ctx.runId,
   });
 
   let holdId: string | null = null;
@@ -793,6 +810,57 @@ export function apifyOut(now: number = Date.now()): boolean {
 /** Step 1, in price order. Each one is tried only when the previous one FAILED to answer. */
 export const STEP_ONE_ORDER = ["contactout", "bounceverify", "trykitt", "millionverifier"] as const;
 
+/** A verifier call as the stored script reads it (the door's answer; the decision record's call). */
+export function verifierAnswer(row: EmailVerification): Record<string, unknown> {
+  return { verificationId: row.id, verifier: row.verifier, verdict: row.verdict, error: row.error };
+}
+
+/**
+ * One BounceVerify call with what follows an Apify exhaustion answer: staff reported once, BounceVerify skipped for
+ * APIFY_OUT_RETRY_MS. Our own waterfall and the script's door run exactly this.
+ */
+async function bounceVerifyStep(email: string, ctx: VerificationContext): Promise<EmailVerification> {
+  const row = await bounceVerifyPass(email, ctx);
+  if (row.error && looksLikeApifyCreditExhaustion(row.httpStatus, row.error)) {
+    reportProviderCreditsExhausted("apify", { ...ctx.identity, runId: ctx.runId }, {
+      operation: "bounceverify",
+      reason: "Apify refused the email-verification actor: the account's usage limit is reached (TryKitt / MillionVerifier verify instead)",
+      upstreamStatus: row.httpStatus ?? undefined,
+      upstreamBody: row.error,
+    });
+    apifyOutUntil = Date.now() + APIFY_OUT_RETRY_MS;
+    console.warn(`[Apollo Service] verify_email.apify_out skipped for ${APIFY_OUT_RETRY_MS / 60000}min`);
+  }
+  return row;
+}
+
+/** One step-1 verifier call (no decision): the row it stored, failed or not. */
+export async function stepOneCall(verifier: string, email: string, ctx: VerificationContext): Promise<EmailVerification> {
+  if (verifier === "bounceverify") return bounceVerifyStep(email, ctx);
+  const step = verifier === "contactout" ? CONTACTOUT_STEP : verifier === "trykitt" ? TRYKITT_STEP : verifier === "millionverifier" ? MILLIONVERIFIER_STEP : null;
+  if (!step) throw new EmailVerificationError(`no step-1 verifier named ${verifier}`);
+  return tregVerifierPass(email, ctx, step);
+}
+
+/**
+ * The BounceBan call (an earlier task still running for this address is resumed, polled for free, never paid again),
+ * with the error our waterfall throws when it gives no verdict: pending (still running) or loud.
+ */
+export async function bounceBanCall(email: string, ctx: VerificationContext): Promise<{ row: EmailVerification; failure: EmailVerificationError | null }> {
+  const pending = await pendingBounceban(email);
+  const row = await bounceBanPass(email, ctx, pending ? String((pending.rawResult as { id: string }).id) : null);
+  if (row.error && isBounceBanInProgress(row.rawResult as Record<string, unknown> | null)) {
+    const id = (row.rawResult as { id?: unknown } | null)?.id;
+    return { row, failure: new SecondOpinionPendingError(`${row.verifier}: ${row.error}`, typeof id === "string" ? id : null) };
+  }
+  if (row.error || row.verdict === null) return { row, failure: new EmailVerificationError(`${row.verifier}: ${row.error ?? "no verdict"}`) };
+  return { row, failure: null };
+}
+
+/** The decision's record: every vendor call in the stored script's words (FACTORY-P3 next outcomes). */
+const VERIFY_CALL = "apollo.email.verify";
+const APIFY_CALL = "apollo.apify.available";
+
 /**
  * STEP 1 — ONE verdict, from the cheapest verifier that ANSWERS (owner,
  * 2026-10-16: « Les 4 ne sont que des fallback de la même étape 1. Dès qu'on a
@@ -805,29 +873,18 @@ export const STEP_ONE_ORDER = ["contactout", "bounceverify", "trykitt", "million
  * APIFY_OUT_RETRY_MS (staff emailed once), then asked again. Every verifier
  * failing → loud, never a verdict.
  */
-async function stepOne(email: string, ctx: VerificationContext): Promise<EmailVerification> {
+async function stepOne(email: string, ctx: VerificationContext, calls: DecisionCall[]): Promise<EmailVerification> {
   const failures: string[] = [];
   for (const verifier of STEP_ONE_ORDER) {
-    let row: EmailVerification;
     if (verifier === "bounceverify") {
-      if (apifyOut()) {
+      const available = !apifyOut();
+      calls.push({ name: APIFY_CALL, args: { email }, answer: { ok: available, data: {} } });
+      if (!available) {
         failures.push("bounceverify: skipped, Apify out of usage");
         continue;
       }
-      row = await bounceVerifyPass(email, ctx);
-      if (row.error && looksLikeApifyCreditExhaustion(row.httpStatus, row.error)) {
-        reportProviderCreditsExhausted("apify", { ...ctx.identity, runId: ctx.runId }, {
-          operation: "bounceverify",
-          reason: "Apify refused the email-verification actor: the account's usage limit is reached (TryKitt / MillionVerifier verify instead)",
-          upstreamStatus: row.httpStatus ?? undefined,
-          upstreamBody: row.error,
-        });
-        apifyOutUntil = Date.now() + APIFY_OUT_RETRY_MS;
-        console.warn(`[Apollo Service] verify_email.apify_out skipped for ${APIFY_OUT_RETRY_MS / 60000}min`);
-      }
-    } else {
-      row = await tregVerifierPass(email, ctx, verifier === "contactout" ? CONTACTOUT_STEP : verifier === "trykitt" ? TRYKITT_STEP : MILLIONVERIFIER_STEP);
     }
+    const row = await recordedCall(calls, verifier, email, () => stepOneCall(verifier, email, ctx));
     if (!row.error && row.verdict !== null) return row;
     failures.push(`${row.verifier}: ${row.error ?? "no verdict"}`);
     console.warn(`[Apollo Service] verify_email.step1_failed verifier=${row.verifier} next=${STEP_ONE_ORDER[STEP_ONE_ORDER.indexOf(verifier) + 1] ?? "none"} error=${(row.error ?? "").slice(0, 200)}`);
@@ -835,16 +892,23 @@ async function stepOne(email: string, ctx: VerificationContext): Promise<EmailVe
   throw new EmailVerificationError(`every step-1 verifier failed — ${failures.join("; ")}`, apifyOut() ? apifyCreditsExhausted() : undefined);
 }
 
-/** STEP 2 — BounceBan decides a step-1 catch_all / unknown. A failure is loud: the step-1 verdict alone is never served. */
-async function secondOpinion(email: string, ctx: VerificationContext): Promise<EmailVerificationResult> {
-  // An earlier BounceBan task still running for this address is resumed (polled, free), not paid again.
-  const pending = await pendingBounceban(email);
-  const row = await bounceBanPass(email, ctx, pending ? String((pending.rawResult as { id: string }).id) : null);
-  if (row.error && isBounceBanInProgress(row.rawResult as Record<string, unknown> | null)) {
-    const id = (row.rawResult as { id?: unknown } | null)?.id;
-    throw new SecondOpinionPendingError(`${row.verifier}: ${row.error}`, typeof id === "string" ? id : null);
+/** One verifier call, recorded as the script's door answers it: its row, or the refusal (re-thrown). */
+async function recordedCall<T>(calls: DecisionCall[], verifier: string, email: string, call: () => Promise<T>, rowOf: (t: T) => EmailVerification = (t) => t as unknown as EmailVerification): Promise<T> {
+  const args = { verifier, email };
+  try {
+    const out = await call();
+    calls.push({ name: VERIFY_CALL, args, answer: { ok: true, data: verifierAnswer(rowOf(out)) } });
+    return out;
+  } catch (err) {
+    calls.push({ name: VERIFY_CALL, args, answer: { ok: false, data: { error: errorMessage(err) } } });
+    throw err;
   }
-  if (row.error || row.verdict === null) failLoud(row);
+}
+
+/** STEP 2 — BounceBan decides a step-1 catch_all / unknown. A failure is loud: the step-1 verdict alone is never served. */
+async function secondOpinion(email: string, ctx: VerificationContext, calls: DecisionCall[]): Promise<EmailVerificationResult> {
+  const { row, failure } = await recordedCall(calls, SECOND_OPINION_VERIFIER, email, () => bounceBanCall(email, ctx), (x) => x.row);
+  if (failure) throw failure;
   return toResult(row, false);
 }
 
@@ -855,6 +919,11 @@ async function secondOpinion(email: string, ctx: VerificationContext): Promise<E
  * Every vendor call runs the full cost protocol (provision → authorize →
  * execute → actualize, hold cancelled). Throws EmailVerificationError on any
  * failure — never returns an unverified address as deliverable.
+ *
+ * The DECISION (which verifier, when the next, when BounceBan) runs as the stored
+ * script while workflow-service says email_found is switched for this service
+ * (lib/email-verify-script.ts), else here on its own `email-verification` run;
+ * either way it is recorded (`email_verification_decisions`).
  */
 export async function verifyRevealedEmail(rawEmail: string, ctx: VerificationContext): Promise<EmailVerificationResult> {
   const email = normalizeEmail(rawEmail);
@@ -869,11 +938,149 @@ export async function verifyRevealedEmail(rawEmail: string, ctx: VerificationCon
       first = await recheckHeldInvalid(first, email, ctx);
     }
     if (!needsSecondOpinion(first)) return toResult(first, true);
-  } else {
-    first = await stepOne(email, ctx);
-    if (!needsSecondOpinion(first)) return toResult(first, false);
   }
-  return secondOpinion(email, ctx);
+  const held = first ? { verificationId: first.id, verifier: first.verifier, verdict: first.verdict as string } : null;
+  const decide = await verifyScriptSwitch();
+  if (decide.switched && decide.dynasty && ctx.runId && ctx.identity.userId) return decideByScript(decide.dynasty, email, held, ctx, ctx.runId);
+  return decideHere(email, first ?? null, held, ctx);
+}
+
+/** Our own decision, on its own `email-verification` run (child of the caller's): Monitoring's service path. */
+async function decideHere(email: string, first: EmailVerification | null, held: DecisionHeld, ctx: VerificationContext): Promise<EmailVerificationResult> {
+  const { identity, tracking } = ctx;
+  const run = await createRun({
+    orgId: identity.orgId,
+    userId: identity.userId,
+    brandIds: tracking.brandIds,
+    campaignId: tracking.campaignId,
+    audienceId: tracking.audienceId,
+    featureSlug: tracking.featureSlug,
+    workflowSlug: tracking.workflowSlug,
+    serviceName: "apollo-service",
+    taskName: DECISION_TASK,
+    parentRunId: ctx.runId,
+  });
+  const calls: DecisionCall[] = [];
+  const own: VerificationContext = { ...ctx, callRunParentId: run.id };
+  try {
+    let result: EmailVerificationResult;
+    if (first) result = await secondOpinion(email, own, calls);
+    else {
+      const one = await stepOne(email, own, calls);
+      result = needsSecondOpinion(one) ? await secondOpinion(email, own, calls) : toResult(one, false);
+    }
+    await updateRun(run.id, "completed", identity).catch((e) => console.error(`[Apollo Service] verify_email.decision_close_failed run=${run.id}`, e));
+    await recordDecision({ email, ctx, path: "service", runId: run.id, held, calls, result, error: null });
+    return result;
+  } catch (err) {
+    await updateRun(run.id, "failed", identity).catch((e) => console.error(`[Apollo Service] verify_email.decision_close_failed run=${run.id}`, e));
+    await recordDecision({ email, ctx, path: "service", runId: run.id, held, calls, result: null, error: errorMessage(err) });
+    throw err;
+  }
+}
+
+/** The stored script decides; its doors (below) run each verifier call here, on the script's run. */
+async function decideByScript(dynasty: string, email: string, held: DecisionHeld, ctx: VerificationContext, callerRunId: string): Promise<EmailVerificationResult> {
+  const entry = registerInFlight(callerRunId, email, ctx);
+  try {
+    const out = await decideWithScript({
+      dynasty,
+      orgId: ctx.identity.orgId,
+      userId: ctx.identity.userId!,
+      callerRunId,
+      tracking: ctx.tracking,
+      email,
+      held,
+      subject: ctx.subjects?.get(email),
+    });
+    const [row] = await db.select().from(emailVerifications).where(eq(emailVerifications.id, out.verificationId!));
+    if (!row || row.email !== email || row.verdict === null) throw new VerifyScriptError(`the script decided on verification ${out.verificationId}, which is not a verdict for this address`, out.runId);
+    const result = toResult(row, false);
+    await recordDecision({ email, ctx, path: "script", runId: out.runId, held, calls: entry.calls, result, error: null });
+    return result;
+  } catch (err) {
+    await recordDecision({ email, ctx, path: "script", runId: err instanceof VerifyScriptError ? err.runId : null, held, calls: entry.calls, result: null, error: errorMessage(err) });
+    // The error our own code would have thrown at that point (billing refusal, BounceBan still running, every
+    // verifier failed...), so every caller answers exactly as before.
+    if (entry.thrown) throw entry.thrown;
+    if (err instanceof EmailVerificationError) throw err;
+    throw new EmailVerificationError(errorMessage(err));
+  } finally {
+    releaseInFlight(callerRunId, entry as InFlight<unknown>);
+  }
+}
+
+export const DECISION_TASK = "email-verification";
+type DecisionHeld = { verificationId: string; verifier: string; verdict: string } | null;
+
+/** Fail-soft: the verdict is the product, its decision record is evidence (personal data: never logged). */
+async function recordDecision(d: {
+  email: string;
+  ctx: VerificationContext;
+  path: "service" | "script";
+  runId: string | null;
+  held: DecisionHeld;
+  calls: DecisionCall[];
+  result: EmailVerificationResult | null;
+  error: string | null;
+}): Promise<void> {
+  try {
+    await db.insert(emailVerificationDecisions).values({
+      email: d.email,
+      orgId: d.ctx.identity.orgId,
+      callerRunId: d.ctx.runId ?? null,
+      runId: d.runId,
+      source: d.ctx.source,
+      path: d.path,
+      held: d.held,
+      calls: d.calls,
+      result: d.result ? { verificationId: d.result.verificationId, verifier: d.result.verifier, verdict: d.result.verdict, deliverable: d.result.deliverable } : null,
+      error: d.error ? d.error.slice(0, 1000) : null,
+    });
+  } catch (err) {
+    console.error(`[Apollo Service] verify_email.decision NOT recorded (the verdict stands): ${errorMessage(err)}`);
+  }
+}
+
+/**
+ * The script's door for one verifier call (`POST /internal/email-verifier-calls`): only for a verification in flight
+ * here (caller run x address), on the SCRIPT's run (`scriptRunId`), exactly our own call. Answers the row the script
+ * reads; keeps the error our waterfall would have thrown for the caller. Throws when nothing is in flight.
+ */
+export async function doorVerifierCall(input: { callerRunId: string; scriptRunId: string; verifier: string; email: string }): Promise<{ status: number; body: Record<string, unknown> }> {
+  const email = normalizeEmail(input.email);
+  const entry = findInFlight<VerificationContext>(input.callerRunId, email);
+  if (!entry) return { status: 409, body: { error: `no verification of this address in flight for run ${input.callerRunId}` } };
+  const ctx: VerificationContext = { ...entry.ctx, callRunParentId: input.scriptRunId };
+  const args = { verifier: input.verifier, email };
+  try {
+    if (input.verifier === SECOND_OPINION_VERIFIER) {
+      const { row, failure } = await bounceBanCall(email, ctx);
+      if (failure) entry.thrown = failure;
+      const data = verifierAnswer(row);
+      entry.calls.push({ name: VERIFY_CALL, args, answer: { ok: true, data } });
+      return { status: 200, body: data };
+    }
+    if (!(STEP_ONE_ORDER as readonly string[]).includes(input.verifier)) return { status: 400, body: { error: `no verifier named ${input.verifier}` } };
+    const row = await stepOneCall(input.verifier, email, ctx);
+    const data = verifierAnswer(row);
+    entry.calls.push({ name: VERIFY_CALL, args, answer: { ok: true, data } });
+    return { status: 200, body: data };
+  } catch (err) {
+    entry.thrown = err instanceof Error ? err : new EmailVerificationError(String(err));
+    const error = errorMessage(err);
+    entry.calls.push({ name: VERIFY_CALL, args, answer: { ok: false, data: { error } } });
+    return { status: 502, body: { error } };
+  }
+}
+
+/** The script's door for "is BounceVerify asked now?" (`GET /internal/email-verifier-calls/apify`). */
+export function doorApifyAvailable(input: { callerRunId: string; email: string }): { status: number; body: Record<string, unknown> } {
+  const entry = findInFlight<VerificationContext>(input.callerRunId, normalizeEmail(input.email));
+  if (!entry) return { status: 409, body: { error: `no verification of this address in flight for run ${input.callerRunId}` } };
+  const available = !apifyOut();
+  entry.calls.push({ name: APIFY_CALL, args: { email: entry.email }, answer: { ok: available, data: {} } });
+  return { status: 200, body: { available } };
 }
 
 /**

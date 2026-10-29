@@ -17,6 +17,7 @@ import transferBrandRoutes from "./routes/transfer-brand.js";
 import phoneRevealRoutes from "./routes/phone-reveal.js";
 import emailFinderRoutes from "./routes/email-finder.js";
 import emailVerificationRoutes from "./routes/email-verifications.js";
+import emailVerifierCallRoutes from "./routes/email-verifier-calls.js";
 import verificationHistoryRoutes from "./routes/verification-history.js";
 import acquisitionCostRoutes from "./routes/acquisition-costs.js";
 import webhookRoutes from "./routes/webhook.js";
@@ -71,6 +72,7 @@ app.use(matchRoutes);
 app.use(phoneRevealRoutes);
 app.use(emailFinderRoutes);
 app.use(emailVerificationRoutes);
+app.use(emailVerifierCallRoutes); // FACTORY-P3 next outcomes: the stored verification script's doors + recorded decisions
 app.use(verificationHistoryRoutes);
 app.use(acquisitionCostRoutes);
 app.use(transferBrandRoutes);
