@@ -142,7 +142,7 @@ describe("step 1 = ONE verdict from the cheapest verifier that ANSWERS (ContactO
       ["treg-micro-usd", 2000, "provisioned"],
       ["treg-micro-usd", 1500, "actual"],
     ]);
-    expect(mockCreateRun.mock.calls.map((c) => c[0].taskName)).toEqual(["verify-email-contactout", "verify-email", "verify-email-trykitt"]);
+    expect(mockCreateRun.mock.calls.map((c) => c[0].taskName)).toEqual(["email-verification", "verify-email-contactout", "verify-email", "verify-email-trykitt"]);
     expect(inserted.map((r) => [r.verifier, r.verdict, r.httpStatus, r.costName, r.costQuantity])).toEqual([
       ["contactout", null, 429, "treg-micro-usd", 0],
       ["bounceverify", null, 403, "apify-bounceverify-email", 0],

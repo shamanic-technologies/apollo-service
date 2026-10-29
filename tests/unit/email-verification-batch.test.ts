@@ -129,7 +129,18 @@ describe("POST /email-verifications", () => {
     expect(inserted).toHaveLength(7);
     expect(inserted.every((r) => r.source === "verify:transactional-email-service")).toBe(true);
     expect(inserted.every((r) => r.orgId === "org-1" && r.runId === "run-1")).toBe(true);
-    expect(mockCreateRun).toHaveBeenCalledWith(expect.objectContaining({ orgId: "org-1", userId: "user-1", parentRunId: "run-1", taskName: "verify-email", brandIds: ["b-1"] }));
+    // FACTORY-P3: each address's decision is its own `email-verification` run under x-run-id; every verifier call's run hangs under it.
+    const decisionRuns = new Set<string>();
+    mockCreateRun.mock.calls.forEach((c, i) => {
+      if (c[0].taskName === "email-verification") {
+        expect(c[0]).toMatchObject({ orgId: "org-1", userId: "user-1", parentRunId: "run-1", brandIds: ["b-1"] });
+        decisionRuns.add(`verify-run-${i + 1}`);
+      }
+    });
+    expect(decisionRuns.size).toBe(3);
+    const verifyCalls = mockCreateRun.mock.calls.filter((c) => c[0].taskName === "verify-email");
+    expect(verifyCalls.length).toBeGreaterThan(0);
+    expect(verifyCalls.every((c) => decisionRuns.has(c[0].parentRunId) && c[0].orgId === "org-1" && c[0].brandIds?.[0] === "b-1")).toBe(true);
     expect(mockAuthorizeCredit).toHaveBeenCalledWith(expect.objectContaining({ orgId: "org-1", items: [{ costName: "apify-bounceverify-email", quantity: 1 }] }));
   });
 

@@ -9502,6 +9502,264 @@
         }
       }
     },
+    "/internal/email-verifier-calls": {
+      "post": {
+        "summary": "One verifier call for the stored verification script (its door; service key)",
+        "description": "FACTORY-P3 next outcomes (email_found). Serves ONLY a verification in flight in this service (`x-caller-run-id` = the run that asked this service, + the address): our own verifier call (ContactOut, BounceVerify, TryKitt, MillionVerifier, or BounceBan with its resume and polling) on the script's run (`x-run-id`), with its billing hold, run, bronze row (naming the caller's run) and email_checked declaration. 409 when nothing is in flight; 502 = refused (billing, key), the refusal reaching the caller as our own error.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-caller-run-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "verifier": {
+                    "type": "string",
+                    "enum": [
+                      "contactout",
+                      "bounceverify",
+                      "trykitt",
+                      "millionverifier",
+                      "bounceban"
+                    ]
+                  },
+                  "email": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "verifier",
+                  "email"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The call's bronze row (error = the verifier did not answer)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "verificationId": {
+                      "type": "string"
+                    },
+                    "verifier": {
+                      "type": "string"
+                    },
+                    "verdict": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "error": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "verificationId",
+                    "verifier",
+                    "verdict",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing header or field"
+          },
+          "409": {
+            "description": "No verification of this address in flight for that run"
+          },
+          "502": {
+            "description": "Refused (billing, key)"
+          }
+        }
+      }
+    },
+    "/internal/email-verifier-calls/apify": {
+      "get": {
+        "summary": "Whether BounceVerify is asked now (Apify not out of usage), for the stored verification script",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "email",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-caller-run-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Availability",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "available": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "available"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No verification in flight"
+          }
+        }
+      }
+    },
+    "/internal/email-verification-decisions/recorded": {
+      "get": {
+        "summary": "Every verification decision with each vendor call and what was decided (service key; personal data)",
+        "description": "FACTORY-P3 next outcomes (email_found). Oldest first by `seq`, a row served 60 s after it was written. `path` = `service` (our waterfall on its own `email-verification` run) or `script` (the stored script while switched). `calls` = each vendor call in the stored script's words (`apollo.email.verify` {verifier, email} -> the bronze row; `apollo.apify.available`), `held` = the step-1 verdict reused (then only BounceBan runs), `result` = what was decided. Read by workflow-service's case recorder.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "after",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "1..1000, default 200"
+            },
+            "required": false,
+            "description": "1..1000, default 200",
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "decisions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "nullable": true
+                        }
+                      }
+                    },
+                    "nextAfter": {
+                      "type": "integer"
+                    },
+                    "hasMore": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "decisions",
+                    "nextAfter",
+                    "hasMore"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/email-verifications/history": {
       "get": {
         "summary": "Every email verification ever made, as a resumable feed",
