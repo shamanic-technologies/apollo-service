@@ -200,7 +200,11 @@ describe("verifyRevealedEmail", () => {
     ]);
     expect(mockAuthorizeCredit).toHaveBeenLastCalledWith(expect.objectContaining({ items: [{ costName: "treg-micro-usd", quantity: 4000 }] }));
     expect(mockUpdateCostStatus).toHaveBeenCalledTimes(2);
-    expect(mockCreateRun.mock.calls.map((c) => c[0].taskName)).toEqual(["verify-email-contactout", "verify-email", "verify-email-bounceban"]);
+    // FACTORY-P3: the decision is its own `email-verification` run; each verifier call's run hangs under it.
+    expect(mockCreateRun.mock.calls.map((c) => c[0].taskName)).toEqual(["email-verification", "verify-email-contactout", "verify-email", "verify-email-bounceban"]);
+    const decisionRun = (await mockCreateRun.mock.results[0]!.value).id;
+    expect(mockCreateRun.mock.calls[0][0].parentRunId).toBe("run-1");
+    expect(mockCreateRun.mock.calls.slice(1).every((c) => c[0].parentRunId === decisionRun)).toBe(true);
     expect(rows().map((r) => [r.verifier, r.verdict, r.billed, r.costName, r.costQuantity])).toEqual([
       ["bounceverify", "catch_all", true, "apify-bounceverify-email", 1],
       ["bounceban", "valid", true, "treg-micro-usd", 4000],

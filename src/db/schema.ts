@@ -466,6 +466,30 @@ export const emailVerifications = pgTable(
   ]
 );
 
+// FACTORY-P3 next outcomes (email_found, migration 0048): every verification DECISION with each vendor call in the
+// stored script's words (`calls`: name, args, answer) and what was decided, on either path (`service` = our waterfall
+// on its own `email-verification` run, `script` = the stored script while switched). Read only by
+// GET /internal/email-verification-decisions/recorded. Personal data: never logged.
+export const emailVerificationDecisions = pgTable(
+  "email_verification_decisions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    seq: bigserial("seq", { mode: "number" }).notNull(),
+    email: text("email").notNull(),
+    orgId: uuid("org_id").notNull(),
+    callerRunId: text("caller_run_id"),
+    runId: text("run_id"),
+    source: text("source"),
+    path: text("path").notNull(),
+    held: jsonb("held"),
+    calls: jsonb("calls").notNull(),
+    result: jsonb("result"),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex("idx_email_verification_decisions_seq").on(table.seq), index("idx_email_verification_decisions_created").on(table.createdAt)]
+);
+
 // ─── QuickEnrich (free candidate source) ────────────────────────────────────
 // Bronze: every QuickEnrich search call through treg, verbatim.
 export const quickenrichSearches = pgTable(

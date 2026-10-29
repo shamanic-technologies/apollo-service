@@ -337,6 +337,13 @@
       "when": 1781481600000,
       "tag": "0047_box_load_apollo_waste",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1781568000000,
+      "tag": "0048_email_verification_decisions",
+      "breakpoints": true
     }
   ]
 }
