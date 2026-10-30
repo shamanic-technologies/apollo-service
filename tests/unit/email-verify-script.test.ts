@@ -179,3 +179,15 @@ describe("the stored waterfall decides through our doors", () => {
     expect(decisions[0].calls).toEqual([{ name: "apollo.email.verify", args: { verifier: "contactout", email: "ada@example.com" }, answer: { ok: true, data: { verificationId: "ver-1", verifier: "contactout", verdict: "valid", error: null } } }]);
   });
 });
+
+describe("a decision the world left without a verdict (`unmade`)", () => {
+  it("every verifier silent: the caller gets our own error, Apify's exhaustion named when Apify is out", async () => {
+    const { VerifyScriptError } = await import("../../src/lib/email-verify-script.js");
+    mockDecide.mockRejectedValueOnce(new VerifyScriptError("every step-1 verifier failed — contactout: 429; bounceverify: skipped, Apify out of usage", "script-run-1", true));
+    const ev = await import("../../src/lib/email-verification.js");
+    const err = await ev.verifyRevealedEmail("ada@example.com", CTX).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ev.EmailVerificationError);
+    expect((err as Error).message).toBe("email verification failed: every step-1 verifier failed — contactout: 429; bounceverify: skipped, Apify out of usage");
+    expect(decisions[0]).toMatchObject({ path: "script", runId: "script-run-1", result: null });
+  });
+});
