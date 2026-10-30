@@ -1004,6 +1004,10 @@ async function decideByScript(dynasty: string, email: string, held: DecisionHeld
     // verifier failed...), so every caller answers exactly as before.
     if (entry.thrown) throw entry.thrown;
     if (err instanceof EmailVerificationError) throw err;
+    // Every step-1 verifier silent: our waterfall's own error, Apify's exhaustion named as it always was.
+    if (err instanceof VerifyScriptError && err.unmade && /every step-1 verifier failed/.test(err.message)) {
+      throw new EmailVerificationError(err.message, apifyOut() ? apifyCreditsExhausted() : undefined);
+    }
     throw new EmailVerificationError(errorMessage(err));
   } finally {
     releaseInFlight(callerRunId, entry as InFlight<unknown>);

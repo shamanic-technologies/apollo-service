@@ -114,7 +114,7 @@ export interface ScriptDecision {
 }
 
 export class VerifyScriptError extends Error {
-  constructor(message: string, readonly runId: string | null) {
+  constructor(message: string, readonly runId: string | null, readonly unmade = false) {
     super(message);
   }
 }
@@ -170,6 +170,9 @@ export async function decideWithScript(input: {
   if (!res.ok) throw new VerifyScriptError(`workflow-service POST /internal/scripts/run -> ${res.status}: ${String(body.error ?? text).slice(0, 400)}`, runId);
   const unit = (body.unit ?? null) as { content?: Record<string, unknown> } | null;
   const verificationId = typeof unit?.content?.verificationId === "string" ? unit.content.verificationId : null;
+  // `unmade`: no verdict for a reason the world gave (every verifier silent, BounceBan without one), never a script
+  // error: the caller answers it as our own code always did.
+  if (body.status === "unmade") throw new VerifyScriptError(String(body.error ?? "no verdict"), runId, true);
   if (body.status !== "made" || !verificationId) throw new VerifyScriptError(`the script made no decision (status ${String(body.status)})`, runId);
   return { runId, scriptSlug: typeof body.scriptSlug === "string" ? body.scriptSlug : null, verificationId };
 }
