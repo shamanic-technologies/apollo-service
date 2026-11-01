@@ -802,6 +802,17 @@ only on the provider's own record. `src/lib/reveal-records.ts`.
 - Email = `lower(btrim(email))`; reverse lookup rides `idx_enrichments_email_norm`
   (migration 0046). Without it a 1,000-id batch seq-scanned the wide table (~9s).
 
+## Stored person facts (`POST /internal/reveal-records/person-facts`) — FREE, org-less, read-only
+
+"What did our paid reveals say about Apollo person P?" for human-service's candidate judge
+(BLANK-CANDIDATES-1101: people served before it stored teaser snapshots, 2026-09-17, were
+re-offered blank). `src/lib/person-facts.ts`, same door as the reveal records above.
+Body `{apolloPersonIds}` (1..1000) → `{people: [{apolloPersonId, known, revealedAt, title,
+headline, seniority, city, state, country, organization: {name, domain, industry, employees,
+city, state, country, keywords[]} | null}]}`, request order. Per id the LATEST reveal carrying a
+title or an employer (an empty later reveal never hides facts). Never revealed = `known:false`,
+every field null. **Never an email or a phone** (pinned in `person-facts.db.test.ts`).
+
 ## Other email finders: treg.to and Explee (bronze / silver / exact cost)
 
 apollo-service holds our enrichment PROVIDERS, not only Apollo. `POST

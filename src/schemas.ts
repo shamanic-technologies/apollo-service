@@ -1678,6 +1678,70 @@ registry.registerPath({
   },
 });
 
+// ─── POST /internal/reveal-records/person-facts ──────────────────────────
+
+export const PersonFactsRequestSchema = z
+  .object({
+    apolloPersonIds: z
+      .array(z.string().trim().min(1).max(64))
+      .min(1)
+      .max(1000)
+      .describe("Apollo person ids, 1..1000 per call. Trimmed and de-duplicated; the answer lists each once, in request order."),
+  })
+  .openapi("PersonFactsRequest");
+
+const PersonFactsOrganizationSchema = z
+  .object({
+    name: z.string().nullable(),
+    domain: z.string().nullable(),
+    industry: z.string().nullable(),
+    employees: z.number().int().nullable().describe("Apollo's estimated headcount."),
+    city: z.string().nullable(),
+    state: z.string().nullable(),
+    country: z.string().nullable(),
+    keywords: z.array(z.string()).describe("Apollo's keyword tags for the employer; empty when none stored."),
+  })
+  .openapi("PersonFactsOrganization");
+
+const PersonFactsResponseSchema = z
+  .object({
+    people: z
+      .array(
+        z.object({
+          apolloPersonId: z.string(),
+          known: z.boolean().describe("false = no stored reveal of this id (never revealed, or unknown id): every other field is null."),
+          revealedAt: z.string().nullable().describe("ISO time of the stored reveal the facts come from (the latest one carrying a title or an employer)."),
+          title: z.string().nullable(),
+          headline: z.string().nullable(),
+          seniority: z.string().nullable(),
+          city: z.string().nullable().describe("The PERSON's city."),
+          state: z.string().nullable(),
+          country: z.string().nullable(),
+          organization: PersonFactsOrganizationSchema.nullable().describe("The employer at reveal time; null when the reveal held nothing about it."),
+        }),
+      )
+      .describe("One entry per asked id, request order."),
+  })
+  .openapi("PersonFactsResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/reveal-records/person-facts",
+  summary: "What our stored Apollo reveals said about these people: title, location, employer (free, read-only)",
+  description:
+    "Reads apollo_people_enrichments (one row per paid /enrich or /match reveal we made, any org) and answers, per Apollo person id, the person's title / headline / seniority / location and their employer's name / domain / industry / headcount / location / keywords, from the latest stored reveal carrying a title or an employer. Never an email or a phone. No Apollo call, no cost, nothing written, org-less. For human-service's candidate judge on people served before it stored teaser snapshots. Requires x-api-key = APOLLO_SERVICE_API_KEY. No identity headers.",
+  request: {
+    headers: z.object({ "x-api-key": z.string() }),
+    body: { content: { "application/json": { schema: PersonFactsRequestSchema } }, required: true },
+  },
+  responses: {
+    200: { description: "Stored facts per id (an id never revealed is `known: false`, not an error)", content: { "application/json": { schema: PersonFactsResponseSchema } } },
+    400: { description: "Validation error (empty list, more than 1000 ids, blank id)", content: { "application/json": { schema: ErrorResponseSchema } } },
+    401: { description: "Missing or invalid x-api-key", content: { "application/json": { schema: ErrorResponseSchema } } },
+    500: { description: "Database error", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
 // ─── POST /internal/person-identity ──────────────────────────────────────
 
 export const PersonIdentityRequestSchema = z

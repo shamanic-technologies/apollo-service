@@ -4300,6 +4300,147 @@
           "apolloPersonIds"
         ]
       },
+      "PersonFactsResponse": {
+        "type": "object",
+        "properties": {
+          "people": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "apolloPersonId": {
+                  "type": "string"
+                },
+                "known": {
+                  "type": "boolean",
+                  "description": "false = no stored reveal of this id (never revealed, or unknown id): every other field is null."
+                },
+                "revealedAt": {
+                  "type": "string",
+                  "nullable": true,
+                  "description": "ISO time of the stored reveal the facts come from (the latest one carrying a title or an employer)."
+                },
+                "title": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "headline": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "seniority": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "city": {
+                  "type": "string",
+                  "nullable": true,
+                  "description": "The PERSON's city."
+                },
+                "state": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "country": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "organization": {
+                  "$ref": "#/components/schemas/PersonFactsOrganization"
+                }
+              },
+              "required": [
+                "apolloPersonId",
+                "known",
+                "revealedAt",
+                "title",
+                "headline",
+                "seniority",
+                "city",
+                "state",
+                "country",
+                "organization"
+              ]
+            },
+            "description": "One entry per asked id, request order."
+          }
+        },
+        "required": [
+          "people"
+        ]
+      },
+      "PersonFactsOrganization": {
+        "type": "object",
+        "nullable": true,
+        "properties": {
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "domain": {
+            "type": "string",
+            "nullable": true
+          },
+          "industry": {
+            "type": "string",
+            "nullable": true
+          },
+          "employees": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Apollo's estimated headcount."
+          },
+          "city": {
+            "type": "string",
+            "nullable": true
+          },
+          "state": {
+            "type": "string",
+            "nullable": true
+          },
+          "country": {
+            "type": "string",
+            "nullable": true
+          },
+          "keywords": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Apollo's keyword tags for the employer; empty when none stored."
+          }
+        },
+        "required": [
+          "name",
+          "domain",
+          "industry",
+          "employees",
+          "city",
+          "state",
+          "country",
+          "keywords"
+        ],
+        "description": "The employer at reveal time; null when the reveal held nothing about it."
+      },
+      "PersonFactsRequest": {
+        "type": "object",
+        "properties": {
+          "apolloPersonIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "minItems": 1,
+            "maxItems": 1000,
+            "description": "Apollo person ids, 1..1000 per call. Trimmed and de-duplicated; the answer lists each once, in request order."
+          }
+        },
+        "required": [
+          "apolloPersonIds"
+        ]
+      },
       "PersonIdentityResponse": {
         "type": "object",
         "properties": {
@@ -7912,6 +8053,74 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RevealRecordsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error (empty list, more than 1000 ids, blank id)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid x-api-key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/reveal-records/person-facts": {
+      "post": {
+        "summary": "What our stored Apollo reveals said about these people: title, location, employer (free, read-only)",
+        "description": "Reads apollo_people_enrichments (one row per paid /enrich or /match reveal we made, any org) and answers, per Apollo person id, the person's title / headline / seniority / location and their employer's name / domain / industry / headcount / location / keywords, from the latest stored reveal carrying a title or an employer. Never an email or a phone. No Apollo call, no cost, nothing written, org-less. For human-service's candidate judge on people served before it stored teaser snapshots. Requires x-api-key = APOLLO_SERVICE_API_KEY. No identity headers.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonFactsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stored facts per id (an id never revealed is `known: false`, not an error)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonFactsResponse"
                 }
               }
             }
