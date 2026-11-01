@@ -16,11 +16,15 @@ function getConnectionString(): string {
 
 export function getSql(): Sql {
   if (!sqlClient) {
+    // PG-CONN-1101: 5 is this service's share of the box Postgres (300 slots, ~30 pools); measured
+    // peak concurrent use 0-2. postgres.js queues beyond max, it does not fail. postgres.js reuses
+    // its open connections in turn, so a pool that once grew to max stays at max: max_lifetime
+    // recycles them so the pool shrinks back to real need (a running query is never cut).
     sqlClient = postgres(getConnectionString(), {
       idle_timeout: 20,
       max_lifetime: 300,
       connect_timeout: 10,
-      max: 10,
+      max: 5,
     });
     installNulStripping(sqlClient);
   }
