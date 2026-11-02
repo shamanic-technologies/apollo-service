@@ -34,7 +34,7 @@ import { toCreditAlertIdentity } from "../lib/credit-alert.js";
 import { SuggestFromSegmentRequestSchema, ApolloNativeSearchFiltersSchema, AudienceCompaniesQuerySchema } from "../schemas.js";
 import { providerErrorFields } from "../lib/provider-error.js";
 import { planQuickenrich } from "../lib/quickenrich.js";
-import { ServeSourceRequestSchema, SignalCoverageRequestSchema, CreateSignalAudienceRequestSchema, SearchFiltersSchema, APOLLO_BUYING_SIGNAL_TYPES } from "../schemas.js";
+import { ServeSourceRequestSchema, CreateAudienceFromFiltersRequestSchema, SignalCoverageRequestSchema, CreateSignalAudienceRequestSchema, SearchFiltersSchema, APOLLO_BUYING_SIGNAL_TYPES } from "../schemas.js";
 import { signalConflicts, signalWindow, utcDay, SignalNotApolloSearchableError, type BuyingSignalSpec, type BuyingSignalType } from "../lib/buying-signal-spec.js";
 import { filtersBesideEngagement } from "../lib/linkedin-engagement.js";
 import { parseCompetitorPage } from "../lib/linkedin-engagement-spec.js";
@@ -218,6 +218,50 @@ function serveSourceFields(serveSource: string, filters: Record<string, unknown>
     quickenrich: { expressible: planned.ok, reasons: planned.ok ? [] : planned.reasons },
   };
 }
+
+/**
+ * POST /audiences — persist an audience from Apollo-native filters the caller
+ * already holds (no refine loop, no LLM). The filters are stored VERBATIM:
+ * /search/next recognises a QuickEnrich audience by jsonb equality with the
+ * search params its consumer forwards, so any rewrite here would make the row
+ * unreachable. Counted by a free dry-run so it is born with its real size.
+ */
+router.post("/audiences", serviceAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const parsed = CreateAudienceFromFiltersRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ type: "validation", error: "Invalid request", details: parsed.error.flatten() });
+    }
+    const filters = req.body.filters as Record<string, unknown>;
+    const brandId = parsed.data.brandId ?? req.brandIds?.[0] ?? null;
+    const { key: apolloApiKey } = await decryptKey(
+      req.orgId!,
+      req.userId!,
+      "apollo",
+      { callerMethod: "POST", callerPath: "/audiences" },
+      { brandIds: brandId ? [brandId] : req.brandIds, featureSlug: req.featureSlug, workflowSlug: req.workflowSlug },
+    );
+    const count = await dryRunCount(apolloApiKey, filters, toCreditAlertIdentity(req));
+    const now = new Date();
+    const [row] = await db
+      .insert(apolloAudiences)
+      .values({
+        orgId: req.orgId!,
+        userId: req.userId ?? null,
+        brandId,
+        name: parsed.data.name,
+        description: parsed.data.description,
+        filters,
+        count,
+        countRefreshedAt: now,
+      })
+      .returning();
+    res.status(201).json({ apolloAudienceId: row.id, name: parsed.data.name, filters, count, ...serveSourceFields(row.serveSource ?? "apollo", filters) });
+  } catch (error) {
+    console.error("[Apollo Service][POST /audiences] ERROR:", error);
+    res.status(500).json({ type: "internal", error: error instanceof Error ? errorMessage(error) : "Internal server error", ...providerErrorFields(error) });
+  }
+});
 
 /**
  * PATCH /audiences/:apolloAudienceId/serve-source — switch where /search/next
