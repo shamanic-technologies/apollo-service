@@ -5506,6 +5506,103 @@
           "quickenrich"
         ]
       },
+      "CreateAudienceFromFiltersResponse": {
+        "type": "object",
+        "properties": {
+          "apolloAudienceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "filters": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SearchFilters"
+              },
+              {
+                "description": "Apollo People API Search filters using Apollo-native field names. All filters are combined using AND. Start broad and narrow down to avoid empty results."
+              }
+            ]
+          },
+          "count": {
+            "type": "integer",
+            "description": "Live Apollo match-count for the filters, from a free dry-run."
+          },
+          "serveSource": {
+            "type": "string",
+            "enum": [
+              "apollo",
+              "quickenrich"
+            ]
+          },
+          "quickenrich": {
+            "type": "object",
+            "properties": {
+              "expressible": {
+                "type": "boolean"
+              },
+              "reasons": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "expressible",
+              "reasons"
+            ]
+          }
+        },
+        "required": [
+          "apolloAudienceId",
+          "name",
+          "filters",
+          "count",
+          "serveSource",
+          "quickenrich"
+        ]
+      },
+      "CreateAudienceFromFiltersRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Audience name (English).",
+            "example": "US Chiropractors (by title)"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "description": "What the audience is, in one or two sentences (English)."
+          },
+          "brandId": {
+            "type": "string",
+            "description": "Brand the audience belongs to."
+          },
+          "filters": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SearchFilters"
+              },
+              {
+                "description": "Apollo-native People Search filters, stored VERBATIM. A consumer that forwards the same object to /search/next is served from this audience (it is the audience's identity on that route, e.g. for its QuickEnrich serve source). A buying signal goes through POST /audiences/signal."
+              }
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "filters"
+        ],
+        "additionalProperties": false
+      },
       "ServeSourceResponse": {
         "type": "object",
         "properties": {
@@ -8492,6 +8589,96 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/audiences": {
+      "post": {
+        "summary": "Persist an Apollo audience from given Apollo-native filters",
+        "description": "Stores the filters exactly as given (no LLM, no rewrite), counted by a free Apollo dry-run. The returned apolloAudienceId can then be switched to the QuickEnrich serve source (PATCH /audiences/{apolloAudienceId}/serve-source) and bound to a consumer audience whose stored filters are the same object.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "x-run-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAudienceFromFiltersRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Persisted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateAudienceFromFiltersResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
             "content": {
               "application/json": {
                 "schema": {

@@ -2003,6 +2003,30 @@ const AudienceResponseSchema = z
   })
   .openapi("AudienceResponse");
 
+export const CreateAudienceFromFiltersRequestSchema = z
+  .object({
+    name: z.string().min(1).max(200).openapi({ description: "Audience name (English).", example: "US Chiropractors (by title)" }),
+    description: z.string().min(1).max(2000).openapi({ description: "What the audience is, in one or two sentences (English)." }),
+    brandId: z.string().optional().openapi({ description: "Brand the audience belongs to." }),
+    filters: ApolloNativeSearchFiltersSchema.refine((f) => Object.keys(f).length > 0, { message: "filters must state at least one constraint" }).openapi({
+      description:
+        "Apollo-native People Search filters, stored VERBATIM. A consumer that forwards the same object to /search/next is served from this audience (it is the audience's identity on that route, e.g. for its QuickEnrich serve source). A buying signal goes through POST /audiences/signal.",
+    }),
+  })
+  .strict()
+  .openapi("CreateAudienceFromFiltersRequest");
+
+const CreateAudienceFromFiltersResponseSchema = z
+  .object({
+    apolloAudienceId: z.string().uuid(),
+    name: z.string(),
+    filters: ApolloNativeSearchFiltersSchema,
+    count: z.number().int().openapi({ description: "Live Apollo match-count for the filters, from a free dry-run." }),
+    serveSource: z.enum(["apollo", "quickenrich"]),
+    quickenrich: z.object({ expressible: z.boolean(), reasons: z.array(z.string()) }),
+  })
+  .openapi("CreateAudienceFromFiltersResponse");
+
 export const ServeSourceRequestSchema = z
   .object({ serveSource: z.enum(["apollo", "quickenrich"]) })
   .openapi("ServeSourceRequest");
@@ -2058,6 +2082,23 @@ registry.registerPath({
       content: { "application/json": { schema: AudienceResponseSchema } },
     },
     404: { description: "Not found", content: { "application/json": { schema: ErrorResponseSchema } } },
+    500: { description: "Internal server error", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/audiences",
+  summary: "Persist an Apollo audience from given Apollo-native filters",
+  description:
+    "Stores the filters exactly as given (no LLM, no rewrite), counted by a free Apollo dry-run. The returned apolloAudienceId can then be switched to the QuickEnrich serve source (PATCH /audiences/{apolloAudienceId}/serve-source) and bound to a consumer audience whose stored filters are the same object.",
+  request: {
+    headers: audienceHeaders,
+    body: { content: { "application/json": { schema: CreateAudienceFromFiltersRequestSchema } }, required: true },
+  },
+  responses: {
+    201: { description: "Persisted", content: { "application/json": { schema: CreateAudienceFromFiltersResponseSchema } } },
+    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponseSchema } } },
     500: { description: "Internal server error", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
