@@ -69,6 +69,12 @@ vi.mock("../../src/lib/apollo-client.js", async (importOriginal) => ({
   getOrganizationById: (...a: unknown[]) => mockGetOrg(...a),
 }));
 
+const mockFallback = vi.fn();
+vi.mock("../../src/lib/apollo-reveal-route.js", async (importOriginal) => {
+  const real = (await importOriginal()) as Record<string, any>;
+  return { ...real, withTregFallback: (...a: unknown[]) => mockFallback(real.withTregFallback, ...a) };
+});
+
 const mockCreateRun = vi.fn();
 const mockAddCosts = vi.fn();
 const mockUpdateCostStatus = vi.fn();
@@ -84,7 +90,7 @@ const mockAuthorize = vi.fn();
 vi.mock("../../src/lib/billing-client.js", () => ({ authorizeCredit: (...a: unknown[]) => mockAuthorize(...a) }));
 
 const { default: audienceRoutes } = await import("../../src/routes/audiences.js");
-const { groupEmployers, toFirmographics } = await import("../../src/lib/audience-companies.js");
+const { groupEmployers, toFirmographics, tregEnrichQuery } = await import("../../src/lib/audience-companies.js");
 
 const app = express();
 app.use(express.json());
@@ -141,6 +147,7 @@ beforeEach(() => {
     name === "Alpha" ? [{ id: "org-a", name: "Alpha", domain: "alpha.ch" }, { id: "org-z", name: "Alpha Beta" }] : [{ id: "org-b", name: "Beta", domain: "beta.ch" }],
   );
   mockGetOrg.mockReset().mockImplementation(async (_k: string, id: string) => FULL_ORG(id, id === "org-a" ? "Alpha" : "Beta"));
+  mockFallback.mockReset().mockImplementation((real: any, ...a: unknown[]) => real(...a));
   mockCreateRun.mockReset().mockResolvedValue({ id: "run-child" });
   mockAddCosts.mockReset().mockImplementation(async (_r: string, items: any[]) => ({ costs: items.map((_, i) => ({ id: `cost-${i}` })) }));
   mockUpdateCostStatus.mockReset().mockResolvedValue({});
@@ -317,5 +324,49 @@ describe("groupEmployers / toFirmographics", () => {
     const f = toFirmographics({ id: "o1", name: "X", domain: "x.io", website_url: "http://x.io", logo_url: "l" }, null);
     expect(f).toMatchObject({ apolloOrganizationId: "o1", domain: "x.io", websiteUrl: "http://x.io", logoUrl: "l", industry: null, city: null, estimatedNumEmployees: null, keywords: [] });
     expect(Object.keys(f).join(",")).not.toMatch(/phone|email/i);
+  });
+});
+
+describe("our Apollo credits out: treg covers companies with no domain (MON-APOLLO-NODOMAIN-1111)", () => {
+  // treg serves Apollo organizations/enrich: by domain when we have one, else by the exact name.
+  const viaTreg = (orgFor: (q: Record<string, string>) => any) =>
+    mockFallback.mockImplementation(async (_real: any, _ks: string, deps: any) => ({
+      response: { organization: orgFor(deps.treg.query) },
+      via: "treg",
+      tregCostMicro: 26000,
+      tregCallId: "call-1",
+    }));
+
+  it("asks treg by domain when the lookup gave one, by exact name when it did not, and keeps both companies", async () => {
+    mockLookup.mockImplementation(async (_k: string, name: string) =>
+      name === "Alpha" ? [{ id: "org-a", name: "Alpha" }] : [{ id: "org-b", name: "Beta", domain: "beta.ch" }],
+    );
+    viaTreg((q) => (q.name === "Alpha" ? FULL_ORG("org-a", "Alpha") : q.domain === "beta.ch" ? FULL_ORG("org-b", "Beta") : null));
+    const res = await request(app).get(`/audiences/${ROW.id}/companies`).set(HEADERS).expect(200);
+    const queries = mockFallback.mock.calls.map((c) => c[2].treg.query);
+    expect(queries).toEqual(expect.arrayContaining([{ name: "Alpha" }, { domain: "beta.ch" }]));
+    expect(res.body.companies[0]).toMatchObject({ name: "Alpha", apolloOrganizationId: "org-a", industry: "retail" });
+    expect(res.body.companies[1]).toMatchObject({ name: "Beta", apolloOrganizationId: "org-b", industry: "retail" });
+    expect(state.upserts.map((u) => u.id).sort()).toEqual(["org-a", "org-b"]);
+  });
+
+  it("treg returning another organization for the name: the company keeps its row, the loss is logged loud and named", async () => {
+    mockLookup.mockImplementation(async (_k: string, name: string) => (name === "Alpha" ? [{ id: "org-a", name: "Alpha" }] : [{ id: "org-b", name: "Beta", domain: "beta.ch" }]));
+    viaTreg((q) => (q.name === "Alpha" ? FULL_ORG("org-other", "Alpha") : FULL_ORG("org-b", "Beta")));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await request(app).get(`/audiences/${ROW.id}/companies`).set(HEADERS).expect(200);
+    expect(res.body.companies[0]).toMatchObject({ name: "Alpha", apolloOrganizationId: "org-a", industry: null });
+    expect(state.upserts.map((u) => u.id)).toEqual(["org-b"]);
+    expect(err.mock.calls.map((c) => String(c[0])).some((m) => m.includes("LOST firmographics for org org-a") && m.includes("org-other"))).toBe(true);
+    err.mockRestore();
+  });
+});
+
+describe("tregEnrichQuery", () => {
+  it("domain first, else exact name, else nothing to ask", () => {
+    expect(tregEnrichQuery("alpha.ch", "Alpha")).toEqual({ domain: "alpha.ch" });
+    expect(tregEnrichQuery(null, " Alpha AG ")).toEqual({ name: "Alpha AG" });
+    expect(tregEnrichQuery("", "")).toBeNull();
+    expect(tregEnrichQuery(undefined, null)).toBeNull();
   });
 });

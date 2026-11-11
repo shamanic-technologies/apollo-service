@@ -198,6 +198,22 @@ export async function resolveOrganization(
   return null;
 }
 
+/**
+ * Pure: how Apollo's `organizations/enrich` is asked for this candidate when it
+ * is reached through treg (our Apollo key out of credits). treg cannot fetch by
+ * Apollo id, so it is asked by domain, else by the candidate's EXACT name (the
+ * name step 2 matched on); the answer is kept only when it carries the same id.
+ * Null when the candidate holds neither (nothing treg can be asked with).
+ * MON-APOLLO-NODOMAIN-1111: before, a company with no domain lost its details.
+ */
+export function tregEnrichQuery(domain: string | null | undefined, name: string | null | undefined): Record<string, string> | null {
+  const d = domain?.trim();
+  if (d) return { domain: d };
+  const n = name?.trim();
+  if (n) return { name: n };
+  return null;
+}
+
 /** Run `fn` over `items` with at most `limit` in flight, preserving order. */
 export async function mapConcurrent<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const out = new Array<R>(items.length);
