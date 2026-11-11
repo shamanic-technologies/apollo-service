@@ -984,6 +984,12 @@ Org-less lookups store `cost_name`; a treg phone reveal is `reveal_route = treg`
 (callback + reconciler cancel the 8-credit hold, declare no Apollo credit). treg
 meters a phone reveal at 1 credit (its documented under-metering of the +8).
 2026-10-09: credits ran out 3 days before the Oct 12 cycle.
+**The staff alert fires only when the client lost data** (MON-APOLLO-CREDITS-1111,
+25 alerts in 30 days, every call served by treg): inside a platform
+`withTregFallback`, chokepoint alerts are HELD (`withCreditAlertsDeferred`,
+AsyncLocalStorage in `credit-alert.ts`), dropped when treg serves, sent
+(`flushCreditAlerts`, reason + treg's error) when treg fails. Recheck window +
+treg failure alerts on the caller's `alertIdentity`. BYOK alerts at once.
 
 ## Running out of Apollo credits raises a STAFF EMAIL — never let it stay silent
 

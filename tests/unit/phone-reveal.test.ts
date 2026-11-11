@@ -38,7 +38,10 @@ vi.mock("../../src/lib/apollo-client.js", () => ({
 }));
 
 vi.mock("../../src/lib/trace-event.js", () => ({ traceEvent: vi.fn().mockResolvedValue(undefined) }));
-vi.mock("../../src/lib/credit-alert.js", () => ({ toCreditAlertIdentity: () => undefined }));
+vi.mock("../../src/lib/credit-alert.js", async (importOriginal) => ({
+  ...((await importOriginal()) as Record<string, unknown>),
+  toCreditAlertIdentity: () => undefined,
+}));
 vi.mock("../../src/lib/advisory-lock.js", () => ({ advisoryXactLock: vi.fn().mockResolvedValue(undefined) }));
 
 vi.mock("../../src/middleware/auth.js", () => ({

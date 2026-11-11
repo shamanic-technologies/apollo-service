@@ -188,6 +188,38 @@ describe("Apollo audience endpoints", () => {
     app = await createApp();
   });
 
+  describe("POST /audiences (persist from given filters, QE-CHIRO-1102)", () => {
+    const TITLES = { person_titles: ["Chiropractor", "Doctor of Chiropractic", "Chiropractic Physician"], person_locations: ["United States"] };
+    // No LLM on this route: drop the outer queued model turns so they do not
+    // leak into the next test's queue.
+    beforeEach(() => {
+      mockChatComplete.mockReset();
+    });
+
+    it("stores the filters verbatim, counts them, no LLM, and says QuickEnrich can serve them", async () => {
+      setCounts(5657);
+      const res = await request(app)
+        .post("/audiences")
+        .set(HEADERS)
+        .send({ name: "US Chiropractors (by title)", description: "Chiropractors in the US", brandId: "brand-1", filters: TITLES })
+        .expect(201);
+      expect(res.body.apolloAudienceId).toBe("aud-1");
+      expect(res.body.count).toBe(5657);
+      expect(res.body.filters).toEqual(TITLES);
+      expect(res.body.serveSource).toBe("apollo");
+      expect(res.body.quickenrich).toEqual({ expressible: true, reasons: [] });
+      expect(state.insertedRows[0]).toMatchObject({ orgId: "org-1", brandId: "brand-1", filters: TITLES, count: 5657 });
+      expect(mockChatComplete).not.toHaveBeenCalled();
+    });
+
+    it("refuses empty filters, a non-native key and a buying signal", async () => {
+      for (const filters of [{}, { personTitles: ["x"] }, { person_titles: ["x"], buying_signal: { type: "hiring", window_days: 30 } }]) {
+        await request(app).post("/audiences").set(HEADERS).send({ name: "n", description: "d", filters }).expect(400);
+      }
+      expect(state.insertedRows).toEqual([]);
+    });
+  });
+
   it("POST /suggest-from-segment persists and returns {apolloAudienceId, filters, count}", async () => {
     setCounts(1000, 42000);
 
