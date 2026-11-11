@@ -213,6 +213,7 @@ router.post("/match", serviceAuth, async (req: AuthenticatedRequest, res) => {
         own: () => matchPersonByName(apolloApiKey, firstName, lastName, organizationDomain, webhookUrl, toCreditAlertIdentity(req)),
         tregQuery: { first_name: firstName, last_name: lastName, domain: organizationDomain, reveal_personal_emails: "false" },
         callerPath: "/match",
+        alertIdentity: toCreditAlertIdentity(req),
       });
       const result = reveal.response;
       if (reveal.via === "treg") console.log(`[Apollo Service][POST /match] matched through treg domain=${organizationDomain} costMicro=${reveal.tregCostMicro} callId=${reveal.tregCallId}`);

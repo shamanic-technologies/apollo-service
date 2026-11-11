@@ -25,6 +25,7 @@
  * or any existing endpoint — a missing var surfaces as a logged alert failure.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { fetchWithRetry } from "./fetch-retry.js";
 import type { CreditProvider } from "./provider-error.js";
 
@@ -191,6 +192,15 @@ export function reportProviderCreditsExhausted(
   identity: CreditAlertIdentity | undefined,
   detail: CreditAlertDetail,
 ): void {
+  const scope = fallbackScope.getStore();
+  if (scope) {
+    // A fallback stands behind this call: only raise the alert if the fallback
+    // fails too (flushCreditAlerts). An exhaustion the fallback absorbed lost
+    // nothing for the client.
+    scope.deferred.push({ provider, identity, detail });
+    return;
+  }
+
   if (!identity?.orgId) {
     console.warn(
       `[apollo-service][credit-alert] ${provider} credits look exhausted (${detail.operation}: ${detail.reason}) but the caller carried no org — no staff alert sent`,
@@ -204,5 +214,53 @@ export function reportProviderCreditsExhausted(
 
   void sendProviderCreditsExhaustedAlert(provider, identity, detail).catch((err) => {
     console.error("[apollo-service][credit-alert] Failed to send staff alert:", err);
+  });
+}
+
+// ─── Fallback scope ──────────────────────────────────────────────────────────
+
+/**
+ * MON-APOLLO-CREDITS-1111: when our platform Apollo key is out of credits, the
+ * same call is answered by Apollo THROUGH treg (`withTregFallback`), so the
+ * client loses nothing. The alert used to fire at the Apollo chokepoint BEFORE
+ * the fallback ran, so every covered call still raised « A paid data provider
+ * is out of credits » (25 times in 30 days, all served by treg). An alert now
+ * means the client path really lost data.
+ *
+ * Inside `withCreditAlertsDeferred`, every alert the call raises is HELD in
+ * the scope instead of sent. The fallback owner then either drops them (the
+ * fallback served) or sends them with `flushCreditAlerts` (it did not).
+ */
+interface DeferredCreditAlert {
+  provider: CreditProvider;
+  identity: CreditAlertIdentity | undefined;
+  detail: CreditAlertDetail;
+}
+
+export interface CreditAlertScope {
+  deferred: DeferredCreditAlert[];
+}
+
+const fallbackScope = new AsyncLocalStorage<CreditAlertScope>();
+
+/** Run `fn` with its credit alerts held in `scope` (see above). */
+export function withCreditAlertsDeferred<T>(scope: CreditAlertScope, fn: () => Promise<T>): Promise<T> {
+  return fallbackScope.run(scope, fn);
+}
+
+/**
+ * Send the alerts held in `scope`, outside any scope. `fallbackFailure`, when
+ * given, says why the fallback could not cover them; it is appended to the
+ * reason so the staff alert names both walls.
+ */
+export function flushCreditAlerts(scope: CreditAlertScope, fallbackFailure?: string): void {
+  const held = scope.deferred.splice(0);
+  fallbackScope.exit(() => {
+    for (const a of held) {
+      reportProviderCreditsExhausted(a.provider, a.identity, {
+        ...a.detail,
+        reason: fallbackFailure ? `${a.detail.reason}; the treg fallback failed too: ${fallbackFailure}` : a.detail.reason,
+      });
+    }
   });
 }

@@ -202,6 +202,7 @@ router.post("/people/:apolloPersonId/phone-reveal", serviceAuth, async (req: Aut
             webhook_url: webhookUrl,
           },
           callerPath: "/people/:apolloPersonId/phone-reveal",
+          alertIdentity: toCreditAlertIdentity(req),
         });
         const result = reveal.response;
         const viaTreg = reveal.via === "treg";
