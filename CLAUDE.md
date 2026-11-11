@@ -348,6 +348,11 @@ capped at 100), `x-run-id` required. Every step measured on prod 2026-09-29 via
   credits (11.8¢ each at org price ≈ $11.80). Global cache `apollo_organizations`
   (no org_id — firmographics are facts; not in transfer-brand) for 90 days: a
   cached company is never paid again, whoever asks.
+- **Our platform key out of credits**: `withTregFallback` asks treg
+  `apollo.companies.enrich` by domain, else by the candidate's EXACT name
+  (`tregEnrichQuery`; treg cannot fetch by Apollo id), and keeps the answer only
+  when its id is ours. A wrong/empty treg answer is logged `LOST firmographics for
+  org <id>` (console.error), never silent (MON-APOLLO-NODOMAIN-1111).
 - **Metering**: child run `audience-companies` of `x-run-id`, PROVISION the
   uncached count → AUTHORIZE (platform key; 402 + hold released if short) →
   EXECUTE → ACTUALIZE what Apollo returned → cancel the hold. A fetched record is
