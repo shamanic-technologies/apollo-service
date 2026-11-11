@@ -435,6 +435,7 @@ async function fetchJobPostingsUnderLock(apolloOrganizationId: string, ctx: Evid
         own: () => getOrganizationJobPostings(key, apolloOrganizationId, ctx.alertIdentity),
         treg: { endpoint: "apollo.companies.jobs", method: "GET", query: { organization_id: apolloOrganizationId } },
         callerPath: "/enrich",
+        alertIdentity: ctx.alertIdentity,
       });
     } catch (error) {
       await releaseHold("failed");

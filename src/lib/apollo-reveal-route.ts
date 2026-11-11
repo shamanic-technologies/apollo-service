@@ -24,6 +24,13 @@
 
 import { decryptPlatformKey } from "./keys-client.js";
 import { ApolloCreditsExhaustedError } from "./provider-error.js";
+import {
+  flushCreditAlerts,
+  reportApolloCreditsExhausted,
+  withCreditAlertsDeferred,
+  type CreditAlertIdentity,
+  type CreditAlertScope,
+} from "./credit-alert.js";
 import type { ApolloPerson } from "./apollo-client.js";
 
 export const TREG_CALL_BASE = "https://treg.to/call/";
@@ -135,6 +142,11 @@ export interface FallbackDeps<T> {
   credentials?: () => Promise<TregCredentials>;
   fetchImpl?: typeof fetch;
   now?: () => number;
+  /**
+   * Who to alert when treg fails while our key is known to be out (the recheck
+   * window skips our key, so no Apollo answer carries an identity to alert on).
+   */
+  alertIdentity?: CreditAlertIdentity;
 }
 
 /**
@@ -143,18 +155,44 @@ export interface FallbackDeps<T> {
  */
 export async function withTregFallback<T>(keySource: "org" | "platform", deps: FallbackDeps<T>): Promise<RevealResult<T>> {
   const now = deps.now ?? Date.now;
+  // Platform key only: an exhaustion alert raised by our own call is HELD until
+  // we know whether treg covered it (MON-APOLLO-CREDITS-1111). BYOK has no
+  // fallback, so its alerts go out at once as before.
+  const scope: CreditAlertScope = { deferred: [] };
   if (keySource !== "platform" || !ownKeyExhausted(now())) {
     try {
-      return { response: await deps.own(), via: "apollo", tregCostMicro: null, tregCallId: null };
+      const response = keySource === "platform" ? await withCreditAlertsDeferred(scope, deps.own) : await deps.own();
+      flushCreditAlerts(scope); // a 200 sentinel (email not unlocked) is not covered by treg
+      return { response, via: "apollo", tregCostMicro: null, tregCallId: null };
     } catch (error) {
-      if (keySource !== "platform" || !(error instanceof ApolloCreditsExhaustedError)) throw error;
+      if (keySource !== "platform" || !(error instanceof ApolloCreditsExhaustedError)) {
+        flushCreditAlerts(scope);
+        throw error;
+      }
       ownKeyExhaustedUntil = now() + OWN_KEY_EXHAUSTED_RECHECK_MS;
       console.warn(`[Apollo Service][reveal-route] own Apollo key out of credits, calling Apollo through treg for ${OWN_KEY_EXHAUSTED_RECHECK_MS / 60000} min`);
     }
   }
-  const creds = await (deps.credentials ?? (() => platformTregCredentials(deps.callerPath)))();
-  const r = await callApolloViaTreg<T>(deps.treg, creds, deps.fetchImpl);
-  return { response: r.response, via: "treg", tregCostMicro: r.costMicro, tregCallId: r.callId };
+  try {
+    const creds = await (deps.credentials ?? (() => platformTregCredentials(deps.callerPath)))();
+    const r = await callApolloViaTreg<T>(deps.treg, creds, deps.fetchImpl);
+    if (scope.deferred.length > 0) {
+      console.log(`[Apollo Service][reveal-route] own Apollo key out of credits, served through treg ${deps.treg.endpoint}: no staff alert`);
+    }
+    return { response: r.response, via: "treg", tregCostMicro: r.costMicro, tregCallId: r.callId };
+  } catch (tregError) {
+    // The client path really lost data: our key is out AND treg could not answer.
+    const why = tregError instanceof Error ? tregError.message : String(tregError);
+    if (scope.deferred.length > 0) {
+      flushCreditAlerts(scope, why);
+    } else {
+      reportApolloCreditsExhausted(deps.alertIdentity, {
+        operation: deps.treg.endpoint,
+        reason: `Apollo is out of credits (our key skipped for the recheck window) and the treg fallback failed too: ${why}`,
+      });
+    }
+    throw tregError;
+  }
 }
 
 export interface RevealDeps<T> extends Omit<FallbackDeps<T>, "treg"> {

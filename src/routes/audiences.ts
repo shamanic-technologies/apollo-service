@@ -460,6 +460,7 @@ async function enrichOrganizations(args: {
           own: () => getOrganizationById(apolloApiKey, id, alertIdentity),
           treg: { endpoint: "apollo.companies.enrich", method: "GET", query: { domain } },
           callerPath: "/audiences/:apolloAudienceId/companies",
+          alertIdentity,
         });
         if (r.via === "apollo") return { id, org: r.response, tregCostMicro: null, error: null as unknown };
         // treg answers organizations/enrich by domain: keep it only when it is the SAME organization.

@@ -413,6 +413,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
         own: () => enrichPerson(apolloApiKey, apolloPersonId, webhookUrl, toCreditAlertIdentity(req)),
         tregQuery: { id: apolloPersonId, reveal_personal_emails: "false" },
         callerPath: "/enrich",
+        alertIdentity: toCreditAlertIdentity(req),
       });
       const result = reveal.response;
       if (reveal.via === "treg") console.log(`[Apollo Service][POST /enrich] revealed through treg person=${apolloPersonId} costMicro=${reveal.tregCostMicro} callId=${reveal.tregCallId}`);
