@@ -19,6 +19,7 @@ import {
   ORG_CACHE_DAYS,
   COMPANY_FIRMOGRAPHICS_COST_NAME,
   normalizeCompanyName,
+  tregEnrichQuery,
 } from "../lib/audience-companies.js";
 import { getOrganizationById, searchPeople, type ApolloOrganization } from "../lib/apollo-client.js";
 import { withTregFallback, tregCostItems, ownKeyExhausted } from "../lib/apollo-reveal-route.js";
@@ -357,8 +358,8 @@ type EnrichOutcome =
  */
 async function enrichOrganizations(args: {
   ids: string[];
-  /** id → the domain the free lookup gave it: how treg is asked while our Apollo credits are out. */
-  domains: Map<string, string>;
+  /** id → how treg is asked while our Apollo credits are out (domain, else exact name: tregEnrichQuery). */
+  tregQueries: Map<string, Record<string, string>>;
   audienceRowId: string;
   apolloApiKey: string;
   keySource: "org" | "platform";
@@ -445,12 +446,12 @@ async function enrichOrganizations(args: {
     // EXECUTE.
     const alertIdentity = toCreditAlertIdentity(req);
     const results = await mapConcurrent(missing, LOOKUP_CONCURRENCY, async (id) => {
-      const domain = args.domains.get(id);
+      const tregQuery = args.tregQueries.get(id);
       try {
-        if (!domain) {
+        if (!tregQuery) {
           if (keySource === "platform" && ownKeyExhausted()) {
-            // treg can only be asked by domain: no domain, no firmographics while our credits are out.
-            console.warn(`[Apollo Service][audience-companies] no domain for org ${id}, firmographics skipped while our Apollo credits are out`);
+            // Never silent: the client loses this company's details to our own vendor credit.
+            console.error(`[Apollo Service][audience-companies] LOST firmographics for org ${id}: our Apollo credits are out and the company has no domain nor name to ask treg with`);
             return { id, org: null, tregCostMicro: null, error: null as unknown };
           }
           return { id, org: await getOrganizationById(apolloApiKey, id, alertIdentity), tregCostMicro: null, error: null as unknown };
@@ -458,14 +459,18 @@ async function enrichOrganizations(args: {
         // Our Apollo key, or Apollo through treg while ours is out of credits (apollo-reveal-route.ts).
         const r = await withTregFallback<ApolloOrganization | null>(keySource, {
           own: () => getOrganizationById(apolloApiKey, id, alertIdentity),
-          treg: { endpoint: "apollo.companies.enrich", method: "GET", query: { domain } },
+          treg: { endpoint: "apollo.companies.enrich", method: "GET", query: tregQuery },
           callerPath: "/audiences/:apolloAudienceId/companies",
           alertIdentity,
         });
         if (r.via === "apollo") return { id, org: r.response, tregCostMicro: null, error: null as unknown };
-        // treg answers organizations/enrich by domain: keep it only when it is the SAME organization.
+        // treg answers organizations/enrich by domain or name: keep it only when it is the SAME organization.
         const org = (r.response as unknown as { organization?: ApolloOrganization | null }).organization ?? null;
-        return { id, org: org && org.id === id ? org : null, tregCostMicro: r.tregCostMicro, error: null as unknown };
+        if (!org || org.id !== id) {
+          console.error(`[Apollo Service][audience-companies] LOST firmographics for org ${id}: our Apollo credits are out and treg ${JSON.stringify(tregQuery)} returned ${org ? `another organization (${org.id})` : "no organization"}`);
+          return { id, org: null, tregCostMicro: r.tregCostMicro, error: null as unknown };
+        }
+        return { id, org, tregCostMicro: r.tregCostMicro, error: null as unknown };
       } catch (error) {
         return { id, org: null, tregCostMicro: null, error };
       }
@@ -549,13 +554,13 @@ router.get("/audiences/:apolloAudienceId/companies", serviceAuth, async (req: Au
 
     const candidates = await mapConcurrent(chunk, LOOKUP_CONCURRENCY, (e) => resolveOrganization(apolloApiKey, filters, e, alertIdentity));
     const ids = [...new Set(candidates.map((c) => c?.id).filter((id): id is string => !!id))];
-    const domains = new Map<string, string>();
+    const tregQueries = new Map<string, Record<string, string>>();
     for (const c of candidates) {
-      const domain = c ? normalizeDomain(c.domain) ?? normalizeDomain(c.website_url) : null;
-      if (c && domain) domains.set(c.id, domain);
+      const query = c ? tregEnrichQuery(normalizeDomain(c.domain) ?? normalizeDomain(c.website_url), c.name) : null;
+      if (c && query) tregQueries.set(c.id, query);
     }
 
-    const enriched = await enrichOrganizations({ ids, domains, audienceRowId: row.id, apolloApiKey, keySource, identity, runId: req.runId, req });
+    const enriched = await enrichOrganizations({ ids, tregQueries, audienceRowId: row.id, apolloApiKey, keySource, identity, runId: req.runId, req });
     if (enriched.kind === "insufficient") {
       return res.status(402).json(creditRefusalBody(enriched.auth));
     }
