@@ -180,6 +180,24 @@ describe("the stored waterfall decides through our doors", () => {
   });
 });
 
+describe("EMAIL-VERIFY-PROBE-FLAG-1113: a reveal-gate probe says so to the script", () => {
+  it("a probe verification asks the script with domainProbe; a real address does not", async () => {
+    fetchMock.mockImplementation(async () => treg({ data: { status: "invalid" } }, 200, "0"));
+    mockDecide.mockImplementation(async (input: { dynasty: string; email: string }) => {
+      const row = await scriptLike(input.dynasty, input.email);
+      return { runId: "script-run-1", scriptSlug: "email_found/dy_verify_waterfall/v3", verificationId: row.verificationId };
+    });
+    const { verifyRevealedEmail } = await import("../../src/lib/email-verification.js");
+    await verifyRevealedEmail("zz-probe-1@example.com", { ...CTX, source: "reveal-domain-probe" });
+    await verifyRevealedEmail("ada@example.com", CTX);
+    expect(mockDecide.mock.calls.map((c) => [c[0].email, c[0].domainProbe])).toEqual([
+      ["zz-probe-1@example.com", true],
+      ["ada@example.com", false],
+    ]);
+    expect(decisions.map((d) => d.source)).toEqual(["reveal-domain-probe", "enrich"]);
+  });
+});
+
 describe("a decision the world left without a verdict (`unmade`)", () => {
   it("every verifier silent: the caller gets our own error, Apify's exhaustion named when Apify is out", async () => {
     const { VerifyScriptError } = await import("../../src/lib/email-verify-script.js");
