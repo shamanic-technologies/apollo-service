@@ -48,6 +48,7 @@ import { reportProviderCreditsExhausted } from "./credit-alert.js";
 import { domainHasMx, MailDomainLookupError } from "./mail-domain.js";
 import { TREG_COST_NAME } from "./email-finders.js";
 import { emailVerificationDecisions } from "../db/schema.js";
+import { PROBE_SOURCE } from "./probe-source.js";
 import {
   decideWithScript,
   findInFlight,
@@ -992,6 +993,7 @@ async function decideByScript(dynasty: string, email: string, held: DecisionHeld
       email,
       held,
       subject: ctx.subjects?.get(email),
+      domainProbe: ctx.source === PROBE_SOURCE,
     });
     const [row] = await db.select().from(emailVerifications).where(eq(emailVerifications.id, out.verificationId!));
     if (!row || row.email !== email || row.verdict === null) throw new VerifyScriptError(`the script decided on verification ${out.verificationId}, which is not a verdict for this address`, out.runId);

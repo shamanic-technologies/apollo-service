@@ -20,6 +20,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type { NamedSubject } from "./outcome-declarations.js";
+import { PROBE_SOURCE } from "./probe-source.js";
 
 export const EMAIL_FOUND_OUTCOME = "email_found";
 export const CALLER_SERVICE = "apollo";
@@ -113,6 +114,26 @@ export interface ScriptDecision {
   verificationId: string | null;
 }
 
+/**
+ * The material handed to the script (EMAIL-VERIFY-PROBE-FLAG-1113). A reveal-gate probe says so (`domainProbe: true`):
+ * for a probe `invalid` is the expected answer (the domain confirms mailboxes), for a real address it is a verdict the
+ * script may want checked. A real address carries NO such key (absent = real), so its material is byte-identical to
+ * before and recorded cases read as they always did.
+ */
+export function emailFoundContent(input: { email: string; held: unknown; domainProbe?: boolean }): Record<string, unknown> {
+  return input.domainProbe === true ? { email: input.email, held: input.held, domainProbe: true } : { email: input.email, held: input.held };
+}
+
+/**
+ * One recorded decision as served by GET /internal/email-verification-decisions/recorded. A reveal-gate probe's
+ * decision states it (`domainProbe: true`, the same key the script's material carries); every other row is served
+ * exactly as before (no key).
+ */
+export function toRecordedDecision<R extends { source: string | null; createdAt: Date }>(r: R): Omit<R, "createdAt"> & { createdAt: string; domainProbe?: true } {
+  const out = { ...r, createdAt: r.createdAt.toISOString() };
+  return r.source === PROBE_SOURCE ? { ...out, domainProbe: true as const } : out;
+}
+
 export class VerifyScriptError extends Error {
   constructor(message: string, readonly runId: string | null, readonly unmade = false) {
     super(message);
@@ -132,6 +153,8 @@ export async function decideWithScript(input: {
   email: string;
   held: { verificationId: string; verifier: string; verdict: string } | null;
   subject?: NamedSubject;
+  /** The address is a reveal-gate PROBE (minted by the gate, nobody owns it), stated by the caller that minted it. */
+  domainProbe?: boolean;
 }): Promise<ScriptDecision> {
   const { base, key: apiKey } = workflow();
   const headers: Record<string, string> = {
@@ -153,7 +176,7 @@ export async function decideWithScript(input: {
       outcome: EMAIL_FOUND_OUTCOME,
       dynasty: input.dynasty,
       subject: input.subject ? { service: input.subject.subjectService, id: input.subject.subjectId } : { service: "apollo", id: input.email },
-      units: { email_found: { content: { email: input.email, held: input.held } } },
+      units: { email_found: { content: emailFoundContent(input) } },
       recordedBy: CALLER_SERVICE,
     }),
     signal: AbortSignal.timeout(RUN_TIMEOUT_MS),

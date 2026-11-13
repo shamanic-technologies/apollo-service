@@ -4,6 +4,7 @@ import { and, asc, gt, sql } from "drizzle-orm";
 import { serviceAuth, type AuthenticatedRequest } from "../middleware/auth.js";
 import { requireServiceApiKey } from "./transfer-brand.js";
 import { doorApifyAvailable, doorVerifierCall } from "../lib/email-verification.js";
+import { toRecordedDecision } from "../lib/email-verify-script.js";
 import { db } from "../db/index.js";
 import { emailVerificationDecisions } from "../db/schema.js";
 
@@ -56,7 +57,7 @@ router.get("/internal/email-verification-decisions/recorded", requireServiceApiK
   try {
     const rows = await db.select().from(emailVerificationDecisions).where(and(gt(emailVerificationDecisions.seq, after), sql`${emailVerificationDecisions.createdAt} < now() - interval '60 seconds'`)).orderBy(asc(emailVerificationDecisions.seq)).limit(limit);
     return res.json({
-      decisions: rows.map((r) => ({ ...r, createdAt: r.createdAt.toISOString() })),
+      decisions: rows.map(toRecordedDecision),
       nextAfter: rows.length > 0 ? rows[rows.length - 1].seq : after,
       hasMore: rows.length === limit,
     });
