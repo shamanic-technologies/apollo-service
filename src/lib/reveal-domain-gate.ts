@@ -74,6 +74,7 @@ import { db } from "../db/index.js";
 import { apolloPeopleEnrichments, apolloTeaserPeople, emailVerifications, revealSkips } from "../db/schema.js";
 import { ApolloRateLimitedError, lookupOrganizationsByName, type ApolloOrganizationCandidate } from "./apollo-client.js";
 import type { CreditAlertIdentity } from "./credit-alert.js";
+import { ApolloKeyInvalidError } from "./provider-error.js";
 import { exactOrganizationIds, normalizeDomain, normalizeEmployerName } from "./teaser-employer-domains.js";
 import {
   verifyRevealedEmail,
@@ -161,7 +162,7 @@ export type GateDecision =
   | {
       action: "reveal";
       /** Why the gate let it through — for the trace, never a silent default. */
-      basis: "domain_ok" | "probe_pending" | "no_employer" | "org_lookup_rate_limited" | "no_exact_org_match" | "ambiguous_org_name" | "no_domain";
+      basis: "domain_ok" | "probe_pending" | "no_employer" | "org_lookup_rate_limited" | "org_lookup_key_invalid" | "no_exact_org_match" | "ambiguous_org_name" | "no_domain";
       organizationName?: string;
       organizationId?: string;
       evidence?: DomainEvidence[];
@@ -256,6 +257,11 @@ export async function decideReveal(apolloPersonId: string, deps: GateDeps): Prom
   try {
     candidates = await deps.lookupOrganizations(organizationName);
   } catch (error) {
+    if (error instanceof ApolloKeyInvalidError) {
+      // Our key refused: the lookup has no treg route (free fuzzy lookup), the reveal does. Benefit of the doubt.
+      console.error(`[Apollo Service][reveal-domain-gate] org lookup refused (Apollo key invalid) for "${organizationName}", revealing without the gate`);
+      return { action: "reveal", basis: "org_lookup_key_invalid", organizationName };
+    }
     if (!(error instanceof ApolloRateLimitedError)) throw error;
     console.warn(`[Apollo Service][reveal-domain-gate] org lookup rate-limited for "${organizationName}", revealing without the gate: ${error.message.slice(0, 200)}`);
     return { action: "reveal", basis: "org_lookup_rate_limited", organizationName };
