@@ -990,6 +990,13 @@ Org-less lookups store `cost_name`; a treg phone reveal is `reveal_route = treg`
 (callback + reconciler cancel the 8-credit hold, declare no Apollo credit). treg
 meters a phone reveal at 1 credit (its documented under-metering of the +8).
 2026-10-09: credits ran out 3 days before the Oct 12 cycle.
+**A REFUSED key (Apollo 401 `API_KEY_INVALID`) falls back exactly like exhaustion** (APOLLO-KEY-401-1113:
+the platform key died 2026-11-12 ~08:05 UTC, only exhaustion triggered treg, every serve/dry-run/reveal
+failed ~33 h). The client throws `ApolloKeyInvalidError` on any 401. **The FREE People Search falls back
+too**: `searchPeople` → treg `apollo.people.search` (Apollo's own JSON body, `{total_entries, people}`,
+free; a non-zero charge throws) when our PLATFORM key cannot serve (`isPlatformApolloKey` compares to
+key-service's, asked only after a failure or inside the recheck window; BYOK never rerouted). The free
+org lookup has no treg route: a 401 there makes the reveal gate reveal (basis `org_lookup_key_invalid`).
 **The staff alert fires only when the client lost data** (MON-APOLLO-CREDITS-1111,
 25 alerts in 30 days, every call served by treg): inside a platform
 `withTregFallback`, chokepoint alerts are HELD (`withCreditAlertsDeferred`,

@@ -100,6 +100,26 @@ export class ApolloCreditsExhaustedError extends Error {
 }
 
 /**
+ * Apollo answered 401: the API key itself is refused
+ * (`AUTH.AUTHENTICATION.API_KEY_INVALID`, "This API key is not valid.").
+ * Like credit exhaustion, it says OUR key cannot serve, so a platform call is
+ * answered through treg (`withTregFallback`, `searchPeople`). APOLLO-KEY-401-1113:
+ * the platform key was refused from 2026-11-12 ~08:05 UTC and every search,
+ * dry-run and reveal failed for ~33 h because only exhaustion triggered the
+ * fallback. `message` is byte-identical to the generic Error it replaces; no
+ * `providerError` is added (callers key on that field's existing code only).
+ */
+export class ApolloKeyInvalidError extends Error {
+  readonly apolloStatus: number;
+
+  constructor(message: string, apolloStatus: number) {
+    super(message);
+    this.name = "ApolloKeyInvalidError";
+    this.apolloStatus = apolloStatus;
+  }
+}
+
+/**
  * Body fragment to spread into an error response. Returns `{ providerError }`
  * for a provider-cannot-serve failure and an EMPTY object for everything else —
  * so the field is present exactly when the state is true, and the response for

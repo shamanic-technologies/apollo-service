@@ -14,8 +14,9 @@
  *
  * Rule:
  *   - an org's OWN Apollo key (BYOK) is never rerouted: their key, their plan.
- *   - a platform reveal tries our key first; on `ApolloCreditsExhaustedError`
- *     it is answered by treg, and every platform reveal goes straight to treg
+ *   - a platform reveal tries our key first; when our key cannot serve
+ *     (`ApolloCreditsExhaustedError`, or `ApolloKeyInvalidError`: Apollo 401
+ *     "This API key is not valid", APOLLO-KEY-401-1113) it is answered by treg, and every platform reveal goes straight to treg
  *     for OWN_KEY_EXHAUSTED_RECHECK_MS before our key is tried again. So the
  *     fallback ends by itself when the subscription renews; nothing to revert.
  *   - the cost declared is treg's own charge (`X-Treg-Cost-Micro` header) as
@@ -23,7 +24,7 @@
  */
 
 import { decryptPlatformKey } from "./keys-client.js";
-import { ApolloCreditsExhaustedError } from "./provider-error.js";
+import { ApolloCreditsExhaustedError, ApolloKeyInvalidError } from "./provider-error.js";
 import {
   flushCreditAlerts,
   reportApolloCreditsExhausted,
@@ -61,10 +62,26 @@ export function tregCostItems(costMicro: number | null): Array<{ costName: strin
 /** Test hook. */
 export function resetRevealRoute(): void {
   ownKeyExhaustedUntil = 0;
+  platformApolloKeyCache = null;
 }
 
 export function ownKeyExhausted(now: number = Date.now()): boolean {
   return now < ownKeyExhaustedUntil;
+}
+
+/** Our Apollo key cannot answer this call: out of credits, or the key itself refused (401). */
+export function ownKeyCannotServe(error: unknown): error is ApolloCreditsExhaustedError | ApolloKeyInvalidError {
+  return error instanceof ApolloCreditsExhaustedError || error instanceof ApolloKeyInvalidError;
+}
+
+/** Skip our key for the recheck window; every platform Apollo call goes to treg meanwhile. */
+function markOwnKeyDown(error: ApolloCreditsExhaustedError | ApolloKeyInvalidError, at: number): void {
+  ownKeyExhaustedUntil = at + OWN_KEY_EXHAUSTED_RECHECK_MS;
+  const why = error instanceof ApolloKeyInvalidError ? "REFUSED by Apollo (401 API key invalid)" : "out of credits";
+  // console.error on a dead key: nobody is told otherwise, and every treg call costs us money.
+  (error instanceof ApolloKeyInvalidError ? console.error : console.warn)(
+    `[Apollo Service][reveal-route] own Apollo key ${why}, calling Apollo through treg for ${OWN_KEY_EXHAUSTED_RECHECK_MS / 60000} min`
+  );
 }
 
 export interface TregCredentials {
@@ -165,12 +182,11 @@ export async function withTregFallback<T>(keySource: "org" | "platform", deps: F
       flushCreditAlerts(scope); // a 200 sentinel (email not unlocked) is not covered by treg
       return { response, via: "apollo", tregCostMicro: null, tregCallId: null };
     } catch (error) {
-      if (keySource !== "platform" || !(error instanceof ApolloCreditsExhaustedError)) {
+      if (keySource !== "platform" || !ownKeyCannotServe(error)) {
         flushCreditAlerts(scope);
         throw error;
       }
-      ownKeyExhaustedUntil = now() + OWN_KEY_EXHAUSTED_RECHECK_MS;
-      console.warn(`[Apollo Service][reveal-route] own Apollo key out of credits, calling Apollo through treg for ${OWN_KEY_EXHAUSTED_RECHECK_MS / 60000} min`);
+      markOwnKeyDown(error, now());
     }
   }
   try {
@@ -188,7 +204,7 @@ export async function withTregFallback<T>(keySource: "org" | "platform", deps: F
     } else {
       reportApolloCreditsExhausted(deps.alertIdentity, {
         operation: deps.treg.endpoint,
-        reason: `Apollo is out of credits (our key skipped for the recheck window) and the treg fallback failed too: ${why}`,
+        reason: `Our Apollo key cannot serve (out of credits or refused; skipped for the recheck window) and the treg fallback failed too: ${why}`,
       });
     }
     throw tregError;
@@ -219,4 +235,91 @@ export function revealCostItems(
 ): Array<{ costName: string; costSource: "org" | "platform"; quantity: number }> {
   if (reveal.via === "treg") return tregCostItems(reveal.tregCostMicro);
   return billedByApollo ? [{ costName: "apollo-credit", costSource: keySource, quantity: 1 }] : [];
+}
+
+// ── People search (FREE) through treg when our platform key cannot serve ──────
+
+export const TREG_APOLLO_SEARCH_ENDPOINT = "apollo.people.search";
+const PLATFORM_KEY_CACHE_MS = 10 * 60 * 1000;
+let platformApolloKeyCache: { key: string; at: number } | null = null;
+
+/**
+ * Is this the PLATFORM Apollo key (key-service), as opposed to an org's own?
+ * Only asked once our key failed or sits in the recheck window, never on the
+ * happy path. A BYOK key never equals ours, so it is never rerouted.
+ */
+export async function isPlatformApolloKey(
+  apiKey: string,
+  load: () => Promise<string> = () => decryptPlatformKey("apollo", { callerMethod: "POST", callerPath: "/search" }),
+  now: number = Date.now()
+): Promise<boolean> {
+  if (!platformApolloKeyCache || now - platformApolloKeyCache.at > PLATFORM_KEY_CACHE_MS) {
+    platformApolloKeyCache = { key: await load(), at: now };
+  }
+  return platformApolloKeyCache.key === apiKey;
+}
+
+export interface SearchFallbackDeps {
+  isPlatformKey?: (apiKey: string) => Promise<boolean>;
+  credentials?: () => Promise<TregCredentials>;
+  fetchImpl?: typeof fetch;
+  now?: () => number;
+}
+
+/**
+ * Apollo's free People Search through treg (`apollo.people.search`): Apollo's
+ * own JSON body, answered `{total_entries, people}` like our own call. Free
+ * (verified 2026-11-13, filters honored: Chiropractor + US + verified = 4,150
+ * through treg). A non-zero charge throws: no cost is declared for a search.
+ */
+export async function searchPeopleViaTreg<T>(body: object, creds: TregCredentials, fetchImpl: typeof fetch = fetch): Promise<T> {
+  const res = await fetchImpl(`${TREG_CALL_BASE}${TREG_APOLLO_SEARCH_ENDPOINT}`, {
+    method: "POST",
+    headers: { "X-Treg-Token": creds.token, "X-Treg-Org": creds.org, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(TREG_TIMEOUT_MS),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`treg ${TREG_APOLLO_SEARCH_ENDPOINT} failed: ${res.status} - ${text.slice(0, 500)}`);
+  const rawCost = res.headers.get("x-treg-cost-micro");
+  if (rawCost !== null && Number(rawCost) !== 0) {
+    throw new Error(`treg ${TREG_APOLLO_SEARCH_ENDPOINT} charged ${rawCost} micro-USD for a search documented free; no cost name exists for it`);
+  }
+  return JSON.parse(text) as T;
+}
+
+/**
+ * Our Apollo key first; when it is the PLATFORM key and cannot serve (401
+ * refused, or out of credits), the same search through treg, and treg directly
+ * for the recheck window. Any other failure, and any BYOK failure, is thrown.
+ */
+export async function searchPeopleViaTregIfOwnKeyDown<T>(
+  apiKey: string,
+  body: object,
+  own: () => Promise<T>,
+  deps: SearchFallbackDeps = {}
+): Promise<T> {
+  const now = deps.now ?? Date.now;
+  const isPlatform = deps.isPlatformKey ?? ((k: string) => isPlatformApolloKey(k));
+  const viaTreg = async () => {
+    const creds = await (deps.credentials ?? (() => platformTregCredentials("/search")))();
+    return searchPeopleViaTreg<T>(body, creds, deps.fetchImpl);
+  };
+  if (ownKeyExhausted(now()) && (await isPlatform(apiKey))) return viaTreg();
+  try {
+    return await own();
+  } catch (error) {
+    if (!ownKeyCannotServe(error)) throw error;
+    let ours: boolean;
+    try {
+      ours = await isPlatform(apiKey);
+    } catch (lookupError) {
+      // Cannot tell whose key it is: Apollo's own failure is what the caller gets.
+      console.error(`[Apollo Service][search] Apollo key cannot serve and the platform-key lookup failed: ${lookupError instanceof Error ? lookupError.message : String(lookupError)}`);
+      throw error;
+    }
+    if (!ours) throw error;
+    markOwnKeyDown(error, now());
+    return viaTreg();
+  }
 }
