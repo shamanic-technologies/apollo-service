@@ -91,7 +91,8 @@ export const CHECKER_BLOCKED_TTL_DAYS = 7;
 /** Unknowns needed AFTER the latest decisive verdict to overturn it (one transient timeout is not a block). */
 export const BLOCK_RUN_AFTER_DECISIVE = 2;
 /** The verification source a gate probe is recorded under. */
-export const PROBE_SOURCE = "reveal-domain-probe";
+export { PROBE_SOURCE } from "./probe-source.js";
+import { PROBE_SOURCE } from "./probe-source.js";
 const LOOKUP_PER_PAGE = 10;
 /** How long the gate reuses a name's org lookup (candidates of a name barely move). */
 export const LOOKUP_MEMO_MS = 6 * 60 * 60 * 1000;
