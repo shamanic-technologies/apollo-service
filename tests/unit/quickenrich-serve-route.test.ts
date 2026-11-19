@@ -28,6 +28,12 @@ vi.mock("../../src/lib/quickenrich-serve.js", () => ({
   findQuickenrichAudience: (...a: unknown[]) => mockFindQuickenrichAudience(...a),
   serveQuickenrichPage: (...a: unknown[]) => mockServeQuickenrichPage(...a),
   loadQuickenrichPerson: (...a: unknown[]) => mockLoadQuickenrichPerson(...a),
+  QuickenrichSearchError: class QuickenrichSearchError extends Error {
+    constructor(message: string) {
+      super(`quickenrich search failed: ${message}`);
+      this.name = "QuickenrichSearchError";
+    }
+  },
 }));
 
 const mockExecuteEmailFind = vi.fn();
@@ -251,8 +257,27 @@ describe("QuickEnrich serve path", () => {
     expect(res.body.people[0].id).toBe("p1");
   });
 
-  it("switch ON but the audience is not expressible: serves from Apollo, never QuickEnrich", async () => {
-    const params = { ...QE_PARAMS, q_organization_keyword_tags: ["chiropractic"] };
+  it("switch ON, QuickEnrich search fails (treg 429/5xx): this call is served by Apollo, never a 500", async () => {
+    const { QuickenrichSearchError } = await import("../../src/lib/quickenrich-serve.js");
+    mockFindQuickenrichAudience.mockResolvedValue({ id: "aud-1" });
+    mockServeQuickenrichPage.mockRejectedValue(new QuickenrichSearchError("HTTP 429 - rate limited"));
+    const res = await post("/search/next", { searchParams: QE_PARAMS }).expect(200);
+    expect(mockSearchPeople).toHaveBeenCalledTimes(1);
+    expect(res.body.source).toBeUndefined();
+  });
+
+  it("switch ON, an audience with a constraint QuickEnrich cannot enforce: served from QuickEnrich, the rest left to the judge", async () => {
+    const params = { ...QE_PARAMS, q_organization_keyword_tags: ["chiropractic clinic"] };
+    mockCursor = { ...mockCursor!, searchParams: params };
+    mockFindQuickenrichAudience.mockResolvedValue({ id: "aud-1" });
+    mockServeQuickenrichPage.mockResolvedValue({ people: [qePerson()], exhausted: false, pagesRead: 1, rowsSeen: 100, rejected: {} });
+    const res = await post("/search/next", { searchParams: params }).expect(200);
+    expect(res.body.source).toBe("quickenrich");
+    expect(mockSearchPeople).not.toHaveBeenCalled();
+  });
+
+  it("switch ON but the audience is not expressible (a location it cannot parse): serves from Apollo, never QuickEnrich", async () => {
+    const params = { ...QE_PARAMS, person_locations: ["Bay Area, Nowhereland"] };
     mockCursor = { ...mockCursor!, searchParams: params };
     mockFindQuickenrichAudience.mockResolvedValue({ id: "aud-1" });
     await post("/search/next", { searchParams: params }).expect(200);

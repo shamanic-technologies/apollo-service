@@ -5473,7 +5473,7 @@
               "apollo",
               "quickenrich"
             ],
-            "description": "Where /search/next sources this audience's people. Default apollo."
+            "description": "Where /search/next sources this audience's people first. quickenrich = the free QuickEnrich search, Apollo only once it has nobody left (Apollo last). Default apollo."
           },
           "quickenrich": {
             "type": "object",
@@ -5486,14 +5486,22 @@
                 "items": {
                   "type": "string"
                 },
-                "description": "Every constraint QuickEnrich cannot enforce; empty when expressible."
+                "description": "Why QuickEnrich cannot serve this audience at all (no title, an unparseable person location, a buying signal); empty when expressible."
+              },
+              "leftToJudge": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Constraints QuickEnrich does not enforce when it serves this audience (keyword tags, industries, seniorities, an unaligned headcount/revenue span…): its people come looser and the consumer's pre-pay screen judges them against the audience's text. Empty when everything is enforced."
               }
             },
             "required": [
               "expressible",
-              "reasons"
+              "reasons",
+              "leftToJudge"
             ],
-            "description": "Can this audience be served faithfully from QuickEnrich?"
+            "description": "Can this audience be served from QuickEnrich, and what is left to the judge?"
           }
         },
         "required": [
@@ -5548,11 +5556,18 @@
                 "items": {
                   "type": "string"
                 }
+              },
+              "leftToJudge": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               }
             },
             "required": [
               "expressible",
-              "reasons"
+              "reasons",
+              "leftToJudge"
             ]
           }
         },
@@ -5627,11 +5642,18 @@
                 "items": {
                   "type": "string"
                 }
+              },
+              "leftToJudge": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               }
             },
             "required": [
               "expressible",
-              "reasons"
+              "reasons",
+              "leftToJudge"
             ]
           }
         },

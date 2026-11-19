@@ -1,6 +1,7 @@
 import type { EmailStatus } from "../schemas.js";
 import { reportApolloCreditsExhausted, type CreditAlertIdentity } from "./credit-alert.js";
-import { ApolloCreditsExhaustedError } from "./provider-error.js";
+import { ApolloCreditsExhaustedError, ApolloKeyInvalidError } from "./provider-error.js";
+import { searchPeopleViaTregIfOwnKeyDown } from "./apollo-reveal-route.js";
 import { orgLookupBudget, type OrgLookupBudget, type OrgLookupPriority } from "./org-lookup-budget.js";
 
 const APOLLO_API_BASE = "https://api.apollo.io/api/v1";
@@ -554,6 +555,7 @@ function apolloRequestFailure(
   if (looksLikeApolloCreditExhaustion(status, body)) {
     return new ApolloCreditsExhaustedError(message, status);
   }
+  if (status === 401) return new ApolloKeyInvalidError(message, status);
   return new Error(message);
 }
 
@@ -585,25 +587,29 @@ export async function searchPeople(
   params: ApolloSearchParams,
   alertIdentity?: CreditAlertIdentity
 ): Promise<ApolloSearchResponse> {
-  const response = await sendApolloRequest("mixed_people/api_search", "Apollo search failed", alertIdentity, () => fetch(`${APOLLO_API_BASE}/mixed_people/api_search`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Api-Key": apiKey,
-    },
-    body: JSON.stringify({
-      ...params,
-      // Verified-email-only is the STANDARD for every people-search (count,
-      // serve, refine). FORCE it here — overriding any caller value — so a
-      // count reflects the reachable pool and pagination never walks people we
-      // cannot email. See VERIFIED_EMAIL_STATUS.
-      contact_email_status: [...VERIFIED_EMAIL_STATUS],
-      page: params.page || 1,
-      per_page: params.per_page || 25,
-    }),
-  }));
-
-  return response.json();
+  const body = {
+    ...params,
+    // Verified-email-only is the STANDARD for every people-search (count,
+    // serve, refine). FORCE it here — overriding any caller value — so a
+    // count reflects the reachable pool and pagination never walks people we
+    // cannot email. See VERIFIED_EMAIL_STATUS.
+    contact_email_status: [...VERIFIED_EMAIL_STATUS],
+    page: params.page || 1,
+    per_page: params.per_page || 25,
+  };
+  // Our PLATFORM key refused (401) or out of credits: the same free search
+  // through treg's Apollo (APOLLO-KEY-401-1113). A BYOK key is never rerouted.
+  return searchPeopleViaTregIfOwnKeyDown<ApolloSearchResponse>(apiKey, body, async () => {
+    const response = await sendApolloRequest("mixed_people/api_search", "Apollo search failed", alertIdentity, () => fetch(`${APOLLO_API_BASE}/mixed_people/api_search`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Api-Key": apiKey,
+      },
+      body: JSON.stringify(body),
+    }));
+    return response.json() as Promise<ApolloSearchResponse>;
+  });
 }
 
 /** A shallow organization record from Apollo's FREE name lookup. */
