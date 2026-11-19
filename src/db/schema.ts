@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, uniqueIndex, index, integer, decimal, jsonb, boolean, bigserial } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, uniqueIndex, index, integer, decimal, jsonb, boolean, bigserial, primaryKey } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 // Apollo people search results
@@ -184,6 +184,12 @@ export const apolloSearchCursors = pgTable(
     quickenrichCursor: text("quickenrich_cursor"),
     quickenrichPages: integer("quickenrich_pages").notNull().default(0),
     quickenrichExhausted: boolean("quickenrich_exhausted").notNull().default(false),
+    // Free people sources walked before QuickEnrich and Apollo (APOLLO-ZERO-COST-1119).
+    leadsforgeCursor: text("leadsforge_cursor"),
+    leadsforgePages: integer("leadsforge_pages").notNull().default(0),
+    leadsforgeExhausted: boolean("leadsforge_exhausted").notNull().default(false),
+    dropleadsPages: integer("dropleads_pages").notNull().default(0),
+    dropleadsExhausted: boolean("dropleads_exhausted").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -514,6 +520,48 @@ export const quickenrichSearches = pgTable(
     calledAt: timestamp("called_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index("idx_quickenrich_searches_cursor").on(table.cursorId, table.calledAt)]
+);
+
+// Bronze: every free people-source call (Leadsforge, Dropleads), failures included (APOLLO-ZERO-COST-1119).
+export const freeSourceSearches = pgTable(
+  "free_source_searches",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id").notNull(),
+    runId: text("run_id"),
+    campaignId: text("campaign_id"),
+    cursorId: uuid("cursor_id"),
+    apolloAudienceId: uuid("apollo_audience_id"),
+    source: text("source").notNull(),
+    requestBody: jsonb("request_body").notNull(),
+    httpStatus: integer("http_status"),
+    responseBody: jsonb("response_body"),
+    chargedMicro: integer("charged_micro"),
+    rowsReturned: integer("rows_returned"),
+    error: text("error"),
+    durationMs: integer("duration_ms"),
+    calledAt: timestamp("called_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("idx_free_source_searches_cursor").on(table.cursorId, table.calledAt)]
+);
+
+// Silver: one row per free-source person (global, no org: a directory row), as last seen.
+export const freeSourcePeople = pgTable(
+  "free_source_people",
+  {
+    source: text("source").notNull(),
+    externalId: text("external_id").notNull(),
+    firstName: text("first_name"),
+    lastName: text("last_name"),
+    title: text("title"),
+    linkedinUrl: text("linkedin_url"),
+    companyName: text("company_name"),
+    companyDomain: text("company_domain"),
+    raw: jsonb("raw").notNull(),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.source, table.externalId] })]
 );
 
 // Silver: one row per QuickEnrich person (emp_id), as last seen. /enrich reads

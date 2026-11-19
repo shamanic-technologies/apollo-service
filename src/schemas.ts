@@ -764,7 +764,7 @@ const SearchNextResponseSchema = z
       .openapi({
         description: "source=linkedin_engagement only. Competitor pages no posts provider can read (not_found = every provider says the page does not exist; unreadable = one says so and the others refuse it). Permanent: re-checked once a day, and they never keep done=false, so done/doneReason describe the READABLE pages. A page that failed transiently (rate limit, outage, timeout) is not listed and keeps done=false.",
       }),
-    source: z.enum(["quickenrich", "linkedin_engagement"]).optional().openapi({
+    source: z.enum(["quickenrich", "linkedin_engagement", "leadsforge", "dropleads"]).optional().openapi({
       description: "quickenrich: this page came from the FREE QuickEnrich search (the audience is switched to quickenrich); those people carry an id `qe:<emp_id>`, their full name, LinkedIn URL and company domain. linkedin_engagement: the filters carry a linkedin_engagement buying_signal; up to 5 engagers of the competitor pages per call, each with an id `li:<profileId>`, full name, title, headline, employer and LinkedIn URL, never the same person twice for the audience (x-audience-id, else the campaign), competitor employees excluded; done=true only once nobody is left. For both, POST /enrich with that id finds the email with treg and verifies it. Absent = the Apollo walk, unchanged.",
     }),
   })
@@ -870,7 +870,7 @@ const EnrichResponseSchema = z
       description: "True if the result was served from the 12-month cache (no Apollo API call, no cost).",
     }),
     emailVerification: EmailVerificationSchema,
-    source: z.literal("quickenrich").optional().openapi({
+    source: z.enum(["quickenrich", "leadsforge", "dropleads"]).optional().openapi({
       description: "Present when apolloPersonId was a `qe:<emp_id>` QuickEnrich person: the email was found with treg (no Apollo credit; cost `treg-micro-usd`) and verified. `cached` then means the finding was reused (no vendor call).",
     }),
     findingId: z.string().optional().openapi({ description: "The treg finding (email_findings) that answered, when source=quickenrich." }),
@@ -1996,7 +1996,7 @@ const AudienceResponseSchema = z
     count: z.number().int(),
     status: z.string().openapi({ description: '"confirmed" or "exhausted".' }),
     createdAt: z.string(),
-    serveSource: z.enum(["apollo", "quickenrich"]).openapi({ description: "Where /search/next sources this audience's people first. quickenrich = the free QuickEnrich search, Apollo only once it has nobody left (Apollo last). Default apollo." }),
+    serveSource: z.enum(["apollo", "quickenrich", "free"]).openapi({ description: "Where /search/next sources this audience's people first. quickenrich = the free QuickEnrich search, Apollo only once it has nobody left (Apollo last). Default apollo." }),
     quickenrich: z
       .object({
         expressible: z.boolean(),
@@ -2004,6 +2004,7 @@ const AudienceResponseSchema = z
         leftToJudge: z.array(z.string()).openapi({ description: "Constraints QuickEnrich does not enforce when it serves this audience (keyword tags, industries, seniorities, an unaligned headcount/revenue span…): its people come looser and the consumer's pre-pay screen judges them against the audience's text. Empty when everything is enforced." }),
       })
       .openapi({ description: "Can this audience be served from QuickEnrich, and what is left to the judge?" }),
+    freeSources: z.array(z.object({ source: z.enum(["leadsforge", "dropleads"]), usable: z.boolean(), reasons: z.array(z.string()), leftToJudge: z.array(z.string()) })).openapi({ description: "serveSource=free walks these free people sources first (Leadsforge, then Dropleads), then QuickEnrich, then Apollo. A source is used only when it enforces every targeting constraint (titles, seniorities, sector, location, headcount); reasons say why one is not." }),
   })
   .openapi("AudienceResponse");
 
@@ -2026,20 +2027,22 @@ const CreateAudienceFromFiltersResponseSchema = z
     name: z.string(),
     filters: ApolloNativeSearchFiltersSchema,
     count: z.number().int().openapi({ description: "Live Apollo match-count for the filters, from a free dry-run." }),
-    serveSource: z.enum(["apollo", "quickenrich"]),
+    serveSource: z.enum(["apollo", "quickenrich", "free"]),
     quickenrich: z.object({ expressible: z.boolean(), reasons: z.array(z.string()), leftToJudge: z.array(z.string()) }),
+    freeSources: z.array(z.object({ source: z.enum(["leadsforge", "dropleads"]), usable: z.boolean(), reasons: z.array(z.string()), leftToJudge: z.array(z.string()) })).openapi({ description: "serveSource=free walks these free people sources first (Leadsforge, then Dropleads), then QuickEnrich, then Apollo. A source is used only when it enforces every targeting constraint (titles, seniorities, sector, location, headcount); reasons say why one is not." }),
   })
   .openapi("CreateAudienceFromFiltersResponse");
 
 export const ServeSourceRequestSchema = z
-  .object({ serveSource: z.enum(["apollo", "quickenrich"]) })
+  .object({ serveSource: z.enum(["apollo", "quickenrich", "free"]) })
   .openapi("ServeSourceRequest");
 
 const ServeSourceResponseSchema = z
   .object({
     apolloAudienceId: z.string(),
-    serveSource: z.enum(["apollo", "quickenrich"]),
+    serveSource: z.enum(["apollo", "quickenrich", "free"]),
     quickenrich: z.object({ expressible: z.boolean(), reasons: z.array(z.string()), leftToJudge: z.array(z.string()) }),
+    freeSources: z.array(z.object({ source: z.enum(["leadsforge", "dropleads"]), usable: z.boolean(), reasons: z.array(z.string()), leftToJudge: z.array(z.string()) })).openapi({ description: "serveSource=free walks these free people sources first (Leadsforge, then Dropleads), then QuickEnrich, then Apollo. A source is used only when it enforces every targeting constraint (titles, seniorities, sector, location, headcount); reasons say why one is not." }),
   })
   .openapi("ServeSourceResponse");
 

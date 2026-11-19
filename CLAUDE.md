@@ -976,6 +976,33 @@ filters verbatim as `/search/next` searchParams, so the switch is found by
   revenue (bands only: `organizationAnnualRevenuePrinted`). All null, never
   invented.
 
+## FREE people sources before QuickEnrich and Apollo (`serveSource: "free"`, APOLLO-ZERO-COST-1119)
+
+Owner 2026-11-19: Apollo last, every free path first. `serveSource = "free"` walks, per filter
+set's cursor row: **Leadsforge → Dropleads → QuickEnrich → Apollo** (search free; Apollo reveal last).
+`src/lib/free-people-sources.ts` (pure: Apollo filters → each source, rows → Person) +
+`src/lib/free-people-serve.ts` (walk, bronze `free_source_searches`, silver `free_source_people`).
+
+- **Why these two (measured live 2026-11-19, treg, $0 per call):** both carry Apollo's SECTOR
+  filters (tags/keywords, seniorities, technologies; Dropleads also Apollo's industries) and FULL
+  names. ABA-therapy owners in 7 states: Leadsforge 10/10 on target, Dropleads 10/10 (pool 1,868),
+  QuickEnrich 0/30 (no sector filter; a sector audience served without its sector is junk the
+  judge rejects, and ~1,000 rejections exhaust the audience in human-service). Coresignal was
+  rejected: ids free but $0.39 per person read.
+- **A source is used for an audience only when it ENFORCES every targeting constraint** (titles,
+  seniorities, tags/industries/keywords, technologies, person + company location, headcount
+  envelope); else it is skipped and named (`freeSources[].reasons` on the audience). Revenue,
+  funding, founded year, a merged headcount envelope = `leftToJudge`. Buying signals refused.
+- **Vocabulary, measured by count delta:** Dropleads seniority `c_suite` = `csuite` (rest =
+  Apollo's), person location = plain `countries` / `states` / `cities` (`personalStates` as a
+  plain list is silently dropped); Leadsforge seniorities = Apollo's, locations free text.
+- **Every call asserted free** (`X-Treg-Cost-Micro: 0`, else loud + bronze); a failing source is
+  skipped FOR THAT CALL (warn trace `free-source-page`), never stalls the serve.
+- **`/enrich lf:<id>` / `dl:<id>`**: our stock (LinkedIn, else EXACT first + last name + domain),
+  then treg find (LinkedIn or name + domain), verified like every reveal. Never Apollo.
+- Leadsforge rows carry no LinkedIn: dedup against earlier serves relies on human-service's
+  suppression after the reveal; a repeat pays nothing when the address is in our stock.
+
 ## treg-FIRST on the reveal path does NOT work — the teaser has nothing to look up
 
 Measured 2026-09-26, so nobody re-plans it: the free People Search teaser a

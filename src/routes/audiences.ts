@@ -35,6 +35,7 @@ import { toCreditAlertIdentity } from "../lib/credit-alert.js";
 import { SuggestFromSegmentRequestSchema, ApolloNativeSearchFiltersSchema, AudienceCompaniesQuerySchema } from "../schemas.js";
 import { providerErrorFields } from "../lib/provider-error.js";
 import { planQuickenrich } from "../lib/quickenrich.js";
+import { planFreeSources } from "../lib/free-people-serve.js";
 import { ServeSourceRequestSchema, CreateAudienceFromFiltersRequestSchema, SignalCoverageRequestSchema, CreateSignalAudienceRequestSchema, SearchFiltersSchema, APOLLO_BUYING_SIGNAL_TYPES } from "../schemas.js";
 import { signalConflicts, signalWindow, utcDay, SignalNotApolloSearchableError, type BuyingSignalSpec, type BuyingSignalType } from "../lib/buying-signal-spec.js";
 import { filtersBesideEngagement } from "../lib/linkedin-engagement.js";
@@ -217,6 +218,7 @@ function serveSourceFields(serveSource: string, filters: Record<string, unknown>
   return {
     serveSource,
     quickenrich: { expressible: planned.ok, reasons: planned.ok ? [] : planned.reasons, leftToJudge: planned.ok ? planned.leftToJudge : [] },
+    freeSources: planFreeSources(filters).map((p) => (p.ok ? { source: p.source, usable: true, reasons: [], leftToJudge: p.leftToJudge } : { source: p.source, usable: false, reasons: p.reasons, leftToJudge: [] })),
   };
 }
 
@@ -294,6 +296,17 @@ router.patch("/audiences/:apolloAudienceId/serve-source", orgAuth, async (req: A
       const planned = planQuickenrich(filters);
       if (!planned.ok) {
         return res.status(422).json({ type: "not_expressible", error: "QuickEnrich cannot serve this audience", reasons: planned.reasons });
+      }
+    }
+    if (serveSource === "free") {
+      const plans = planFreeSources(filters);
+      const qe = planQuickenrich(filters);
+      if (!plans.some((p) => p.ok) && !qe.ok) {
+        return res.status(422).json({
+          type: "not_expressible",
+          error: "No free source can serve this audience",
+          reasons: [...plans.flatMap((p) => (p.ok ? [] : p.reasons.map((r) => `${p.source}: ${r}`))), ...(qe.ok ? [] : qe.reasons.map((r) => `quickenrich: ${r}`))],
+        });
       }
     }
     await db.update(apolloAudiences).set({ serveSource, updatedAt: new Date() }).where(eq(apolloAudiences.id, row.id));
