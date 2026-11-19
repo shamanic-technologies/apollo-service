@@ -340,6 +340,20 @@ export function planQuickenrich(filters: Record<string, unknown>): PlanResult {
   return { ok: true, plan: { body, titles, exactTitles, notTitles, locations, employeeBands, revenueBands }, leftToJudge };
 }
 
+// Constraints whose loss makes QuickEnrich serve the wrong SECTOR or level (measured
+// 2026-11-19: 12 % accepted fleet-wide when they were left to the judge, vs 40-65 % for
+// Leadsforge / Dropleads which enforce them).
+const SECTOR_FIELDS = [
+  "q_organization_keyword_tags", "qOrganizationKeywordTags", "organization_industries", "organizationIndustries",
+  "q_keywords", "qKeywords", "person_seniorities", "personSeniorities",
+  "currently_using_any_of_technology_uids", "currentlyUsingAnyOfTechnologyUids",
+];
+
+/** True when QuickEnrich would leave a sector / level constraint to the judge. */
+export function leavesSectorToJudge(leftToJudge: string[]): boolean {
+  return leftToJudge.some((r) => SECTOR_FIELDS.some((f) => r.startsWith(`${f}:`)));
+}
+
 // ─── Post-filter: the row must satisfy every stated constraint ─────────────
 
 export interface QuickenrichRow {
