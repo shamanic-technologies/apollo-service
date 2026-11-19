@@ -1025,6 +1025,22 @@ set's cursor row: **Leadsforge → Dropleads → QuickEnrich → Apollo** (searc
 - Leadsforge rows carry no LinkedIn: dedup against earlier serves relies on human-service's
   suppression after the reveal; a repeat pays nothing when the address is in our stock.
 
+## Unmask the Apollo teaser BEFORE paying a reveal (APOLLO-ZERO-COST-1119)
+
+Owner's idea 2026-11-19 (« avec les lettres qu'on a, chercher dans une autre base gratuite »). The
+free teaser gives first name, a last-name MASK ("Ri***n" = 2 first letters + *** + last letter),
+title and employer; `/search/next` now stores the three on `apollo_teaser_people` (migration 0052),
+and the employer's domain is already resolved free (`apollo_employer_domains`). `POST /enrich` on
+an Apollo id, after its cache and BEFORE any Apollo key, gate or credit: Leadsforge then Dropleads
+list the company's people by domain (free), and the person is unmasked only when EXACTLY ONE
+distinct last name fits the first name + mask (`src/lib/apollo-unmask.ts`); then our stock → a
+format guess → treg (`src/lib/free-email.ts`). Only a DELIVERABLE address is served this way
+(`source: "unmasked"`, the Apollo id kept, fields we do not have null); anything else goes on to
+the Apollo reveal, unchanged. A person served by a buying-signal cohort stays on Apollo (its
+evidence reads the Apollo record). Measured on 60 people Apollo had revealed (truth known): 32
+unmasked, 32 correct, 0 wrong. This supersedes the « needs an owner decision » line below for the
+unmask path: the owner asked for it. Teasers stored before 2026-11-19 carry no mask (Apollo path).
+
 ## Where each email came from, per day (`GET /internal/stats/email-sources/daily`, APOLLO-ZERO-COST-1119)
 
 Staff Monitoring series (x-api-key, `?days=` 1-180, default 30), read from the bronze rows each

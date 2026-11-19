@@ -870,7 +870,7 @@ const EnrichResponseSchema = z
       description: "True if the result was served from the 12-month cache (no Apollo API call, no cost).",
     }),
     emailVerification: EmailVerificationSchema,
-    source: z.enum(["quickenrich", "leadsforge", "dropleads"]).optional().openapi({
+    source: z.enum(["quickenrich", "leadsforge", "dropleads", "unmasked"]).optional().openapi({
       description: "Present when apolloPersonId was a `qe:<emp_id>` QuickEnrich person: the email was found with treg (no Apollo credit; cost `treg-micro-usd`) and verified. `cached` then means the finding was reused (no vendor call).",
     }),
     findingId: z.string().optional().openapi({ description: "The treg finding (email_findings) that answered, when source=quickenrich." }),

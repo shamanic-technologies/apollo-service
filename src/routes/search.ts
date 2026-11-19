@@ -33,6 +33,8 @@ import { findQuickenrichAudience, serveQuickenrichPage, loadQuickenrichPerson, Q
 import { executeEmailFind } from "../lib/email-find-run.js";
 import { findGuessedEmail, findStockEmail, findStockEmailFor, verifyStockEmail } from "../lib/email-stock.js";
 import { serveFreePeoplePage, loadFreeSourcePerson } from "../lib/free-people-serve.js";
+import { loadTeaserIdentity, servedBySignal, unmaskApolloPerson, unmaskedToPerson } from "../lib/apollo-unmask.js";
+import { freeEmailFor } from "../lib/free-email.js";
 import { parseFreeSourcePersonId, freeSourceToPerson } from "../lib/free-people-sources.js";
 import { applyCompanyStock, loadCompanyStock } from "../lib/company-stock.js";
 import { normalizeDomain } from "../lib/email-finders.js";
@@ -448,6 +450,38 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
         person: cacheHit.negative ? null : transformCachedEnrichment(apolloPersonId, cacheHit.record),
         cached: true,
       });
+    }
+
+    // Apollo LAST (APOLLO-ZERO-COST-1119): unmask the free teaser ("Ri***n" + title +
+    // employer) through Leadsforge / Dropleads, then our stock, a format guess, treg.
+    // Only a DELIVERABLE address is served this way; anything else goes on to the
+    // Apollo reveal below. A person served by a buying-signal cohort stays on Apollo
+    // (its evidence is read from the Apollo record).
+    const teaser = await loadTeaserIdentity(apolloPersonId);
+    if (teaser && !(await servedBySignal(req.orgId!, apolloPersonId))) {
+      const caller = { callerMethod: "POST", callerPath: "/enrich" };
+      const { key: tregToken } = await decryptKey(req.orgId!, req.userId!, "treg", caller, tracking);
+      const { key: tregOrg } = await decryptKey(req.orgId!, req.userId!, "treg-org", caller, tracking);
+      const un = await unmaskApolloPerson(teaser, { token: tregToken, tregOrg }, { orgId: req.orgId!, runId, campaignId });
+      traceEvent(runId, { service: "apollo-service", event: "unmask", detail: un ? `unmasked via ${un.via}` : "not unmasked" }, req.headers).catch(() => {});
+      if (un) {
+        const free = await freeEmailFor(un, { identity, tracking, runId, source: `unmasked:${un.via}` }, {
+          orgId: req.orgId!, userId: req.userId, runId, brandIds, campaignId, audienceId, featureSlug, workflowSlug, headers: req.headers, callerPath: "/enrich",
+        });
+        if (free) {
+          const companyStock = (await loadCompanyStock([un.domain])).get(normalizeDomain(un.domain)) ?? null;
+          traceEvent(runId, { service: "apollo-service", event: "enrich-done", detail: `source=unmasked:${un.via}, via=${free.kind}, verdict=${free.verification.verdict}` }, req.headers).catch(() => {});
+          return res.json({
+            enrichmentId: null,
+            person: applyCompanyStock(unmaskedToPerson(apolloPersonId, un, { email: free.email, emailStatus: free.verification.verdict }), companyStock),
+            cached: free.kind === "stock",
+            emailVerification: free.verification,
+            buyingSignal: null,
+            source: "unmasked",
+            ...(free.kind === "treg" ? { findingId: free.findingId } : { stock: free.kind === "stock" ? free.stockSource : "pattern-guess" }),
+          });
+        }
+      }
     }
 
     const { key: apolloApiKey, keySource } = await decryptKey(req.orgId!, req.userId!, "apollo", { callerMethod: "POST", callerPath: "/enrich" }, tracking);
