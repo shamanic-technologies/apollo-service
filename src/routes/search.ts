@@ -28,7 +28,7 @@ import { traceEvent } from "../lib/trace-event.js";
 import { verificationFor, EmailVerificationError } from "../lib/email-verification.js";
 import { emailVerificationErrorResponse } from "../lib/email-verification-response.js";
 import { toCreditAlertIdentity } from "../lib/credit-alert.js";
-import { planQuickenrich, parseQuickenrichPersonId, quickenrichToPerson, canonicalLinkedinUrl } from "../lib/quickenrich.js";
+import { planQuickenrich, parseQuickenrichPersonId, quickenrichToPerson, canonicalLinkedinUrl, leavesSectorToJudge } from "../lib/quickenrich.js";
 import { findQuickenrichAudience, serveQuickenrichPage, loadQuickenrichPerson, QuickenrichSearchError } from "../lib/quickenrich-serve.js";
 import { executeEmailFind } from "../lib/email-find-run.js";
 import { findStockEmail, findStockEmailFor, verifyStockEmail } from "../lib/email-stock.js";
@@ -852,6 +852,10 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
       if (!planned.ok) {
         console.warn(`[Apollo Service][POST /search/next] audience ${quickenrichAudience.id} is switched to quickenrich but not expressible — serving from Apollo: ${planned.reasons.join("; ")}`);
         traceEvent(runId, { service: "apollo-service", event: "quickenrich-inexpressible", detail: planned.reasons.join("; "), level: "warn" }, req.headers).catch(() => {});
+      } else if (quickenrichAudience.serveSource === "free" && leavesSectorToJudge(planned.leftToJudge)) {
+        // A "free" audience reached here because its free sources are walked out or failed
+        // this call: QuickEnrich would drop its sector, so Apollo answers instead.
+        traceEvent(runId, { service: "apollo-service", event: "quickenrich-skipped-sector", detail: planned.leftToJudge.join("; ") }, req.headers).catch(() => {});
       } else {
         let served: Awaited<ReturnType<typeof serveQuickenrichPage>> | null = null;
         try {
