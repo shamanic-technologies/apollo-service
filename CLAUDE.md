@@ -1000,6 +1000,11 @@ set's cursor row: **Leadsforge → Dropleads → QuickEnrich → Apollo** (searc
   skipped FOR THAT CALL (warn trace `free-source-page`), never stalls the serve.
 - **`/enrich lf:<id>` / `dl:<id>`**: our stock (LinkedIn, else EXACT first + last name + domain),
   then treg find (LinkedIn or name + domain), verified like every reveal. Never Apollo.
+- **Measured over every active audience 2026-11-19** (20 people judged each, staff run): the judge
+  accepted 45 % (Leadsforge 40 %, Dropleads 65 %, QuickEnrich 12 %) vs 18 % historically for Apollo
+  people. **In "free", QuickEnrich is skipped when it would leave a sector or level to the judge**
+  (`leavesSectorToJudge`): the call goes to Apollo instead. Leadsforge answers 429 under bursts
+  (40 of 346 probes at 6 parallel): the call moves on to Dropleads, then Apollo.
 - Leadsforge rows carry no LinkedIn: dedup against earlier serves relies on human-service's
   suppression after the reveal; a repeat pays nothing when the address is in our stock.
 

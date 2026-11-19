@@ -393,6 +393,16 @@ describe("QuickEnrich serve path", () => {
     expect(mockSearchPeople).toHaveBeenCalledTimes(1);
   });
 
+  it("free: free sources out + a sector QuickEnrich cannot enforce → Apollo, never sector-less QuickEnrich", async () => {
+    const params = { ...QE_PARAMS, q_organization_keyword_tags: ["chiropractic clinic"] };
+    mockCursor = { ...mockCursor!, searchParams: params };
+    mockFindQuickenrichAudience.mockResolvedValue({ id: "aud-1", serveSource: "free" });
+    mockServeFreePeoplePage.mockResolvedValue({ people: [], source: null, exhausted: true, pagesRead: 0, skipped: [], leftToJudge: [], failed: [] });
+    await post("/search/next", { searchParams: params }).expect(200);
+    expect(mockServeQuickenrichPage).not.toHaveBeenCalled();
+    expect(mockSearchPeople).toHaveBeenCalledTimes(1);
+  });
+
   it("/enrich lf: stock hit is free, treg and Apollo never called", async () => {
     mockLoadFreeSourcePerson.mockResolvedValue(LF_PERSON);
     mockFindStockEmailFor.mockResolvedValue({ email: "julie@hummingbirdaba.com", source: "email-finding" });

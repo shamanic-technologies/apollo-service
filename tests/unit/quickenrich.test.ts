@@ -7,6 +7,7 @@ import {
   parseLocality,
   parseQuickenrichPersonId,
   planQuickenrich,
+  leavesSectorToJudge,
   quickenrichToPerson,
   revenueBandsFor,
   rowMatchesPlan,
@@ -141,6 +142,15 @@ describe("planQuickenrich — faithfulness", () => {
   it("refuses a location it cannot match exactly", () => {
     expect(parseApolloLocation("Somewhere Unknown")).toBeNull();
     expect(planQuickenrich({ person_titles: ["CEO"], person_locations: ["Bay Area, Nowhereland"] }).ok).toBe(false);
+  });
+});
+
+describe("leavesSectorToJudge", () => {
+  it("flags a sector or level left to the judge, not a headcount envelope", () => {
+    const p = planQuickenrich(KEYWORD_AUDIENCE);
+    expect(p.ok && leavesSectorToJudge(p.leftToJudge)).toBe(true);
+    const q = planQuickenrich({ person_titles: ["CEO"], organization_num_employees_ranges: ["1,10"] });
+    expect(q.ok && leavesSectorToJudge(q.leftToJudge)).toBe(false);
   });
 });
 
