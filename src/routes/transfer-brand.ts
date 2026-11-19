@@ -118,6 +118,18 @@ export const TABLE_MOVES: TableMove[] = [
     )`,
   },
   {
+    // Free people-source calls (Leadsforge, Dropleads): same ties as QuickEnrich's.
+    tableName: "free_source_searches",
+    brandColumn: null,
+    where: (ids) => sql`org_id = ${ids.sourceOrgId} AND (
+      cursor_id IN (SELECT id FROM apollo_search_cursors
+        WHERE org_id = ${ids.sourceOrgId} AND brand_ids = ARRAY[${ids.sourceBrandId}]::text[])
+      OR apollo_audience_id IN (SELECT id FROM apollo_audiences
+        WHERE org_id = ${ids.sourceOrgId} AND brand_id = ${ids.sourceBrandId})
+      OR campaign_id IN ${brandCampaigns(ids)}
+    )`,
+  },
+  {
     tableName: "apollo_phone_reveals",
     brandColumn: "brand_ids",
     where: (ids) => sql`org_id = ${ids.sourceOrgId} AND ${brandOrCampaign(ids)}`,

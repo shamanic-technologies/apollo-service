@@ -15,7 +15,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { canonicalLinkedinUrl } from "./quickenrich.js";
-import { personKeyOf } from "./email-finders.js";
+import { normalizeDomain, personKeyOf } from "./email-finders.js";
 import { verifyRevealedEmail, type EmailVerificationResult, type VerificationContext } from "./email-verification.js";
 
 export interface StockEmail {
@@ -35,7 +35,38 @@ export function stockLinkedinKeys(linkedinUrl: string | null | undefined): { apo
 
 /** The latest address our paid tasks returned for this LinkedIn person, or null. */
 export async function findStockEmail(person: { employee_linkedin?: string | null }): Promise<StockEmail | null> {
-  const keys = stockLinkedinKeys(person.employee_linkedin);
+  return findStockEmailFor({ linkedinUrl: person.employee_linkedin ?? null });
+}
+
+/**
+ * Same stock, for a person known by LinkedIn and/or full name + company domain
+ * (Leadsforge rows carry no LinkedIn). The name match is EXACT on first name,
+ * last name and domain, case-insensitive, never a fuzzy guess.
+ */
+export async function findStockEmailFor(person: { linkedinUrl: string | null; firstName?: string | null; lastName?: string | null; domain?: string | null }): Promise<StockEmail | null> {
+  const byLinkedin = await findStockByLinkedin(person.linkedinUrl);
+  if (byLinkedin) return byLinkedin;
+  const first = person.firstName?.trim().toLowerCase();
+  const last = person.lastName?.trim().toLowerCase();
+  const domain = normalizeDomain(person.domain ?? "");
+  if (!first || !last || !domain) return null;
+  const reveal = await db.execute(sql`
+    SELECT email FROM apollo_people_enrichments
+    WHERE lower(organization_domain) = ${domain} AND lower(first_name) = ${first} AND lower(last_name) = ${last}
+      AND email IS NOT NULL AND btrim(email) <> ''
+    ORDER BY created_at DESC LIMIT 1`);
+  const revealed = (reveal as unknown as Array<{ email: string }>)[0];
+  if (revealed) return { email: revealed.email.trim(), source: "apollo-reveal" };
+  const finding = await db.execute(sql`
+    SELECT email FROM email_findings
+    WHERE person_key = ${personKeyOf({ firstName: first, lastName: last, domain })} AND status = 'found' AND email IS NOT NULL AND btrim(email) <> ''
+    ORDER BY created_at DESC LIMIT 1`);
+  const found = (finding as unknown as Array<{ email: string }>)[0];
+  return found ? { email: found.email.trim(), source: "email-finding" } : null;
+}
+
+async function findStockByLinkedin(linkedinUrl: string | null): Promise<StockEmail | null> {
+  const keys = stockLinkedinKeys(linkedinUrl);
   if (!keys) return null;
   const reveal = await db.execute(sql`
     SELECT email FROM apollo_people_enrichments

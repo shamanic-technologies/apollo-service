@@ -5,7 +5,7 @@
  */
 
 import { errorMessage } from "./db-error.js";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloAudiences, apolloSearchCursors, quickenrichPeople, quickenrichSearches } from "../db/schema.js";
 import { decryptKey, type TrackingContext } from "./keys-client.js";
@@ -43,14 +43,15 @@ export class QuickenrichSearchError extends Error {
  * as /search/next's searchParams (they are the apollo_audiences row's filters),
  * so jsonb equality is the audience's identity on this route.
  */
-export async function findQuickenrichAudience(orgId: string, params: Record<string, unknown>): Promise<{ id: string } | null> {
+export async function findQuickenrichAudience(orgId: string, params: Record<string, unknown>): Promise<{ id: string; serveSource?: string } | null> {
   const [row] = await db
-    .select({ id: apolloAudiences.id })
+    .select({ id: apolloAudiences.id, serveSource: apolloAudiences.serveSource })
     .from(apolloAudiences)
     .where(
       and(
         eq(apolloAudiences.orgId, orgId),
-        eq(apolloAudiences.serveSource, "quickenrich"),
+        // "free" = Leadsforge → Dropleads first, then QuickEnrich, then Apollo (APOLLO-ZERO-COST-1119).
+        inArray(apolloAudiences.serveSource, ["quickenrich", "free"]),
         sql`${apolloAudiences.filters} = ${JSON.stringify(params)}::jsonb`
       )
     )
