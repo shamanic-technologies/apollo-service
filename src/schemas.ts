@@ -874,8 +874,8 @@ const EnrichResponseSchema = z
       description: "Present when apolloPersonId was a `qe:<emp_id>` QuickEnrich person: the email was found with treg (no Apollo credit; cost `treg-micro-usd`) and verified. `cached` then means the finding was reused (no vendor call).",
     }),
     findingId: z.string().optional().openapi({ description: "The treg finding (email_findings) that answered, when source=quickenrich." }),
-    stock: z.enum(["apollo-reveal", "email-finding"]).optional().openapi({
-      description: "Set when source=quickenrich and the address came from our STOCK (a paid task of ours already returned it for this person, any org): served free, no treg call, no cost declared. apollo-reveal = an earlier Apollo reveal, email-finding = an earlier found email finding.",
+    stock: z.enum(["apollo-reveal", "email-finding", "pattern-guess"]).optional().openapi({
+      description: "Set when source=quickenrich and the address came from our STOCK (a paid task of ours already returned it for this person, any org): served free, no treg call, no cost declared. apollo-reveal = an earlier Apollo reveal, email-finding = an earlier found email finding, pattern-guess = the address guessed from the format of the addresses we hold at that company, checked valid (the check is the only spend).",
     }),
     revealSkipped: z
       .object({

@@ -1006,8 +1006,17 @@ set's cursor row: **Leadsforge → Dropleads → QuickEnrich → Apollo** (searc
   60 s timeout.
 - **Every call asserted free** (`X-Treg-Cost-Micro: 0`, else loud + bronze); a failing source is
   skipped FOR THAT CALL (warn trace `free-source-page`), never stalls the serve.
-- **`/enrich lf:<id>` / `dl:<id>`**: our stock (LinkedIn, else EXACT first + last name + domain),
-  then treg find (LinkedIn or name + domain), verified like every reveal. Never Apollo.
+- **`/enrich lf:<id>` / `dl:<id>`** (and `qe:`): our stock (LinkedIn, else EXACT first + last name +
+  domain), then a GUESS from the company's format, then treg find (LinkedIn or name + domain),
+  verified like every reveal. Never Apollo.
+- **Guess from the company's format** (`src/lib/email-pattern.ts`, `findGuessedEmail`): the dominant
+  format (first.last, flast, first…) of the named addresses our reveals hold at that mail domain,
+  applied to the person, then CHECKED; served only when `valid`, else treg. Never guessed blind (no
+  readable address at the domain = no guess). Measured leave-one-out on prod 2026-11-19: 75.5 %
+  right (16,048 / 21,258). The check runs with source `pattern-guess:<source>` and, when `valid`,
+  declares `email_found` + `email_checked` itself (`producedByCheck`: nobody else found it),
+  consuming nothing. Once our own SMTP check exists (port 25 requested at AWS + Hetzner), the
+  check costs $0 and every format can be tried.
 - **Measured over every active audience 2026-11-19** (20 people judged each, staff run): the judge
   accepted 45 % (Leadsforge 40 %, Dropleads 65 %, QuickEnrich 12 %) vs 18 % historically for Apollo
   people. **In "free", QuickEnrich is skipped when it would leave a sector or level to the judge**

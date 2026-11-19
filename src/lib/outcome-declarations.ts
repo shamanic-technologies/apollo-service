@@ -249,7 +249,16 @@ export function nextAttemptAt(attempts: number, now: Date, since?: Date | null):
  * check, and no run had found those addresses).
  */
 export function consumedByCheck(source: string, subject: NamedSubject | undefined): OutcomeKey[] {
-  return subject || source.startsWith("verify:") ? [] : ["email_found"];
+  return subject || source.startsWith("verify:") || source.startsWith("pattern-guess:") ? [] : ["email_found"];
+}
+
+/**
+ * What a deciding check produces. A check of a GUESSED address (source
+ * `pattern-guess:`, APOLLO-ZERO-COST-1119) that comes back `valid` is also the
+ * task that FOUND it: nobody else paid a find, so it produces `email_found` too.
+ */
+export function producedByCheck(source: string, verdict: string | null): OutcomeKey[] {
+  return source.startsWith("pattern-guess:") && verdict === "valid" ? ["email_found", "email_checked"] : ["email_checked"];
 }
 
 /** A domain-gate probe checks an address nobody owns: it produces no outcome. */

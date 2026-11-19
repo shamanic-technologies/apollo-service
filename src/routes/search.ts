@@ -31,7 +31,7 @@ import { toCreditAlertIdentity } from "../lib/credit-alert.js";
 import { planQuickenrich, parseQuickenrichPersonId, quickenrichToPerson, canonicalLinkedinUrl, leavesSectorToJudge } from "../lib/quickenrich.js";
 import { findQuickenrichAudience, serveQuickenrichPage, loadQuickenrichPerson, QuickenrichSearchError } from "../lib/quickenrich-serve.js";
 import { executeEmailFind } from "../lib/email-find-run.js";
-import { findStockEmail, findStockEmailFor, verifyStockEmail } from "../lib/email-stock.js";
+import { findGuessedEmail, findStockEmail, findStockEmailFor, verifyStockEmail } from "../lib/email-stock.js";
 import { serveFreePeoplePage, loadFreeSourcePerson } from "../lib/free-people-serve.js";
 import { parseFreeSourcePersonId, freeSourceToPerson } from "../lib/free-people-sources.js";
 import { applyCompanyStock, loadCompanyStock } from "../lib/company-stock.js";
@@ -315,6 +315,21 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
           stock: stock.source,
         });
       }
+      const guessed = await findGuessedEmail(
+        { firstName: row.first_name, lastName: row.last_name, domain: row.company_url },
+        { identity, tracking: { brandIds, campaignId, audienceId, featureSlug, workflowSlug }, runId, source: "quickenrich" }
+      );
+      if (guessed) {
+        traceEvent(runId, { service: "apollo-service", event: "enrich-done", detail: `source=quickenrich, stock=pattern-guess, verdict=${guessed.verification.verdict}` }, req.headers).catch(() => {});
+        return res.json({
+          enrichmentId: null,
+          person: applyCompanyStock(quickenrichToPerson(row, { email: guessed.email, emailStatus: guessed.verification.verdict }), companyStock),
+          cached: false,
+          emailVerification: guessed.verification,
+          source: "quickenrich",
+          stock: "pattern-guess",
+        });
+      }
       const found = await executeEmailFind(
         { orgId: req.orgId!, userId: req.userId, runId, brandIds, campaignId, audienceId, featureSlug, workflowSlug, headers: req.headers, callerPath: "/enrich" },
         "treg",
@@ -367,6 +382,21 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
           emailVerification,
           source: freeId.source,
           stock: stock.source,
+        });
+      }
+      const guessed = await findGuessedEmail(
+        { firstName: fp.firstName, lastName: fp.lastName, domain: fp.companyDomain },
+        { identity, tracking: { brandIds, campaignId, audienceId, featureSlug, workflowSlug }, runId, source: freeId.source }
+      );
+      if (guessed) {
+        traceEvent(runId, { service: "apollo-service", event: "enrich-done", detail: `source=${freeId.source}, stock=pattern-guess, verdict=${guessed.verification.verdict}` }, req.headers).catch(() => {});
+        return res.json({
+          enrichmentId: null,
+          person: applyCompanyStock(freeSourceToPerson(fp, { email: guessed.email, emailStatus: guessed.verification.verdict }), companyStock),
+          cached: false,
+          emailVerification: guessed.verification,
+          source: freeId.source,
+          stock: "pattern-guess",
         });
       }
       const found = await executeEmailFind(

@@ -24,7 +24,9 @@ describe("every paid task declares its outcome", () => {
     it(`${p.task} → produced ${p.produced}${p.consumed ? `, consumed ${p.consumed}` : ""}`, () => {
       const src = readFileSync(join(__dirname, "../..", p.file), "utf8");
       expect(src).toContain("recordOutcomeDetached({");
-      expect(src).toContain(`produced: ["${p.produced}"]`);
+      // A check declares through producedByCheck (always email_checked; a valid GUESSED
+      // address is also email_found, APOLLO-ZERO-COST-1119): pinned in email-pattern.test.ts.
+      expect(src).toMatch(new RegExp(`produced: \\["${p.produced}"\\]|producedByCheck\\(`));
       if (p.consumed) expect(src).toMatch(new RegExp(`\\["${p.consumed}"\\]|consumedByCheck\\(`));
     });
   }
