@@ -995,7 +995,15 @@ set's cursor row: **Leadsforge → Dropleads → QuickEnrich → Apollo** (searc
   funding, founded year, a merged headcount envelope = `leftToJudge`. Buying signals refused.
 - **Vocabulary, measured by count delta:** Dropleads seniority `c_suite` = `csuite` (rest =
   Apollo's), person location = plain `countries` / `states` / `cities` (`personalStates` as a
-  plain list is silently dropped); Leadsforge seniorities = Apollo's, locations free text.
+  plain list is silently dropped), company location = `organizationCountries: {include: [...]}`
+  (a plain list is SILENTLY IGNORED: 36,879 "Nigeria" event producers with or without it, 18 with
+  the object; first prod serves 2026-11-19 went worldwide until fixed); Leadsforge seniorities =
+  Apollo's, locations free text.
+- **Leadsforge bookmarks expire within minutes** (410 `cursor invalid or expired` between serves
+  ~10 min apart): the walk restarts from the top with `leadIDs.exclude` = every id it already
+  returned on that cursor (read from bronze); past `LEADSFORGE_MAX_EXCLUDED` (2,000) the source is
+  treated as walked out. Dropleads takes 12-15 s on a narrow query, up to ~80 s on a broad one:
+  60 s timeout.
 - **Every call asserted free** (`X-Treg-Cost-Micro: 0`, else loud + bronze); a failing source is
   skipped FOR THAT CALL (warn trace `free-source-page`), never stalls the serve.
 - **`/enrich lf:<id>` / `dl:<id>`**: our stock (LinkedIn, else EXACT first + last name + domain),
