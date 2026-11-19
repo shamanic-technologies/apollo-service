@@ -1993,13 +1993,14 @@ const AudienceResponseSchema = z
     count: z.number().int(),
     status: z.string().openapi({ description: '"confirmed" or "exhausted".' }),
     createdAt: z.string(),
-    serveSource: z.enum(["apollo", "quickenrich"]).openapi({ description: "Where /search/next sources this audience's people. Default apollo." }),
+    serveSource: z.enum(["apollo", "quickenrich"]).openapi({ description: "Where /search/next sources this audience's people first. quickenrich = the free QuickEnrich search, Apollo only once it has nobody left (Apollo last). Default apollo." }),
     quickenrich: z
       .object({
         expressible: z.boolean(),
-        reasons: z.array(z.string()).openapi({ description: "Every constraint QuickEnrich cannot enforce; empty when expressible." }),
+        reasons: z.array(z.string()).openapi({ description: "Why QuickEnrich cannot serve this audience at all (no title, an unparseable person location, a buying signal); empty when expressible." }),
+        leftToJudge: z.array(z.string()).openapi({ description: "Constraints QuickEnrich does not enforce when it serves this audience (keyword tags, industries, seniorities, an unaligned headcount/revenue span…): its people come looser and the consumer's pre-pay screen judges them against the audience's text. Empty when everything is enforced." }),
       })
-      .openapi({ description: "Can this audience be served faithfully from QuickEnrich?" }),
+      .openapi({ description: "Can this audience be served from QuickEnrich, and what is left to the judge?" }),
   })
   .openapi("AudienceResponse");
 
@@ -2023,7 +2024,7 @@ const CreateAudienceFromFiltersResponseSchema = z
     filters: ApolloNativeSearchFiltersSchema,
     count: z.number().int().openapi({ description: "Live Apollo match-count for the filters, from a free dry-run." }),
     serveSource: z.enum(["apollo", "quickenrich"]),
-    quickenrich: z.object({ expressible: z.boolean(), reasons: z.array(z.string()) }),
+    quickenrich: z.object({ expressible: z.boolean(), reasons: z.array(z.string()), leftToJudge: z.array(z.string()) }),
   })
   .openapi("CreateAudienceFromFiltersResponse");
 
@@ -2035,7 +2036,7 @@ const ServeSourceResponseSchema = z
   .object({
     apolloAudienceId: z.string(),
     serveSource: z.enum(["apollo", "quickenrich"]),
-    quickenrich: z.object({ expressible: z.boolean(), reasons: z.array(z.string()) }),
+    quickenrich: z.object({ expressible: z.boolean(), reasons: z.array(z.string()), leftToJudge: z.array(z.string()) }),
   })
   .openapi("ServeSourceResponse");
 

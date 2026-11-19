@@ -19,14 +19,18 @@
  * - `number_of_employees` / `revenue` accept only their lookup bands
  *   (`/api/lookups/employee-ranges`, `/api/lookups/revenue-ranges`).
  *
- * Faithfulness rule: an audience is served from QuickEnrich only when EVERY
- * constraint its Apollo filters state can be enforced — server-side or by a
- * free post-filter on the returned row. Any constraint that cannot (keyword
- * tags, seniorities, industries, organization locations, technologies, …)
- * makes the whole audience inexpressible and it stays on Apollo. Enforcing is
- * allowed to be STRICTER than Apollo (a person whose location reads "Greater
- * Seattle Area" is dropped from a "Washington, US" audience); it is never
- * allowed to be looser.
+ * Serving rule (APOLLO-ZERO-COST-1119, owner 2026-11-19: "Apollo en dernier,
+ * si tout le free a été testé"): QuickEnrich enforces every constraint it CAN
+ * (titles, person locations, headcount / revenue bands), server-side or by a
+ * free post-filter on the returned row. A constraint it cannot (keyword tags,
+ * seniorities, industries, organization locations, technologies, …) no longer
+ * keeps the audience on Apollo: it is served LOOSER and the constraint is LEFT
+ * TO THE JUDGE (the consumer's pre-pay screen judges every candidate against
+ * the audience's own text before any spend), and named in `leftToJudge`. A
+ * headcount / revenue span that does not line up is widened to the covering
+ * bands, the exact span left to the judge. Still refused: no title (nothing
+ * to search on), a person location that cannot be parsed, a buying signal (a
+ * dated window QuickEnrich cannot see would be silently dropped).
  */
 
 // ─── Vocabulary ──────────────────────────────────────────────────────────────
@@ -129,7 +133,7 @@ export interface QuickenrichPlan {
   revenueBands: string[];
 }
 
-export type PlanResult = { ok: true; plan: QuickenrichPlan } | { ok: false; reasons: string[] };
+export type PlanResult = { ok: true; plan: QuickenrichPlan; leftToJudge: string[] } | { ok: false; reasons: string[] };
 
 function isEmpty(v: unknown): boolean {
   if (v === null || v === undefined || v === "" || v === false) return true;
@@ -233,14 +237,46 @@ export function revenueBandsFor(range: { min?: number | null; max?: number | nul
   return null;
 }
 
+/** Bands overlapping an Apollo "min,max" employee span (a superset of it). */
+export function coveringEmployeeBands(ranges: string[]): string[] | null {
+  const labels: string[] = [];
+  for (const r of ranges) {
+    const [a, b] = r.split(",").map((s) => s.trim());
+    const min = a ? Number(a) : 1;
+    const max = b ? Number(b) : null;
+    if (!Number.isFinite(min) || (max !== null && !Number.isFinite(max))) return null;
+    for (const band of QE_EMPLOYEE_BANDS) {
+      const overlaps = (band.max === null || band.max >= min) && (max === null || band.min <= max);
+      if (overlaps) labels.push(band.label);
+    }
+  }
+  return labels.length > 0 ? QE_EMPLOYEE_BANDS.map((b) => b.label).filter((l) => labels.includes(l)) : null;
+}
+
+/** Bands overlapping an Apollo revenue {min,max} (USD) span (a superset of it). */
+export function coveringRevenueBands(range: { min?: number | null; max?: number | null }): string[] | null {
+  const min = range.min ?? 0;
+  const max = range.max ?? null;
+  const labels = QE_REVENUE_BANDS.filter((band) => (band.max === null || band.max > min) && (max === null || band.min < max)).map((b) => b.label);
+  return labels.length > 0 ? labels : null;
+}
+
+// A buying signal is a dated window (hiring / funding / job change / LinkedIn
+// engagement): QuickEnrich cannot see it, and dropping it would serve the bare ICP.
+const NEVER_LOOSENED_KEYS = new Set(["buying_signal", "buyingSignal"]);
+
 /**
- * Can this audience be served faithfully from QuickEnrich? Returns the request
- * body and the post-filter, or every reason it cannot.
+ * Can this audience be served from QuickEnrich? Returns the request body, the
+ * post-filter and every constraint left to the consumer's judge, or every
+ * reason it cannot.
  */
 export function planQuickenrich(filters: Record<string, unknown>): PlanResult {
   const reasons: string[] = [];
+  const leftToJudge: string[] = [];
   for (const [k, v] of Object.entries(filters)) {
-    if (!isEmpty(v) && !SUPPORTED_KEYS.has(k)) reasons.push(`${k}: not expressible in QuickEnrich`);
+    if (isEmpty(v) || SUPPORTED_KEYS.has(k)) continue;
+    if (NEVER_LOOSENED_KEYS.has(k)) reasons.push(`${k}: a buying signal cannot be served from QuickEnrich`);
+    else leftToJudge.push(`${k}: not enforced by QuickEnrich, left to the judge`);
   }
 
   const titles = strings(pick(filters, "titles"));
@@ -260,8 +296,15 @@ export function planQuickenrich(filters: Record<string, unknown>): PlanResult {
   const employees = strings(pick(filters, "employees"));
   if (employees.length > 0) {
     const bands = employeeBandsFor(employees);
-    if (!bands) reasons.push(`organization_num_employees_ranges: ${JSON.stringify(employees)} does not line up with QuickEnrich's bands`);
-    else employeeBands = bands;
+    if (bands) employeeBands = bands;
+    else {
+      const covering = coveringEmployeeBands(employees);
+      if (!covering) reasons.push(`organization_num_employees_ranges: ${JSON.stringify(employees)} is not a readable span`);
+      else {
+        employeeBands = covering;
+        leftToJudge.push(`organization_num_employees_ranges: ${JSON.stringify(employees)} widened to the covering bands, exact span left to the judge`);
+      }
+    }
   }
 
   let revenueBands: string[] = [];
@@ -270,9 +313,17 @@ export function planQuickenrich(filters: Record<string, unknown>): PlanResult {
     if (typeof revenue !== "object" || Array.isArray(revenue)) {
       reasons.push("revenue_range: only the {min,max} USD form is expressible");
     } else {
-      const bands = revenueBandsFor(revenue as { min?: number; max?: number });
-      if (!bands) reasons.push(`revenue_range: ${JSON.stringify(revenue)} does not line up with QuickEnrich's bands`);
-      else revenueBands = bands;
+      const span = revenue as { min?: number; max?: number };
+      const bands = revenueBandsFor(span);
+      if (bands) revenueBands = bands;
+      else {
+        const covering = coveringRevenueBands(span);
+        if (!covering) reasons.push(`revenue_range: ${JSON.stringify(revenue)} is not a readable span`);
+        else {
+          revenueBands = covering;
+          leftToJudge.push(`revenue_range: ${JSON.stringify(revenue)} widened to the covering bands, exact span left to the judge`);
+        }
+      }
     }
   }
 
@@ -286,7 +337,7 @@ export function planQuickenrich(filters: Record<string, unknown>): PlanResult {
   if (employeeBands.length > 0) body.number_of_employees = { include: employeeBands, exclude: [] };
   if (revenueBands.length > 0) body.revenue = { include: revenueBands, exclude: [] };
 
-  return { ok: true, plan: { body, titles, exactTitles, notTitles, locations, employeeBands, revenueBands } };
+  return { ok: true, plan: { body, titles, exactTitles, notTitles, locations, employeeBands, revenueBands }, leftToJudge };
 }
 
 // ─── Post-filter: the row must satisfy every stated constraint ─────────────

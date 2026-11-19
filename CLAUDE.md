@@ -929,15 +929,22 @@ filters verbatim as `/search/next` searchParams, so the switch is found by
   43,139 served rows are) so a person served via Apollo and found here is one
   key. A row with no LinkedIn / full name / domain is never served. Silver
   `email_findings` (personKey = linkedin) makes a repeat find free.
-- **Faithfulness (`planQuickenrich`, `rowMatchesPlan`)**: served only when
-  EVERY constraint is enforceable; stricter than Apollo is fine, looser never.
-  Enforceable: `person_titles` (server substring + whole-word post-filter,
-  exact when `include_similar_titles:false`), `person_not_titles`,
-  `person_locations` (server `locality` substring + structural post-filter; a
-  US state matches the region only), headcount/revenue only when the Apollo
-  span lines up with QuickEnrich's bands (±1 employee). NOT enforceable →
-  audience stays on Apollo: keyword tags, seniorities, industries,
-  organization locations, technologies, q_keywords, everything else.
+- **Apollo LAST (APOLLO-ZERO-COST-1119, owner 2026-11-19: « je ne veux plus
+  qu'on utilise Apollo autant que possible, on le met en dernier si tout le
+  free a été testé »). `planQuickenrich` enforces what it CAN and leaves the
+  rest to the JUDGE** (the consumer's pre-pay screen judges every candidate
+  against the audience's text before any spend), named in `leftToJudge`.
+  Enforced: `person_titles` (server substring + whole-word post-filter, exact
+  when `include_similar_titles:false`), `person_not_titles`, `person_locations`
+  (server `locality` substring + structural post-filter; a US state matches
+  the region only), headcount/revenue bands (a span that does not line up is
+  widened to the COVERING bands, exact span left to the judge). Left to the
+  judge: keyword tags, seniorities, industries, organization locations,
+  technologies, q_keywords, everything else. Still REFUSED (stays on Apollo):
+  no title, an unparseable person location, a `buying_signal` (a dated window
+  QuickEnrich cannot see would be silently dropped). A QuickEnrich search
+  failure (treg 429/5xx/timeout) serves THAT call from Apollo, warned + traced
+  `quickenrich-search-failed`; our own errors stay loud.
 - **QuickEnrich's `city`/`region_code`/`country_code` are the COMPANY's
   address** (Salesforce rows read San Francisco, some `country_code:"UK"`);
   the PERSON's location is `locality` ("Austin, Texas, United States", often

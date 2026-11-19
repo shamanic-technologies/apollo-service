@@ -80,24 +80,54 @@ describe("planQuickenrich — faithfulness", () => {
     expect(p.body.revenue).toEqual({ include: ["10 - 20 Million", "20 - 50 Million", "50 - 100 Million"], exclude: [] });
   });
 
-  it("refuses every constraint it cannot enforce, and says which", () => {
+  // APOLLO-ZERO-COST-1119 (owner 2026-11-19: Apollo paid reveal last): a
+  // constraint QuickEnrich cannot enforce no longer keeps the audience on
+  // Apollo. It is served looser and LEFT TO THE JUDGE (the consumer's pre-pay
+  // screen judges every candidate against the audience's own text), and named.
+  it("serves an audience with constraints it cannot enforce, and names each one left to the judge", () => {
     const p = planQuickenrich(KEYWORD_AUDIENCE);
-    expect(p.ok).toBe(false);
-    if (!p.ok) {
-      expect(p.reasons.some((r) => r.startsWith("q_organization_keyword_tags"))).toBe(true);
-      expect(p.reasons.some((r) => r.startsWith("person_seniorities"))).toBe(true);
+    expect(p.ok).toBe(true);
+    if (p.ok) {
+      expect(p.leftToJudge.some((r) => r.startsWith("q_organization_keyword_tags"))).toBe(true);
+      expect(p.leftToJudge.some((r) => r.startsWith("person_seniorities"))).toBe(true);
+      expect(p.plan.body.title).toEqual({ include: ["Pharmacist"], exclude: [] });
+      expect(p.plan.body.locality).toEqual({ include: ["Switzerland"], exclude: [] });
     }
   });
 
-  it("refuses organization locations (QuickEnrich's company address is unreliable)", () => {
-    expect(planQuickenrich({ person_titles: ["CEO"], organization_locations: ["United States"] }).ok).toBe(false);
+  it("leaves organization locations to the judge (QuickEnrich's company address is unreliable)", () => {
+    const p = planQuickenrich({ person_titles: ["CEO"], organization_locations: ["United States"] });
+    expect(p.ok).toBe(true);
+    if (p.ok) expect(p.leftToJudge.some((r) => r.startsWith("organization_locations"))).toBe(true);
+  });
+
+  it("an enforceable audience leaves nothing to the judge", () => {
+    const p = planQuickenrich(SOUTH_CHIRO);
+    expect(p.ok).toBe(true);
+    if (p.ok) expect(p.leftToJudge).toEqual([]);
+  });
+
+  it("refuses a buying signal (a dated window QuickEnrich cannot see would be silently dropped)", () => {
+    const p = planQuickenrich({ person_titles: ["CEO"], buying_signal: { type: "funding", window_days: 90 } });
+    expect(p.ok).toBe(false);
+  });
+
+  it("widens a headcount / revenue span that does not line up to the covering bands, and leaves the exact span to the judge", () => {
+    const p = planQuickenrich({ person_titles: ["CEO"], organization_num_employees_ranges: ["1,10"], revenue_range: { min: 3_000_000, max: 10_000_000 } });
+    expect(p.ok).toBe(true);
+    if (p.ok) {
+      expect(p.plan.body.number_of_employees).toEqual({ include: ["< 5", "5 - 19"], exclude: [] });
+      expect(p.plan.body.revenue).toEqual({ include: ["2.5 - 5 Million", "5 - 10 Million"], exclude: [] });
+      expect(p.leftToJudge.some((r) => r.startsWith("organization_num_employees_ranges"))).toBe(true);
+      expect(p.leftToJudge.some((r) => r.startsWith("revenue_range"))).toBe(true);
+    }
   });
 
   it("refuses an audience without titles", () => {
     expect(planQuickenrich({ person_locations: ["United States"] }).ok).toBe(false);
   });
 
-  it("refuses headcount spans that do not line up with the bands (Apollo 1-10 vs QuickEnrich <5 / 5-19)", () => {
+  it("exact band mapping still refuses spans that do not line up (Apollo 1-10 vs QuickEnrich <5 / 5-19)", () => {
     expect(employeeBandsFor(["1,10"])).toBeNull();
     expect(employeeBandsFor(["1,100"])).toEqual(["< 5", "5 - 19", "20 - 99"]);
     expect(employeeBandsFor(["10001,"])).toEqual([">10000"]);

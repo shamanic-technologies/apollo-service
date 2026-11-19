@@ -216,7 +216,7 @@ function serveSourceFields(serveSource: string, filters: Record<string, unknown>
   const planned = planQuickenrich(filters);
   return {
     serveSource,
-    quickenrich: { expressible: planned.ok, reasons: planned.ok ? [] : planned.reasons },
+    quickenrich: { expressible: planned.ok, reasons: planned.ok ? [] : planned.reasons, leftToJudge: planned.ok ? planned.leftToJudge : [] },
   };
 }
 
@@ -268,9 +268,10 @@ router.post("/audiences", serviceAuth, async (req: AuthenticatedRequest, res) =>
  * PATCH /audiences/:apolloAudienceId/serve-source — switch where /search/next
  * sources this audience's people. `quickenrich` = free QuickEnrich search +
  * treg email find, falling back to Apollo once QuickEnrich has nobody left;
- * `apollo` = the default Apollo teaser + reveal. Switching ON an audience
- * whose filters QuickEnrich cannot enforce faithfully is refused (422, with
- * every reason), so an inexpressible audience is never served from it.
+ * `apollo` = the default Apollo teaser + reveal. QuickEnrich enforces what it
+ * can and names the rest `leftToJudge` (the consumer's pre-pay screen judges
+ * it). Switching ON an audience it cannot serve at all (no title, a location
+ * it cannot parse, a buying signal) is refused (422, with every reason).
  */
 router.patch("/audiences/:apolloAudienceId/serve-source", orgAuth, async (req: AuthenticatedRequest, res) => {
   try {
@@ -292,7 +293,7 @@ router.patch("/audiences/:apolloAudienceId/serve-source", orgAuth, async (req: A
     if (serveSource === "quickenrich") {
       const planned = planQuickenrich(filters);
       if (!planned.ok) {
-        return res.status(422).json({ type: "not_expressible", error: "QuickEnrich cannot enforce this audience's filters faithfully", reasons: planned.reasons });
+        return res.status(422).json({ type: "not_expressible", error: "QuickEnrich cannot serve this audience", reasons: planned.reasons });
       }
     }
     await db.update(apolloAudiences).set({ serveSource, updatedAt: new Date() }).where(eq(apolloAudiences.id, row.id));
