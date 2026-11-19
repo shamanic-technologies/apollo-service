@@ -207,7 +207,7 @@ describe("Apollo audience endpoints", () => {
       expect(res.body.count).toBe(5657);
       expect(res.body.filters).toEqual(TITLES);
       expect(res.body.serveSource).toBe("apollo");
-      expect(res.body.quickenrich).toEqual({ expressible: true, reasons: [] });
+      expect(res.body.quickenrich).toEqual({ expressible: true, reasons: [], leftToJudge: [] });
       expect(state.insertedRows[0]).toMatchObject({ orgId: "org-1", brandId: "brand-1", filters: TITLES, count: 5657 });
       expect(mockChatComplete).not.toHaveBeenCalled();
     });
