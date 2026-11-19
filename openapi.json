@@ -2498,9 +2498,10 @@
             "type": "string",
             "enum": [
               "apollo-reveal",
-              "email-finding"
+              "email-finding",
+              "pattern-guess"
             ],
-            "description": "Set when source=quickenrich and the address came from our STOCK (a paid task of ours already returned it for this person, any org): served free, no treg call, no cost declared. apollo-reveal = an earlier Apollo reveal, email-finding = an earlier found email finding."
+            "description": "Set when source=quickenrich and the address came from our STOCK (a paid task of ours already returned it for this person, any org): served free, no treg call, no cost declared. apollo-reveal = an earlier Apollo reveal, email-finding = an earlier found email finding, pattern-guess = the address guessed from the format of the addresses we hold at that company, checked valid (the check is the only spend)."
           },
           "revealSkipped": {
             "type": "object",

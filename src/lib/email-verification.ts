@@ -35,7 +35,7 @@
  */
 
 import { errorMessage, messageOf } from "./db-error.js";
-import { checkProducesOutcome, consumedByCheck, isKeptVerdict, recordOutcomeDetached, type NamedSubject } from "./outcome-declarations.js";
+import { checkProducesOutcome, consumedByCheck, producedByCheck, isKeptVerdict, recordOutcomeDetached, type NamedSubject } from "./outcome-declarations.js";
 import { and, desc, eq, gt, isNotNull, isNull, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { emailVerifications, type EmailVerification } from "../db/schema.js";
@@ -596,7 +596,7 @@ async function meteredVerification(
         brandIds: tracking.brandIds,
         campaignId: tracking.campaignId,
         subject,
-        produced: ["email_checked"],
+        produced: producedByCheck(ctx.source, stored.verdict),
         consumed: consumedByCheck(ctx.source, subject),
         person: { email },
       });
