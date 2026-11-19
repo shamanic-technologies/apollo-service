@@ -36,6 +36,17 @@ vi.mock("../../src/lib/quickenrich-serve.js", () => ({
   },
 }));
 
+const mockLoadTeaserIdentity = vi.fn();
+const mockUnmaskApolloPerson = vi.fn();
+vi.mock("../../src/lib/apollo-unmask.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/lib/apollo-unmask.js")>()),
+  loadTeaserIdentity: (...a: unknown[]) => mockLoadTeaserIdentity(...a),
+  unmaskApolloPerson: (...a: unknown[]) => mockUnmaskApolloPerson(...a),
+  servedBySignal: vi.fn().mockResolvedValue(false),
+}));
+const mockFreeEmailFor = vi.fn();
+vi.mock("../../src/lib/free-email.js", () => ({ freeEmailFor: (...a: unknown[]) => mockFreeEmailFor(...a) }));
+
 const mockServeFreePeoplePage = vi.fn();
 const mockLoadFreeSourcePerson = vi.fn();
 vi.mock("../../src/lib/free-people-serve.js", () => ({
@@ -237,6 +248,9 @@ describe("QuickEnrich serve path", () => {
     mockFindStockEmail.mockResolvedValue(null);
     mockFindStockEmailFor.mockResolvedValue(null);
     mockFindGuessedEmail.mockResolvedValue(null);
+    mockLoadTeaserIdentity.mockResolvedValue(null);
+    mockUnmaskApolloPerson.mockResolvedValue(null);
+    mockFreeEmailFor.mockResolvedValue(null);
     app = createTestApp();
     const { default: searchRoutes } = await import("../../src/routes/search.js");
     app.use(searchRoutes);
