@@ -38,6 +38,10 @@ vi.mock("../../src/lib/quickenrich-serve.js", () => ({
 
 const mockFindStockEmail = vi.fn();
 const mockVerifyStockEmail = vi.fn();
+vi.mock("../../src/lib/company-stock.js", () => ({
+  loadCompanyStock: vi.fn().mockResolvedValue(new Map()),
+  applyCompanyStock: (p: unknown) => p,
+}));
 vi.mock("../../src/lib/email-stock.js", () => ({
   findStockEmail: (...a: unknown[]) => mockFindStockEmail(...a),
   verifyStockEmail: (...a: unknown[]) => mockVerifyStockEmail(...a),
