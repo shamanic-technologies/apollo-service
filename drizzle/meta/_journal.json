@@ -351,6 +351,13 @@
       "when": 1781654400000,
       "tag": "0049_email_stock_lookup",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1781740800000,
+      "tag": "0050_company_stock_lookup",
+      "breakpoints": true
     }
   ]
 }

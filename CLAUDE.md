@@ -919,6 +919,14 @@ filters verbatim as `/search/next` searchParams, so the switch is found by
   finding, any vendor/preset); a hit is verified like a reveal and served
   `cached: true` + `stock`, no vendor call, no cost declared (the earlier payer
   stays the payer). Measured 2026-11-19: 1,056 of 1,774 QuickEnrich people had one.
+- **Company firmographics from our stock (APOLLO-ZERO-COST-1119).** Every served
+  QuickEnrich person (and its `qe:` reveal) carries what our paid Apollo reveals
+  already hold for its employer domain (`src/lib/company-stock.ts`: keywords,
+  industries, technologies, headcount, revenue, founded year, funding, ticker),
+  free, never invented. human-service carries `organizationKeywords` /
+  `organizationSize` into the teaser its judge reads, so the filters QuickEnrich
+  cannot enforce get judged on real facts. Measured 2026-11-19: 73 of 100
+  QuickEnrich employers in stock.
 - **Flow.** `/search/next` on a switched audience walks QuickEnrich
   (`quickenrich.people.search` via treg, free) on its own cursor columns of
   the same `apollo_search_cursors` row, post-filters, returns people with id

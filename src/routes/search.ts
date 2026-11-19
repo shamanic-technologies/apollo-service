@@ -32,6 +32,8 @@ import { planQuickenrich, parseQuickenrichPersonId, quickenrichToPerson, canonic
 import { findQuickenrichAudience, serveQuickenrichPage, loadQuickenrichPerson, QuickenrichSearchError } from "../lib/quickenrich-serve.js";
 import { executeEmailFind } from "../lib/email-find-run.js";
 import { findStockEmail, verifyStockEmail } from "../lib/email-stock.js";
+import { applyCompanyStock, loadCompanyStock } from "../lib/company-stock.js";
+import { normalizeDomain } from "../lib/email-finders.js";
 // Waterfall disabled 2026-05-28 — see src/lib/waterfall.ts header for revive.
 // import {
 //   WATERFALL_MAX_CREDITS,
@@ -292,6 +294,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       if (!row) {
         return res.status(404).json({ type: "not_found", error: `QuickEnrich person ${apolloPersonId} was never served by /search/next` });
       }
+      const companyStock = (await loadCompanyStock([row.company_url])).get(normalizeDomain(row.company_url ?? "")) ?? null;
       const stock = await findStockEmail(row);
       if (stock) {
         const emailVerification = await verifyStockEmail(stock.email, {
@@ -303,7 +306,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
         traceEvent(runId, { service: "apollo-service", event: "enrich-done", detail: `source=quickenrich, stock=${stock.source}, verdict=${emailVerification.verdict}` }, req.headers).catch(() => {});
         return res.json({
           enrichmentId: null,
-          person: quickenrichToPerson(row, { email: stock.email, emailStatus: emailVerification.verdict }),
+          person: applyCompanyStock(quickenrichToPerson(row, { email: stock.email, emailStatus: emailVerification.verdict }), companyStock),
           cached: true,
           emailVerification,
           source: "quickenrich",
@@ -333,7 +336,7 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
       traceEvent(runId, { service: "apollo-service", event: "enrich-done", detail: `source=quickenrich, findingId=${finding.findingId}, status=${finding.status}, reused=${finding.reused}` }, req.headers).catch(() => {});
       return res.json({
         enrichmentId: null,
-        person: quickenrichToPerson(row, { email, emailStatus: email ? finding.mailboxStatus : null }),
+        person: applyCompanyStock(quickenrichToPerson(row, { email, emailStatus: email ? finding.mailboxStatus : null }), companyStock),
         cached: finding.reused,
         emailVerification: email ? finding.emailVerification : null,
         source: "quickenrich",
