@@ -494,19 +494,28 @@ export async function recordRevealSkip(
 }
 
 /** Record the employer of every teaser person a people search served (free data, upserted). */
-export async function rememberTeaserEmployers(people: Array<{ id?: string | null; organization?: { name?: string | null } | null }>): Promise<void> {
-  const byId = new Map<string, string>();
+export async function rememberTeaserEmployers(
+  people: Array<{ id?: string | null; organization?: { name?: string | null } | null; first_name?: string | null; last_name_obfuscated?: string | null; title?: string | null }>
+): Promise<void> {
+  const byId = new Map<string, { organizationName: string; firstName: string | null; lastNameObfuscated: string | null; title: string | null }>();
+  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
   for (const p of people) {
     const id = typeof p.id === "string" ? p.id : null;
     const name = typeof p.organization?.name === "string" ? p.organization.name.trim() : "";
-    if (id && name) byId.set(id, name);
+    if (id && name) byId.set(id, { organizationName: name, firstName: str(p.first_name), lastNameObfuscated: str(p.last_name_obfuscated), title: str(p.title) });
   }
   if (byId.size === 0) return;
   await db
     .insert(apolloTeaserPeople)
-    .values([...byId].map(([apolloPersonId, organizationName]) => ({ apolloPersonId, organizationName })))
+    .values([...byId].map(([apolloPersonId, t]) => ({ apolloPersonId, ...t })))
     .onConflictDoUpdate({
       target: apolloTeaserPeople.apolloPersonId,
-      set: { organizationName: sql`excluded.organization_name`, lastSeenAt: sql`now()` },
+      set: {
+        organizationName: sql`excluded.organization_name`,
+        firstName: sql`excluded.first_name`,
+        lastNameObfuscated: sql`excluded.last_name_obfuscated`,
+        title: sql`excluded.title`,
+        lastSeenAt: sql`now()`,
+      },
     });
 }

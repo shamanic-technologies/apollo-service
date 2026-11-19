@@ -3,6 +3,14 @@ import express from "express";
 import request from "supertest";
 
 // Reveal domain gate: covered in reveal-domain-gate.test.ts; here it lets every reveal through.
+// APOLLO-ZERO-COST-1119: no stored teaser = the Apollo reveal path, exactly as before.
+vi.mock("../../src/lib/apollo-unmask.js", () => ({
+  loadTeaserIdentity: vi.fn().mockResolvedValue(null),
+  servedBySignal: vi.fn().mockResolvedValue(false),
+  unmaskApolloPerson: vi.fn(),
+  unmaskedToPerson: vi.fn(),
+}));
+
 vi.mock("../../src/lib/reveal-domain-gate.js", () => ({
   gateReveal: vi.fn().mockResolvedValue({ action: "reveal", basis: "no_employer" }),
   recordRevealSkip: vi.fn(),
