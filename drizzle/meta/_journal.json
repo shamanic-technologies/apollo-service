@@ -365,6 +365,13 @@
       "when": 1781827200000,
       "tag": "0051_free_people_sources",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1781913600000,
+      "tag": "0052_teaser_name_mask",
+      "breakpoints": true
     }
   ]
 }

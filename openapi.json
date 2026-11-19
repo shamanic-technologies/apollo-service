@@ -2486,7 +2486,8 @@
             "enum": [
               "quickenrich",
               "leadsforge",
-              "dropleads"
+              "dropleads",
+              "unmasked"
             ],
             "description": "Present when apolloPersonId was a `qe:<emp_id>` QuickEnrich person: the email was found with treg (no Apollo credit; cost `treg-micro-usd`) and verified. `cached` then means the finding was reused (no vendor call)."
           },

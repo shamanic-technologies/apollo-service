@@ -3,6 +3,17 @@ import express from "express";
 import request from "supertest";
 
 // Reveal domain gate: covered in reveal-domain-gate.test.ts; here it lets every reveal through.
+// APOLLO-ZERO-COST-1119: no stored teaser = the Apollo reveal path, exactly as before.
+vi.mock("../../src/lib/apollo-unmask.js", () => ({
+  loadTeaserIdentity: vi.fn().mockResolvedValue(null),
+  servedBySignal: vi.fn().mockResolvedValue(false),
+  unmaskApolloPerson: vi.fn(),
+  unmaskedToPerson: vi.fn(),
+}));
+
+vi.mock("../../src/lib/free-email.js", () => ({ freeEmailFor: vi.fn().mockResolvedValue(null) }));
+vi.mock("../../src/lib/company-stock.js", () => ({ loadCompanyStock: vi.fn().mockResolvedValue(new Map()), applyCompanyStock: (p: unknown) => p }));
+
 vi.mock("../../src/lib/reveal-domain-gate.js", () => ({
   gateReveal: vi.fn().mockResolvedValue({ action: "reveal", basis: "no_employer" }),
   recordRevealSkip: vi.fn(),
@@ -234,6 +245,38 @@ describe("Billing credit authorization", () => {
     mockAuthorizeCredit.mockResolvedValueOnce({ sufficient: false, balance_cents: 0, required_cents: 50 });
     const res = await request(app).post("/enrich").set(HEADERS).send({ apolloPersonId: "p-1" }).expect(402);
     expect(res.body).toEqual({ type: "credit_insufficient", error: "Insufficient credits", balance_cents: 0, required_cents: 50 });
+  });
+
+  // APOLLO-ZERO-COST-1119: before the reveal, the teaser is unmasked through free sources.
+  it("an unmasked person with a deliverable address is served with NO Apollo credit authorized or spent", async () => {
+    const unmask = await import("../../src/lib/apollo-unmask.js");
+    const freeEmail = await import("../../src/lib/free-email.js");
+    vi.mocked(unmask.loadTeaserIdentity).mockResolvedValueOnce({ firstName: "Michele", mask: "Ri***n", title: "Owner", organizationName: "Acme", domain: "acme.com" });
+    vi.mocked(unmask.unmaskApolloPerson).mockResolvedValueOnce({ firstName: "Michele", lastName: "Richardson", linkedinUrl: null, domain: "acme.com", title: "Owner", organizationName: "Acme", via: "leadsforge" });
+    vi.mocked(unmask.unmaskedToPerson).mockReturnValueOnce({ id: "p-1", name: "Michele Richardson", email: "michele@acme.com" } as never);
+    const verification = { email: "michele@acme.com", verdict: "valid", deliverable: true, verifier: "trykitt", verificationId: "v3", verifiedAt: "2026-11-19T00:00:00.000Z", reused: false };
+    vi.mocked(freeEmail.freeEmailFor).mockResolvedValueOnce({ kind: "guess", email: "michele@acme.com", verification } as never);
+    const res = await request(app).post("/enrich").set(HEADERS).send({ apolloPersonId: "p-1" }).expect(200);
+    expect(res.body).toMatchObject({ source: "unmasked", stock: "pattern-guess", emailVerification: verification, person: { email: "michele@acme.com" } });
+    expect(mockEnrichPerson).not.toHaveBeenCalled();
+    expect(mockAuthorizeCredit).not.toHaveBeenCalled();
+  });
+
+  it("unmasked but no deliverable address → the Apollo reveal, as before", async () => {
+    const unmask = await import("../../src/lib/apollo-unmask.js");
+    vi.mocked(unmask.loadTeaserIdentity).mockResolvedValueOnce({ firstName: "Michele", mask: "Ri***n", title: "Owner", organizationName: "Acme", domain: "acme.com" });
+    vi.mocked(unmask.unmaskApolloPerson).mockResolvedValueOnce({ firstName: "Michele", lastName: "Richardson", linkedinUrl: null, domain: "acme.com", title: "Owner", organizationName: "Acme", via: "leadsforge" });
+    await request(app).post("/enrich").set(HEADERS).send({ apolloPersonId: "p-1" }).expect(200);
+    expect(mockEnrichPerson).toHaveBeenCalledTimes(1);
+  });
+
+  it("a person a buying-signal cohort served stays on the Apollo reveal (evidence needs its record)", async () => {
+    const unmask = await import("../../src/lib/apollo-unmask.js");
+    vi.mocked(unmask.loadTeaserIdentity).mockResolvedValueOnce({ firstName: "Michele", mask: "Ri***n", title: "Owner", organizationName: "Acme", domain: "acme.com" });
+    vi.mocked(unmask.servedBySignal).mockResolvedValueOnce(true);
+    await request(app).post("/enrich").set(HEADERS).send({ apolloPersonId: "p-1" }).expect(200);
+    expect(unmask.unmaskApolloPerson).not.toHaveBeenCalled();
+    expect(mockEnrichPerson).toHaveBeenCalledTimes(1);
   });
 
   it("should authorize the direct Apollo cost (1 credit) on POST /enrich", async () => {

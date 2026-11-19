@@ -602,6 +602,10 @@ export const apolloOrganizations = pgTable("apollo_organizations", {
 export const apolloTeaserPeople = pgTable("apollo_teaser_people", {
   apolloPersonId: text("apollo_person_id").primaryKey(),
   organizationName: text("organization_name").notNull(),
+  // The teaser's own free identity bits (APOLLO-ZERO-COST-1119), for unmasking before a reveal.
+  firstName: text("first_name"),
+  lastNameObfuscated: text("last_name_obfuscated"),
+  title: text("title"),
   firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(),
   lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
 });
