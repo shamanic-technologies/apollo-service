@@ -210,7 +210,9 @@ export function planDropleads(filters: Record<string, unknown>): SourcePlan {
   if (orgLocs.length) {
     const places = placeNames(orgLocs);
     if (!places) reasons.push(`organization_locations: ${JSON.stringify(orgLocs)} cannot be read`);
-    else f.organizationCountries = places.countries;
+    // An organization scope is an {include} OBJECT: a plain list is silently ignored by
+    // Dropleads (measured 2026-11-19: 36,879 with or without ["Nigeria"], 18 with {include}).
+    else f.organizationCountries = { include: places.countries };
     if (places && (places.states.length || places.cities.length)) leftToJudge.push("organization_locations: state / city left to the judge");
   }
   const tags = [...strings(pick(filters, "tags")), ...strings(pick(filters, "keywords"))];
