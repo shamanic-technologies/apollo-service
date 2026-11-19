@@ -28,14 +28,17 @@ import {
 } from "./free-people-sources.js";
 
 const TREG_CALL = "https://treg.to/call";
-const SEARCH_TIMEOUT_MS = 30_000;
+// Dropleads answers a narrow query in ~12-15 s, a broad one in up to ~80 s (measured 2026-11-19).
+const SEARCH_TIMEOUT_MS = 60_000;
+/** Leadsforge restarts after an expired bookmark by excluding who it already returned; past this many, it is treated as walked out. */
+export const LEADSFORGE_MAX_EXCLUDED = 2_000;
 /** Pages per source per /search/next call when every row is unservable (free; bounds latency). */
 export const FREE_SOURCE_MAX_PAGES_PER_CALL = 3;
 const LEADSFORGE_PAGE = 50;
 const DROPLEADS_PAGE = 50;
 
 export class FreeSourceSearchError extends Error {
-  constructor(readonly source: FreeSource, message: string) {
+  constructor(readonly source: FreeSource, message: string, readonly httpStatus: number | null = null) {
     super(`${source} search failed: ${message}`);
     this.name = "FreeSourceSearchError";
   }
@@ -56,7 +59,7 @@ async function callSource(
   token: string,
   tregOrg: string,
   filters: Record<string, unknown>,
-  position: { cursor: string | null; page: number },
+  position: { cursor: string | null; page: number; excludeIds?: string[] },
   bronze: { orgId: string; runId?: string; campaignId?: string; cursorId: string; apolloAudienceId: string | null }
 ): Promise<Page> {
   const url =
@@ -65,7 +68,7 @@ async function callSource(
       : `${TREG_CALL}/dropleads.people.search`;
   const body =
     source === "leadsforge"
-      ? { ...filters, limit: LEADSFORGE_PAGE }
+      ? { ...filters, limit: LEADSFORGE_PAGE, ...(position.excludeIds?.length ? { leadIDs: { exclude: position.excludeIds } } : {}) }
       : { filters, pagination: { page: position.page, limit: DROPLEADS_PAGE } };
   const started = Date.now();
   let httpStatus: number | null = null;
@@ -89,7 +92,7 @@ async function callSource(
     }
     const costHeader = response.headers.get("x-treg-cost-micro");
     chargedMicro = costHeader === null || costHeader.trim() === "" ? null : Number(costHeader);
-    if (response.status !== 200) throw new FreeSourceSearchError(source, `HTTP ${response.status} - ${JSON.stringify(responseBody).slice(0, 400)}`);
+    if (response.status !== 200) throw new FreeSourceSearchError(source, `HTTP ${response.status} - ${JSON.stringify(responseBody).slice(0, 400)}`, response.status);
     if (chargedMicro === null || !Number.isFinite(chargedMicro)) throw new FreeSourceSearchError(source, `treg reported no X-Treg-Cost-Micro (got ${JSON.stringify(costHeader)})`);
     if (chargedMicro !== 0) throw new FreeSourceSearchError(source, `treg charged ${chargedMicro} micro-USD for a search that must be free`);
     const parsed = responseBody as Record<string, any>;
@@ -208,8 +211,25 @@ export async function serveFreePeoplePage(args: {
     let pages = isLf ? cursor.leadsforgePages : cursor.dropleadsPages;
     if (isLf && pages > 0 && !lfCursor) exhausted = true;
     try {
+      let excludeIds: string[] | undefined;
       for (let i = 0; i < FREE_SOURCE_MAX_PAGES_PER_CALL && !exhausted; i++) {
-        const page = await callSource(plan.source, token, tregOrg, plan.filters, { cursor: lfCursor, page: pages + 1 }, bronze);
+        let page: Page;
+        try {
+          page = await callSource(plan.source, token, tregOrg, plan.filters, { cursor: lfCursor, page: pages + 1, excludeIds }, bronze);
+        } catch (err) {
+          // Leadsforge bookmarks expire within minutes (410 "cursor invalid or expired",
+          // measured 2026-11-19 between serves ~10 min apart): restart from the top,
+          // excluding everyone it already returned on this cursor (its own id filter).
+          if (!(isLf && err instanceof FreeSourceSearchError && err.httpStatus === 410 && lfCursor)) throw err;
+          excludeIds = await leadsforgeIdsReturned(args.cursorId);
+          lfCursor = null;
+          if (excludeIds.length > LEADSFORGE_MAX_EXCLUDED) {
+            exhausted = true;
+            await db.update(apolloSearchCursors).set({ leadsforgeCursor: null, leadsforgeExhausted: true, updatedAt: new Date() }).where(eq(apolloSearchCursors.id, args.cursorId));
+            break;
+          }
+          page = await callSource(plan.source, token, tregOrg, plan.filters, { cursor: null, page: pages + 1, excludeIds }, bronze);
+        }
         result.pagesRead++;
         pages++;
         const servable = page.rows.map((person, idx) => ({ person, raw: page.rawRows[idx] })).filter(({ person }) => isServable(person));
@@ -243,6 +263,15 @@ export async function serveFreePeoplePage(args: {
     }
   }
   return result;
+}
+
+/** Every Leadsforge person id already returned on this cursor (bronze). */
+async function leadsforgeIdsReturned(cursorId: string): Promise<string[]> {
+  const rows = (await db.execute(sql`
+    SELECT DISTINCT lead->>'id' AS id
+      FROM free_source_searches s, jsonb_array_elements(s.response_body->'leads') lead
+     WHERE s.cursor_id = ${cursorId} AND s.source = 'leadsforge' AND s.error IS NULL AND lead->>'id' IS NOT NULL`)) as unknown as Array<{ id: string }>;
+  return rows.map((r) => r.id);
 }
 
 /** A free-source person /enrich was asked for, from silver. */

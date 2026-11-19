@@ -72,6 +72,13 @@ describe("planDropleads", () => {
   });
 });
 
+describe("planDropleads — company location", () => {
+  it("sends organizationCountries as an {include} object (a plain list is silently ignored)", () => {
+    const p = planDropleads({ person_titles: ["Event Manager"], organization_locations: ["Nigeria"] });
+    expect(p.ok && p.filters.organizationCountries).toEqual({ include: ["Nigeria"] });
+  });
+});
+
 describe("employeeEnvelope", () => {
   it("merges spans and says when the merge loosened them", () => {
     expect(employeeEnvelope(["11,50", "51,200"])).toEqual({ min: 11, max: 200, exact: true });
