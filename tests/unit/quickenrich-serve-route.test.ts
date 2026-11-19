@@ -30,6 +30,13 @@ vi.mock("../../src/lib/quickenrich-serve.js", () => ({
   loadQuickenrichPerson: (...a: unknown[]) => mockLoadQuickenrichPerson(...a),
 }));
 
+const mockFindStockEmail = vi.fn();
+const mockVerifyStockEmail = vi.fn();
+vi.mock("../../src/lib/email-stock.js", () => ({
+  findStockEmail: (...a: unknown[]) => mockFindStockEmail(...a),
+  verifyStockEmail: (...a: unknown[]) => mockVerifyStockEmail(...a),
+}));
+
 const mockExecuteEmailFind = vi.fn();
 vi.mock("../../src/lib/email-find-run.js", () => ({
   executeEmailFind: (...a: unknown[]) => mockExecuteEmailFind(...a),
@@ -205,6 +212,7 @@ describe("QuickEnrich serve path", () => {
     let n = 0;
     mockCreateRun.mockImplementation(() => Promise.resolve({ id: `run-${++n}` }));
     mockFindQuickenrichAudience.mockResolvedValue(null);
+    mockFindStockEmail.mockResolvedValue(null);
     app = createTestApp();
     const { default: searchRoutes } = await import("../../src/routes/search.js");
     app.use(searchRoutes);
@@ -292,6 +300,29 @@ describe("QuickEnrich serve path", () => {
     mockExecuteEmailFind.mockResolvedValue({ status: 402, body: { type: "credit_insufficient", error: "Insufficient credits" } });
     const res = await post("/enrich", { apolloPersonId: "qe:777" }).expect(402);
     expect(res.body.type).toBe("credit_insufficient");
+  });
+
+  // APOLLO-ZERO-COST-1119: our stock first (an address a reveal or a find of
+  // ours already returned for this person, any org), treg only on a miss.
+  it("/enrich qe: an address already in our stock is served free, treg never called", async () => {
+    mockLoadQuickenrichPerson.mockResolvedValue(QE_ROW);
+    mockFindStockEmail.mockResolvedValue({ email: "dana@backinline.com", source: "apollo-reveal" });
+    const verdict = { email: "dana@backinline.com", verdict: "valid", deliverable: true, verifier: "bounceban", verificationId: "v-9", verifiedAt: "2026-11-01T00:00:00.000Z", reused: true };
+    mockVerifyStockEmail.mockResolvedValue(verdict);
+    const res = await post("/enrich", { apolloPersonId: "qe:777" }).expect(200);
+    expect(mockExecuteEmailFind).not.toHaveBeenCalled();
+    expect(mockFindStockEmail).toHaveBeenCalledWith(expect.objectContaining({ employee_linkedin: QE_ROW.employee_linkedin }));
+    expect(res.body).toMatchObject({ source: "quickenrich", cached: true, stock: "apollo-reveal", emailVerification: verdict });
+    expect(res.body.person).toMatchObject({ id: "qe:777", email: "dana@backinline.com" });
+    expect(mockAddCosts).not.toHaveBeenCalled();
+  });
+
+  it("/enrich qe: a stock miss goes to treg as before", async () => {
+    mockLoadQuickenrichPerson.mockResolvedValue(QE_ROW);
+    mockFindStockEmail.mockResolvedValue(null);
+    mockExecuteEmailFind.mockResolvedValue({ status: 200, body: { findingId: "f-3", status: "not_found", email: null, mailboxStatus: null, reused: false, emailVerification: null } });
+    await post("/enrich", { apolloPersonId: "qe:777" }).expect(200);
+    expect(mockExecuteEmailFind).toHaveBeenCalledTimes(1);
   });
 
   it("/enrich qe: an id /search/next never served is a 404, nothing spent", async () => {

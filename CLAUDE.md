@@ -913,6 +913,12 @@ not expressible). human-service is untouched: it forwards an audience's stored
 filters verbatim as `/search/next` searchParams, so the switch is found by
 `filters = searchParams::jsonb` within the org (`findQuickenrichAudience`).
 
+- **Our stock before treg (APOLLO-ZERO-COST-1119).** `/enrich qe:` first looks for
+  an address a paid task of ours already returned for that LinkedIn person, any
+  org (`src/lib/email-stock.ts`: latest Apollo reveal, else a found email
+  finding, any vendor/preset); a hit is verified like a reveal and served
+  `cached: true` + `stock`, no vendor call, no cost declared (the earlier payer
+  stays the payer). Measured 2026-11-19: 1,056 of 1,774 QuickEnrich people had one.
 - **Flow.** `/search/next` on a switched audience walks QuickEnrich
   (`quickenrich.people.search` via treg, free) on its own cursor columns of
   the same `apollo_search_cursors` row, post-filters, returns people with id

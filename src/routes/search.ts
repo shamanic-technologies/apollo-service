@@ -31,6 +31,7 @@ import { toCreditAlertIdentity } from "../lib/credit-alert.js";
 import { planQuickenrich, parseQuickenrichPersonId, quickenrichToPerson, canonicalLinkedinUrl } from "../lib/quickenrich.js";
 import { findQuickenrichAudience, serveQuickenrichPage, loadQuickenrichPerson } from "../lib/quickenrich-serve.js";
 import { executeEmailFind } from "../lib/email-find-run.js";
+import { findStockEmail, verifyStockEmail } from "../lib/email-stock.js";
 // Waterfall disabled 2026-05-28 — see src/lib/waterfall.ts header for revive.
 // import {
 //   WATERFALL_MAX_CREDITS,
@@ -282,13 +283,32 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
     }
 
     // A `qe:<emp_id>` person came from the QuickEnrich serve path: its identity
-    // (full name, LinkedIn, company domain) is already known, so the email is
-    // found with treg (no Apollo credit) and verified like every reveal.
+    // (full name, LinkedIn, company domain) is already known. Our stock first (an
+    // address a paid task of ours already returned for this person, free), then
+    // treg (no Apollo credit); verified like every reveal (APOLLO-ZERO-COST-1119).
     const quickenrichEmpId = parseQuickenrichPersonId(apolloPersonId);
     if (quickenrichEmpId) {
       const row = await loadQuickenrichPerson(quickenrichEmpId);
       if (!row) {
         return res.status(404).json({ type: "not_found", error: `QuickEnrich person ${apolloPersonId} was never served by /search/next` });
+      }
+      const stock = await findStockEmail(row);
+      if (stock) {
+        const emailVerification = await verifyStockEmail(stock.email, {
+          identity,
+          tracking: { brandIds, campaignId, audienceId, featureSlug, workflowSlug },
+          runId,
+          source: "stock:quickenrich",
+        });
+        traceEvent(runId, { service: "apollo-service", event: "enrich-done", detail: `source=quickenrich, stock=${stock.source}, verdict=${emailVerification.verdict}` }, req.headers).catch(() => {});
+        return res.json({
+          enrichmentId: null,
+          person: quickenrichToPerson(row, { email: stock.email, emailStatus: emailVerification.verdict }),
+          cached: true,
+          emailVerification,
+          source: "quickenrich",
+          stock: stock.source,
+        });
       }
       const found = await executeEmailFind(
         { orgId: req.orgId!, userId: req.userId, runId, brandIds, campaignId, audienceId, featureSlug, workflowSlug, headers: req.headers, callerPath: "/enrich" },
