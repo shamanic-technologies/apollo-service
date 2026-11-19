@@ -1188,7 +1188,9 @@
             "type": "string",
             "enum": [
               "quickenrich",
-              "linkedin_engagement"
+              "linkedin_engagement",
+              "leadsforge",
+              "dropleads"
             ],
             "description": "quickenrich: this page came from the FREE QuickEnrich search (the audience is switched to quickenrich); those people carry an id `qe:<emp_id>`, their full name, LinkedIn URL and company domain. linkedin_engagement: the filters carry a linkedin_engagement buying_signal; up to 5 engagers of the competitor pages per call, each with an id `li:<profileId>`, full name, title, headline, employer and LinkedIn URL, never the same person twice for the audience (x-audience-id, else the campaign), competitor employees excluded; done=true only once nobody is left. For both, POST /enrich with that id finds the email with treg and verifies it. Absent = the Apollo walk, unchanged."
           }
@@ -2482,7 +2484,9 @@
           "source": {
             "type": "string",
             "enum": [
-              "quickenrich"
+              "quickenrich",
+              "leadsforge",
+              "dropleads"
             ],
             "description": "Present when apolloPersonId was a `qe:<emp_id>` QuickEnrich person: the email was found with treg (no Apollo credit; cost `treg-micro-usd`) and verified. `cached` then means the finding was reused (no vendor call)."
           },
@@ -5479,7 +5483,8 @@
             "type": "string",
             "enum": [
               "apollo",
-              "quickenrich"
+              "quickenrich",
+              "free"
             ],
             "description": "Where /search/next sources this audience's people first. quickenrich = the free QuickEnrich search, Apollo only once it has nobody left (Apollo last). Default apollo."
           },
@@ -5510,6 +5515,43 @@
               "leftToJudge"
             ],
             "description": "Can this audience be served from QuickEnrich, and what is left to the judge?"
+          },
+          "freeSources": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "leadsforge",
+                    "dropleads"
+                  ]
+                },
+                "usable": {
+                  "type": "boolean"
+                },
+                "reasons": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "leftToJudge": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "source",
+                "usable",
+                "reasons",
+                "leftToJudge"
+              ]
+            },
+            "description": "serveSource=free walks these free people sources first (Leadsforge, then Dropleads), then QuickEnrich, then Apollo. A source is used only when it enforces every targeting constraint (titles, seniorities, sector, location, headcount); reasons say why one is not."
           }
         },
         "required": [
@@ -5519,7 +5561,8 @@
           "status",
           "createdAt",
           "serveSource",
-          "quickenrich"
+          "quickenrich",
+          "freeSources"
         ]
       },
       "CreateAudienceFromFiltersResponse": {
@@ -5550,7 +5593,8 @@
             "type": "string",
             "enum": [
               "apollo",
-              "quickenrich"
+              "quickenrich",
+              "free"
             ]
           },
           "quickenrich": {
@@ -5577,6 +5621,43 @@
               "reasons",
               "leftToJudge"
             ]
+          },
+          "freeSources": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "leadsforge",
+                    "dropleads"
+                  ]
+                },
+                "usable": {
+                  "type": "boolean"
+                },
+                "reasons": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "leftToJudge": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "source",
+                "usable",
+                "reasons",
+                "leftToJudge"
+              ]
+            },
+            "description": "serveSource=free walks these free people sources first (Leadsforge, then Dropleads), then QuickEnrich, then Apollo. A source is used only when it enforces every targeting constraint (titles, seniorities, sector, location, headcount); reasons say why one is not."
           }
         },
         "required": [
@@ -5585,7 +5666,8 @@
           "filters",
           "count",
           "serveSource",
-          "quickenrich"
+          "quickenrich",
+          "freeSources"
         ]
       },
       "CreateAudienceFromFiltersRequest": {
@@ -5636,7 +5718,8 @@
             "type": "string",
             "enum": [
               "apollo",
-              "quickenrich"
+              "quickenrich",
+              "free"
             ]
           },
           "quickenrich": {
@@ -5663,12 +5746,50 @@
               "reasons",
               "leftToJudge"
             ]
+          },
+          "freeSources": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "leadsforge",
+                    "dropleads"
+                  ]
+                },
+                "usable": {
+                  "type": "boolean"
+                },
+                "reasons": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "leftToJudge": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "source",
+                "usable",
+                "reasons",
+                "leftToJudge"
+              ]
+            },
+            "description": "serveSource=free walks these free people sources first (Leadsforge, then Dropleads), then QuickEnrich, then Apollo. A source is used only when it enforces every targeting constraint (titles, seniorities, sector, location, headcount); reasons say why one is not."
           }
         },
         "required": [
           "apolloAudienceId",
           "serveSource",
-          "quickenrich"
+          "quickenrich",
+          "freeSources"
         ]
       },
       "ServeSourceRequest": {
@@ -5678,7 +5799,8 @@
             "type": "string",
             "enum": [
               "apollo",
-              "quickenrich"
+              "quickenrich",
+              "free"
             ]
           }
         },

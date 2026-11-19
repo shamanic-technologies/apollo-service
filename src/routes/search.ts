@@ -31,7 +31,9 @@ import { toCreditAlertIdentity } from "../lib/credit-alert.js";
 import { planQuickenrich, parseQuickenrichPersonId, quickenrichToPerson, canonicalLinkedinUrl } from "../lib/quickenrich.js";
 import { findQuickenrichAudience, serveQuickenrichPage, loadQuickenrichPerson, QuickenrichSearchError } from "../lib/quickenrich-serve.js";
 import { executeEmailFind } from "../lib/email-find-run.js";
-import { findStockEmail, verifyStockEmail } from "../lib/email-stock.js";
+import { findStockEmail, findStockEmailFor, verifyStockEmail } from "../lib/email-stock.js";
+import { serveFreePeoplePage, loadFreeSourcePerson } from "../lib/free-people-serve.js";
+import { parseFreeSourcePersonId, freeSourceToPerson } from "../lib/free-people-sources.js";
 import { applyCompanyStock, loadCompanyStock } from "../lib/company-stock.js";
 import { normalizeDomain } from "../lib/email-finders.js";
 // Waterfall disabled 2026-05-28 — see src/lib/waterfall.ts header for revive.
@@ -340,6 +342,56 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
         cached: finding.reused,
         emailVerification: email ? finding.emailVerification : null,
         source: "quickenrich",
+        findingId: finding.findingId,
+      });
+    }
+
+    // A `lf:` / `dl:` person came from a FREE source (Leadsforge, Dropleads): full name
+    // plus a LinkedIn or a company domain. Our stock first, then treg; never Apollo
+    // (APOLLO-ZERO-COST-1119). Same answer shape as a `qe:` reveal.
+    const freeId = parseFreeSourcePersonId(apolloPersonId);
+    if (freeId) {
+      const fp = await loadFreeSourcePerson(freeId.source, freeId.externalId);
+      if (!fp) {
+        return res.status(404).json({ type: "not_found", error: `${freeId.source} person ${apolloPersonId} was never served by /search/next` });
+      }
+      const companyStock = (await loadCompanyStock([fp.companyDomain])).get(normalizeDomain(fp.companyDomain ?? "")) ?? null;
+      const stock = await findStockEmailFor({ linkedinUrl: fp.linkedinUrl, firstName: fp.firstName, lastName: fp.lastName, domain: fp.companyDomain });
+      if (stock) {
+        const emailVerification = await verifyStockEmail(stock.email, { identity, tracking: { brandIds, campaignId, audienceId, featureSlug, workflowSlug }, runId, source: `stock:${freeId.source}` });
+        traceEvent(runId, { service: "apollo-service", event: "enrich-done", detail: `source=${freeId.source}, stock=${stock.source}, verdict=${emailVerification.verdict}` }, req.headers).catch(() => {});
+        return res.json({
+          enrichmentId: null,
+          person: applyCompanyStock(freeSourceToPerson(fp, { email: stock.email, emailStatus: emailVerification.verdict }), companyStock),
+          cached: true,
+          emailVerification,
+          source: freeId.source,
+          stock: stock.source,
+        });
+      }
+      const found = await executeEmailFind(
+        { orgId: req.orgId!, userId: req.userId, runId, brandIds, campaignId, audienceId, featureSlug, workflowSlug, headers: req.headers, callerPath: "/enrich" },
+        "treg",
+        undefined,
+        {
+          linkedinUrl: fp.linkedinUrl ?? undefined,
+          firstName: fp.firstName ?? undefined,
+          lastName: fp.lastName ?? undefined,
+          domain: fp.companyDomain ?? undefined,
+        }
+      );
+      if (found.status !== 200 && found.status !== 202) {
+        return res.status(found.status).json(found.body);
+      }
+      const finding = found.body as { findingId: string; status: string; email: string | null; mailboxStatus: string | null; reused: boolean; emailVerification: unknown };
+      const email = finding.status === "found" ? finding.email : null;
+      traceEvent(runId, { service: "apollo-service", event: "enrich-done", detail: `source=${freeId.source}, findingId=${finding.findingId}, status=${finding.status}, reused=${finding.reused}` }, req.headers).catch(() => {});
+      return res.json({
+        enrichmentId: null,
+        person: applyCompanyStock(freeSourceToPerson(fp, { email, emailStatus: email ? finding.mailboxStatus : null }), companyStock),
+        cached: finding.reused,
+        emailVerification: email ? finding.emailVerification : null,
+        source: freeId.source,
         findingId: finding.findingId,
       });
     }
@@ -764,6 +816,37 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     // QuickEnrich has nobody left, or its search fails for this call, the
     // Apollo walk below serves exactly as it always did (Apollo last).
     const quickenrichAudience = cursorId ? await findQuickenrichAudience(req.orgId!, cursorSearchParams) : null;
+    // "free": Leadsforge then Dropleads first (sector filters, full names, $0), then
+    // QuickEnrich below, then Apollo (APOLLO-ZERO-COST-1119). A source that fails
+    // for this call is skipped; nothing here is ever paid.
+    if (quickenrichAudience?.serveSource === "free" && cursorId) {
+      const free = await serveFreePeoplePage({
+        orgId: req.orgId!,
+        userId: req.userId!,
+        runId,
+        campaignId,
+        cursorId,
+        apolloAudienceId: quickenrichAudience.id,
+        filters: cursorSearchParams,
+        tracking,
+      });
+      traceEvent(runId, { service: "apollo-service", event: "free-source-page", ...(free.failed.length > 0 ? { level: "warn" as const } : {}), detail: `audience=${quickenrichAudience.id}, source=${free.source}, pages=${free.pagesRead}, kept=${free.people.length}, exhausted=${free.exhausted}`, data: { skipped: free.skipped, failed: free.failed, leftToJudge: free.leftToJudge } }, req.headers).catch(() => {});
+      for (const f of free.failed) console.warn(`[Apollo Service][POST /search/next] audience ${quickenrichAudience.id}: ${f.error}`);
+      if (free.people.length > 0 || (!free.exhausted && free.failed.length === 0)) {
+        await updateRun(searchRun.id, "completed", identity);
+        openRun = null;
+        return res.json({
+          people: free.people,
+          done: false,
+          totalEntries: cursorTotalEntries,
+          page: currentPage,
+          totalPages: Math.min(Math.ceil(cursorTotalEntries / DEFAULT_PER_PAGE), APOLLO_MAX_REACHABLE_PAGE),
+          hasMore: true,
+          source: free.source,
+        });
+      }
+      // Every free source walked out, or failed for this call: QuickEnrich, then Apollo.
+    }
     if (quickenrichAudience && cursorId) {
       const planned = planQuickenrich(cursorSearchParams);
       if (!planned.ok) {

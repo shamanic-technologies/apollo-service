@@ -36,7 +36,16 @@ vi.mock("../../src/lib/quickenrich-serve.js", () => ({
   },
 }));
 
+const mockServeFreePeoplePage = vi.fn();
+const mockLoadFreeSourcePerson = vi.fn();
+vi.mock("../../src/lib/free-people-serve.js", () => ({
+  serveFreePeoplePage: (...a: unknown[]) => mockServeFreePeoplePage(...a),
+  loadFreeSourcePerson: (...a: unknown[]) => mockLoadFreeSourcePerson(...a),
+  planFreeSources: () => [],
+}));
+
 const mockFindStockEmail = vi.fn();
+const mockFindStockEmailFor = vi.fn();
 const mockVerifyStockEmail = vi.fn();
 vi.mock("../../src/lib/company-stock.js", () => ({
   loadCompanyStock: vi.fn().mockResolvedValue(new Map()),
@@ -44,6 +53,7 @@ vi.mock("../../src/lib/company-stock.js", () => ({
 }));
 vi.mock("../../src/lib/email-stock.js", () => ({
   findStockEmail: (...a: unknown[]) => mockFindStockEmail(...a),
+  findStockEmailFor: (...a: unknown[]) => mockFindStockEmailFor(...a),
   verifyStockEmail: (...a: unknown[]) => mockVerifyStockEmail(...a),
 }));
 
@@ -223,6 +233,7 @@ describe("QuickEnrich serve path", () => {
     mockCreateRun.mockImplementation(() => Promise.resolve({ id: `run-${++n}` }));
     mockFindQuickenrichAudience.mockResolvedValue(null);
     mockFindStockEmail.mockResolvedValue(null);
+    mockFindStockEmailFor.mockResolvedValue(null);
     app = createTestApp();
     const { default: searchRoutes } = await import("../../src/routes/search.js");
     app.use(searchRoutes);
@@ -352,6 +363,58 @@ describe("QuickEnrich serve path", () => {
     mockExecuteEmailFind.mockResolvedValue({ status: 200, body: { findingId: "f-3", status: "not_found", email: null, mailboxStatus: null, reused: false, emailVerification: null } });
     await post("/enrich", { apolloPersonId: "qe:777" }).expect(200);
     expect(mockExecuteEmailFind).toHaveBeenCalledTimes(1);
+  });
+
+  // APOLLO-ZERO-COST-1119: serveSource "free" = Leadsforge → Dropleads → QuickEnrich → Apollo.
+  const LF_PERSON = { source: "leadsforge", externalId: "abc", firstName: "Julie", lastName: "Angstadt", title: "Owner", linkedinUrl: null, companyName: "Hummingbird ABA", companyDomain: "hummingbirdaba.com", industry: "mental health care", employees: 29, city: null, state: null, country: "United States" };
+
+  it("free: Leadsforge people are served, QuickEnrich and Apollo untouched", async () => {
+    mockFindQuickenrichAudience.mockResolvedValue({ id: "aud-1", serveSource: "free" });
+    mockServeFreePeoplePage.mockResolvedValue({ people: [{ id: "lf:abc", name: "Julie Angstadt" }], source: "leadsforge", exhausted: false, pagesRead: 1, skipped: [], leftToJudge: [], failed: [] });
+    const res = await post("/search/next", { searchParams: QE_PARAMS }).expect(200);
+    expect(res.body).toMatchObject({ source: "leadsforge", done: false, people: [{ id: "lf:abc" }] });
+    expect(mockServeQuickenrichPage).not.toHaveBeenCalled();
+    expect(mockSearchPeople).not.toHaveBeenCalled();
+  });
+
+  it("free: every free source walked out → QuickEnrich next", async () => {
+    mockFindQuickenrichAudience.mockResolvedValue({ id: "aud-1", serveSource: "free" });
+    mockServeFreePeoplePage.mockResolvedValue({ people: [], source: null, exhausted: true, pagesRead: 0, skipped: [], leftToJudge: [], failed: [] });
+    mockServeQuickenrichPage.mockResolvedValue({ people: [qePerson()], exhausted: false, pagesRead: 1, rowsSeen: 100, rejected: {} });
+    const res = await post("/search/next", { searchParams: QE_PARAMS }).expect(200);
+    expect(res.body.source).toBe("quickenrich");
+  });
+
+  it("free: a source failing for this call never stalls the serve (the next layer answers)", async () => {
+    mockFindQuickenrichAudience.mockResolvedValue({ id: "aud-1", serveSource: "free" });
+    mockServeFreePeoplePage.mockResolvedValue({ people: [], source: null, exhausted: false, pagesRead: 0, skipped: [], leftToJudge: [], failed: [{ source: "leadsforge", error: "HTTP 429" }] });
+    mockServeQuickenrichPage.mockResolvedValue({ people: [], exhausted: true, pagesRead: 1, rowsSeen: 0, rejected: {} });
+    await post("/search/next", { searchParams: QE_PARAMS }).expect(200);
+    expect(mockSearchPeople).toHaveBeenCalledTimes(1);
+  });
+
+  it("/enrich lf: stock hit is free, treg and Apollo never called", async () => {
+    mockLoadFreeSourcePerson.mockResolvedValue(LF_PERSON);
+    mockFindStockEmailFor.mockResolvedValue({ email: "julie@hummingbirdaba.com", source: "email-finding" });
+    mockVerifyStockEmail.mockResolvedValue({ email: "julie@hummingbirdaba.com", verdict: "valid", deliverable: true, verifier: "trykitt", verificationId: "v1", verifiedAt: "2026-11-19T00:00:00.000Z", reused: false });
+    const res = await post("/enrich", { apolloPersonId: "lf:abc" }).expect(200);
+    expect(mockFindStockEmailFor).toHaveBeenCalledWith({ linkedinUrl: null, firstName: "Julie", lastName: "Angstadt", domain: "hummingbirdaba.com" });
+    expect(mockExecuteEmailFind).not.toHaveBeenCalled();
+    expect(res.body).toMatchObject({ source: "leadsforge", stock: "email-finding", cached: true, person: { id: "lf:abc", email: "julie@hummingbirdaba.com" } });
+  });
+
+  it("/enrich lf: stock miss → treg find by name + domain", async () => {
+    mockLoadFreeSourcePerson.mockResolvedValue(LF_PERSON);
+    mockExecuteEmailFind.mockResolvedValue({ status: 200, body: { findingId: "f-9", status: "found", email: "julie@hummingbirdaba.com", mailboxStatus: "valid", reused: false, emailVerification: { verdict: "valid" } } });
+    const res = await post("/enrich", { apolloPersonId: "lf:abc" }).expect(200);
+    expect(mockExecuteEmailFind.mock.calls[0][3]).toEqual({ linkedinUrl: undefined, firstName: "Julie", lastName: "Angstadt", domain: "hummingbirdaba.com" });
+    expect(res.body).toMatchObject({ source: "leadsforge", findingId: "f-9", person: { email: "julie@hummingbirdaba.com" } });
+  });
+
+  it("/enrich dl: an id never served is a 404, nothing spent", async () => {
+    mockLoadFreeSourcePerson.mockResolvedValue(null);
+    await post("/enrich", { apolloPersonId: "dl:1" }).expect(404);
+    expect(mockExecuteEmailFind).not.toHaveBeenCalled();
   });
 
   it("/enrich qe: an id /search/next never served is a 404, nothing spent", async () => {

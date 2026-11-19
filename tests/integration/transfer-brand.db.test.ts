@@ -26,6 +26,7 @@ const TABLES = [
   "email_verifications",
   "email_finder_calls",
   "quickenrich_searches",
+  "free_source_searches",
   "apollo_phone_reveals",
   "email_findings",
   "reveal_skips",
@@ -190,6 +191,10 @@ describe.skipIf(!DB_URL)("transfer-brand on a real database", () => {
     await ins("quickenrich_searches", "A_by_audience", { org_id: S, apollo_audience_id: aud("A"), campaign_id: "x2", request_body: {} });
     await ins("quickenrich_searches", "A_by_campaign", { org_id: S, campaign_id: "camp-a2", request_body: {} });
     await ins("quickenrich_searches", "B", { org_id: S, cursor_id: cur("B"), apollo_audience_id: aud("B"), campaign_id: "camp-b", request_body: {} });
+    await ins("free_source_searches", "A_by_cursor", { org_id: S, cursor_id: cur("A"), campaign_id: "x1", source: "leadsforge", request_body: {} });
+    await ins("free_source_searches", "A_by_audience", { org_id: S, apollo_audience_id: aud("A"), campaign_id: "x2", source: "dropleads", request_body: {} });
+    await ins("free_source_searches", "A_by_campaign", { org_id: S, campaign_id: "camp-a2", source: "leadsforge", request_body: {} });
+    await ins("free_source_searches", "B", { org_id: S, cursor_id: cur("B"), apollo_audience_id: aud("B"), campaign_id: "camp-b", source: "dropleads", request_body: {} });
   });
 
   /** Rows expected to MOVE, per table. Everything else must stay where it was. */
@@ -197,6 +202,7 @@ describe.skipIf(!DB_URL)("transfer-brand on a real database", () => {
     email_verifications: ["A_enrich", "A_find", "A_find_by_campaign"],
     email_finder_calls: ["A", "A_by_campaign"],
     quickenrich_searches: ["A_by_cursor", "A_by_audience", "A_by_campaign"],
+    free_source_searches: ["A_by_cursor", "A_by_audience", "A_by_campaign"],
     apollo_phone_reveals: ["A", "A_by_campaign"],
     email_findings: ["A", "A_by_campaign"],
     reveal_skips: ["A", "A_by_campaign"],
