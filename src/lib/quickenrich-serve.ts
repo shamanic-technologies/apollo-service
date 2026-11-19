@@ -9,6 +9,8 @@ import { and, eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloAudiences, apolloSearchCursors, quickenrichPeople, quickenrichSearches } from "../db/schema.js";
 import { decryptKey, type TrackingContext } from "./keys-client.js";
+import { applyCompanyStock, loadCompanyStock } from "./company-stock.js";
+import { normalizeDomain } from "./email-finders.js";
 import {
   QUICKENRICH_PAGE_SIZE,
   QUICKENRICH_SEARCH_URL,
@@ -182,7 +184,7 @@ async function upsertPeople(rows: QuickenrichRow[]): Promise<void> {
     });
 }
 
-export type QuickenrichPerson = ReturnType<typeof quickenrichToPerson>;
+export type QuickenrichPerson = ReturnType<typeof quickenrichToPerson> & Partial<ReturnType<typeof applyCompanyStock<ReturnType<typeof quickenrichToPerson>>>>;
 
 export interface QuickenrichServeResult {
   people: QuickenrichPerson[];
@@ -252,7 +254,10 @@ export async function serveQuickenrichPage(args: {
       else result.rejected[verdict.reason] = (result.rejected[verdict.reason] ?? 0) + 1;
     }
     await upsertPeople(kept);
-    result.people.push(...kept.map((r) => quickenrichToPerson(r)));
+    // Firmographics our paid reveals already hold for these employers (free), so
+    // the judge can decide the filters QuickEnrich could not enforce.
+    const stock = await loadCompanyStock(kept.map((r) => r.company_url));
+    result.people.push(...kept.map((r) => applyCompanyStock(quickenrichToPerson(r), stock.get(normalizeDomain(r.company_url ?? "")) ?? null)));
 
     pages++;
     nextCursor = page.hasMore ? page.nextCursor : null;
