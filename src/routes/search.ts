@@ -29,7 +29,7 @@ import { verificationFor, EmailVerificationError } from "../lib/email-verificati
 import { emailVerificationErrorResponse } from "../lib/email-verification-response.js";
 import { toCreditAlertIdentity } from "../lib/credit-alert.js";
 import { planQuickenrich, parseQuickenrichPersonId, quickenrichToPerson, canonicalLinkedinUrl } from "../lib/quickenrich.js";
-import { findQuickenrichAudience, serveQuickenrichPage, loadQuickenrichPerson } from "../lib/quickenrich-serve.js";
+import { findQuickenrichAudience, serveQuickenrichPage, loadQuickenrichPerson, QuickenrichSearchError } from "../lib/quickenrich-serve.js";
 import { executeEmailFind } from "../lib/email-find-run.js";
 import { findStockEmail, verifyStockEmail } from "../lib/email-stock.js";
 // Waterfall disabled 2026-05-28 — see src/lib/waterfall.ts header for revive.
@@ -756,9 +756,10 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
     // QuickEnrich first, for an audience switched to it: a FREE search whose
     // rows carry the identity (full name, LinkedIn, domain) the Apollo teaser
     // hides, so the consumer's suppression drops anybody already served before
-    // any spend. Served only when EVERY constraint of the filter set can be
-    // enforced (planQuickenrich); otherwise, and once QuickEnrich has nobody
-    // left, the Apollo walk below serves exactly as it always did.
+    // any spend. QuickEnrich enforces what it can; the rest is left to the
+    // consumer's pre-pay judge (planQuickenrich, APOLLO-ZERO-COST-1119). Once
+    // QuickEnrich has nobody left, or its search fails for this call, the
+    // Apollo walk below serves exactly as it always did (Apollo last).
     const quickenrichAudience = cursorId ? await findQuickenrichAudience(req.orgId!, cursorSearchParams) : null;
     if (quickenrichAudience && cursorId) {
       const planned = planQuickenrich(cursorSearchParams);
@@ -766,18 +767,28 @@ router.post("/search/next", serviceAuth, async (req: AuthenticatedRequest, res) 
         console.warn(`[Apollo Service][POST /search/next] audience ${quickenrichAudience.id} is switched to quickenrich but not expressible — serving from Apollo: ${planned.reasons.join("; ")}`);
         traceEvent(runId, { service: "apollo-service", event: "quickenrich-inexpressible", detail: planned.reasons.join("; "), level: "warn" }, req.headers).catch(() => {});
       } else {
-        const served = await serveQuickenrichPage({
-          orgId: req.orgId!,
-          userId: req.userId!,
-          runId,
-          campaignId,
-          cursorId,
-          apolloAudienceId: quickenrichAudience.id,
-          plan: planned.plan,
-          tracking,
-        });
-        traceEvent(runId, { service: "apollo-service", event: "quickenrich-page", detail: `audience=${quickenrichAudience.id}, pages=${served.pagesRead}, rows=${served.rowsSeen}, kept=${served.people.length}, exhausted=${served.exhausted}`, data: { rejected: served.rejected } }, req.headers).catch(() => {});
-        if (served.people.length > 0 || !served.exhausted) {
+        let served: Awaited<ReturnType<typeof serveQuickenrichPage>> | null = null;
+        try {
+          served = await serveQuickenrichPage({
+            orgId: req.orgId!,
+            userId: req.userId!,
+            runId,
+            campaignId,
+            cursorId,
+            apolloAudienceId: quickenrichAudience.id,
+            plan: planned.plan,
+            tracking,
+          });
+        } catch (error) {
+          // A vendor failure (treg 429 / 5xx / timeout, bronze-recorded) costs this
+          // call its free source, never the serve: Apollo answers it. Anything else
+          // (our DB, our keys) is ours and stays loud.
+          if (!(error instanceof QuickenrichSearchError)) throw error;
+          console.warn(`[Apollo Service][POST /search/next] audience ${quickenrichAudience.id}: QuickEnrich search failed, this call is served by Apollo: ${errorMessage(error)}`);
+          traceEvent(runId, { service: "apollo-service", event: "quickenrich-search-failed", detail: errorMessage(error), level: "warn" }, req.headers).catch(() => {});
+        }
+        if (served) traceEvent(runId, { service: "apollo-service", event: "quickenrich-page", detail: `audience=${quickenrichAudience.id}, pages=${served.pagesRead}, rows=${served.rowsSeen}, kept=${served.people.length}, exhausted=${served.exhausted}`, data: { rejected: served.rejected, leftToJudge: planned.leftToJudge } }, req.headers).catch(() => {});
+        if (served && (served.people.length > 0 || !served.exhausted)) {
           await updateRun(searchRun.id, "completed", identity);
           openRun = null;
           return res.json({
