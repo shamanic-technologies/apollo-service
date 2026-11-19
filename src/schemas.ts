@@ -2821,3 +2821,37 @@ registry.registerPath({
     500: { description: "Internal server error (DB or runs-service unreachable)", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
+
+
+// ─── GET /internal/stats/email-sources/daily (APOLLO-ZERO-COST-1119) ─────────
+
+export const EmailSourcesDailyQuerySchema = z
+  .object({ days: z.coerce.number().int().min(1).max(180).optional().openapi({ description: "Days back, today included (default 30)." }) })
+  .openapi("EmailSourcesDailyQuery");
+
+const EmailSourcesDaySchema = z
+  .object({
+    day: z.string().openapi({ description: "UTC day, YYYY-MM-DD." }),
+    apolloReveals: z.number().int().openapi({ description: "Paid Apollo reveals that returned an email that day." }),
+    tregFinds: z.number().int().openapi({ description: "treg / Explee finds that returned an email that day." }),
+    stockReuses: z.number().int().openapi({ description: "Addresses served from our stock (already paid once), checked that day." }),
+    formatGuesses: z.number().int().openapi({ description: "Addresses guessed from the company's format and checked valid that day." }),
+    freeSourcePeople: z.number().int().openapi({ description: "People the free sources (Leadsforge, Dropleads) returned that day." }),
+    apolloShare: z.number().nullable().openapi({ description: "Apollo reveals / every email served that day; null on a day with none." }),
+  })
+  .openapi("EmailSourcesDay");
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/stats/email-sources/daily",
+  summary: "Where each served work email came from, per day",
+  description:
+    "Staff Monitoring series (Apollo last): per UTC day, emails from paid Apollo reveals vs treg finds, our stock and format guesses, plus the people the free sources returned. Read from the bronze rows each path already writes; read-only, nothing billed. Requires x-api-key = APOLLO_SERVICE_API_KEY.",
+  request: { headers: z.object({ "x-api-key": z.string() }), query: EmailSourcesDailyQuerySchema },
+  responses: {
+    200: { description: "One row per day, oldest first", content: { "application/json": { schema: z.object({ days: z.array(EmailSourcesDaySchema) }) } } },
+    400: { description: "Validation error", content: { "application/json": { schema: ErrorResponseSchema } } },
+    401: { description: "Missing or invalid x-api-key", content: { "application/json": { schema: ErrorResponseSchema } } },
+    500: { description: "Internal server error", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});

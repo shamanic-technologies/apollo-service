@@ -1041,6 +1041,14 @@ evidence reads the Apollo record). Measured on 60 people Apollo had revealed (tr
 unmasked, 32 correct, 0 wrong. This supersedes the « needs an owner decision » line below for the
 unmask path: the owner asked for it. Teasers stored before 2026-11-19 carry no mask (Apollo path).
 
+## Where each email came from, per day (`GET /internal/stats/email-sources/daily`, APOLLO-ZERO-COST-1119)
+
+Staff Monitoring series (x-api-key, `?days=` 1-180, default 30), read from the bronze rows each
+path already writes (`src/lib/email-sources-daily.ts`): `apolloReveals`, `tregFinds`, `stockReuses`
+(`stock:*` checks), `formatGuesses` (`pattern-guess:*` checked valid), `freeSourcePeople` (Leadsforge
++ Dropleads rows), `apolloShare` (null on a day with no email, never a fake 0 %). Consumer: dashboard
+v2 Monitoring chart. ~1 s on 7 days of prod.
+
 ## treg-FIRST on the reveal path does NOT work — the teaser has nothing to look up
 
 Measured 2026-09-26, so nobody re-plans it: the free People Search teaser a
