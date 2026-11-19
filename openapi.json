@@ -2490,6 +2490,14 @@
             "type": "string",
             "description": "The treg finding (email_findings) that answered, when source=quickenrich."
           },
+          "stock": {
+            "type": "string",
+            "enum": [
+              "apollo-reveal",
+              "email-finding"
+            ],
+            "description": "Set when source=quickenrich and the address came from our STOCK (a paid task of ours already returned it for this person, any org): served free, no treg call, no cost declared. apollo-reveal = an earlier Apollo reveal, email-finding = an earlier found email finding."
+          },
           "revealSkipped": {
             "type": "object",
             "properties": {
