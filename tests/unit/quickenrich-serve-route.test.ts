@@ -46,6 +46,7 @@ vi.mock("../../src/lib/free-people-serve.js", () => ({
 
 const mockFindStockEmail = vi.fn();
 const mockFindStockEmailFor = vi.fn();
+const mockFindGuessedEmail = vi.fn();
 const mockVerifyStockEmail = vi.fn();
 vi.mock("../../src/lib/company-stock.js", () => ({
   loadCompanyStock: vi.fn().mockResolvedValue(new Map()),
@@ -54,6 +55,7 @@ vi.mock("../../src/lib/company-stock.js", () => ({
 vi.mock("../../src/lib/email-stock.js", () => ({
   findStockEmail: (...a: unknown[]) => mockFindStockEmail(...a),
   findStockEmailFor: (...a: unknown[]) => mockFindStockEmailFor(...a),
+  findGuessedEmail: (...a: unknown[]) => mockFindGuessedEmail(...a),
   verifyStockEmail: (...a: unknown[]) => mockVerifyStockEmail(...a),
 }));
 
@@ -234,6 +236,7 @@ describe("QuickEnrich serve path", () => {
     mockFindQuickenrichAudience.mockResolvedValue(null);
     mockFindStockEmail.mockResolvedValue(null);
     mockFindStockEmailFor.mockResolvedValue(null);
+    mockFindGuessedEmail.mockResolvedValue(null);
     app = createTestApp();
     const { default: searchRoutes } = await import("../../src/routes/search.js");
     app.use(searchRoutes);
@@ -411,6 +414,16 @@ describe("QuickEnrich serve path", () => {
     expect(mockFindStockEmailFor).toHaveBeenCalledWith({ linkedinUrl: null, firstName: "Julie", lastName: "Angstadt", domain: "hummingbirdaba.com" });
     expect(mockExecuteEmailFind).not.toHaveBeenCalled();
     expect(res.body).toMatchObject({ source: "leadsforge", stock: "email-finding", cached: true, person: { id: "lf:abc", email: "julie@hummingbirdaba.com" } });
+  });
+
+  it("/enrich lf: stock miss, a guessed address checked valid → served, treg never called", async () => {
+    mockLoadFreeSourcePerson.mockResolvedValue(LF_PERSON);
+    const verification = { email: "jangstadt@hummingbirdaba.com", verdict: "valid", deliverable: true, verifier: "trykitt", verificationId: "v2", verifiedAt: "2026-11-19T00:00:00.000Z", reused: false };
+    mockFindGuessedEmail.mockResolvedValue({ email: "jangstadt@hummingbirdaba.com", verification });
+    const res = await post("/enrich", { apolloPersonId: "lf:abc" }).expect(200);
+    expect(mockFindGuessedEmail.mock.calls[0][0]).toEqual({ firstName: "Julie", lastName: "Angstadt", domain: "hummingbirdaba.com" });
+    expect(mockExecuteEmailFind).not.toHaveBeenCalled();
+    expect(res.body).toMatchObject({ stock: "pattern-guess", cached: false, emailVerification: verification, person: { email: "jangstadt@hummingbirdaba.com" } });
   });
 
   it("/enrich lf: stock miss → treg find by name + domain", async () => {

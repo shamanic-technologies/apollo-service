@@ -17,11 +17,35 @@ import { db } from "../db/index.js";
 import { canonicalLinkedinUrl } from "./quickenrich.js";
 import { normalizeDomain, personKeyOf } from "./email-finders.js";
 import { verifyRevealedEmail, type EmailVerificationResult, type VerificationContext } from "./email-verification.js";
+import { dominantFormat, guessAddress, knownAddressesAt } from "./email-pattern.js";
 
 export interface StockEmail {
   email: string;
   /** Which of our paid tables returned it. */
   source: "apollo-reveal" | "email-finding";
+}
+
+/** Verification `source` of a check on a GUESSED address: that check found it (see outcome-declarations). */
+export const PATTERN_GUESS_SOURCE_PREFIX = "pattern-guess:";
+
+/**
+ * Guess the address from the format the company's addresses we hold follow
+ * (src/lib/email-pattern.ts), and check it. Served only when `valid`; any other
+ * verdict returns null and the caller goes on to treg. Null too when we hold no
+ * readable address at that domain (nothing is guessed blind).
+ */
+export async function findGuessedEmail(
+  person: { firstName?: string | null; lastName?: string | null; domain?: string | null },
+  ctx: VerificationContext
+): Promise<{ email: string; verification: EmailVerificationResult } | null> {
+  const domain = normalizeDomain(person.domain ?? "");
+  if (!domain || !person.firstName || !person.lastName) return null;
+  const format = dominantFormat(await knownAddressesAt(domain));
+  if (!format) return null;
+  const guess = guessAddress(person.firstName, person.lastName, format, domain);
+  if (!guess) return null;
+  const verification = await verifyRevealedEmail(guess, { ...ctx, source: `${PATTERN_GUESS_SOURCE_PREFIX}${ctx.source}` });
+  return verification.deliverable ? { email: guess, verification } : null;
 }
 
 /** The two spellings our tables key a LinkedIn person by; null without a /in/ profile URL. */
