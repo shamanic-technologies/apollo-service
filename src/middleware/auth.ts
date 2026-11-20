@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from "express";
+import { serviceKeyMatches } from "./service-key.js";
 
 export interface AuthenticatedRequest extends Request {
   orgId?: string;
@@ -17,7 +18,11 @@ export function parseBrandIds(raw: string | undefined): string[] {
 }
 
 /**
- * Middleware for internal service calls (no auth - Railway private network).
+ * Middleware for internal service calls. The service is PUBLICLY routed, so the
+ * caller must present OUR service key: x-api-key is COMPARED (timing-safe) to
+ * APOLLO_SERVICE_API_KEY, never merely present (SEC-APOLLO-KEY-1120). The
+ * app-wide gate (serviceKeyGate) already enforces it; this repeats it so a
+ * router mounted anywhere is never reachable keyless.
  * Requires x-org-id and x-user-id.
  * Optionally extracts x-run-id, x-brand-id, x-campaign-id, x-audience-id, x-workflow-slug.
  */
@@ -27,6 +32,9 @@ export async function serviceAuth(
   next: NextFunction
 ) {
   try {
+    if (!serviceKeyMatches(req.headers["x-api-key"])) {
+      return res.status(401).json({ type: "auth", error: "Invalid or missing x-api-key" });
+    }
     const orgId = req.headers["x-org-id"] as string;
     const userId = req.headers["x-user-id"] as string;
 
@@ -66,6 +74,7 @@ export async function serviceAuth(
 /**
  * Org-only variant for read endpoints that do not need a user identity
  * (e.g. GET /audiences/:id — locked headers are x-api-key + x-org-id only).
+ * Same service-key comparison as serviceAuth.
  * Requires x-org-id; optionally extracts the same tracking headers as serviceAuth.
  */
 export async function orgAuth(
@@ -74,6 +83,9 @@ export async function orgAuth(
   next: NextFunction
 ) {
   try {
+    if (!serviceKeyMatches(req.headers["x-api-key"])) {
+      return res.status(401).json({ type: "auth", error: "Invalid or missing x-api-key" });
+    }
     const orgId = req.headers["x-org-id"] as string;
     if (!orgId) {
       return res.status(400).json({ type: "validation", error: "x-org-id header required" });

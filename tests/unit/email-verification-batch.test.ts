@@ -80,7 +80,7 @@ async function buildApp() {
   return app;
 }
 
-const HEADERS = { "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-1", "x-brand-id": "b-1" };
+const HEADERS = { "x-api-key": "test-service-secret", "x-org-id": "org-1", "x-user-id": "user-1", "x-run-id": "run-1", "x-brand-id": "b-1" };
 
 beforeEach(() => {
   vi.clearAllMocks();
