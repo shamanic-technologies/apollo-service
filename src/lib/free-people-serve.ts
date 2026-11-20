@@ -3,15 +3,17 @@
  * Dropleads, each on its own columns of the filter set's cursor row, before
  * QuickEnrich and Apollo. Pure rules live in ./free-people-sources.ts.
  *
- * Every call goes through treg and is asserted FREE (`X-Treg-Cost-Micro: 0`):
- * no cost name exists for these searches, so a charge we cannot declare fails
- * loud (bronze-recorded) and the caller falls through to the next source.
+ * Every call goes through treg, METERED (src/lib/treg-meter.ts): Leadsforge was
+ * free until 2026-11-20 00:06 UTC, then billed $0.005 per search; a charge is
+ * provisioned, authorized and declared as `treg-micro-usd` like every treg spend.
+ * A source that fails (vendor error, credit refused) is skipped for that call.
  */
 
 import { eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { apolloSearchCursors, freeSourcePeople, freeSourceSearches } from "../db/schema.js";
-import { decryptKey, type TrackingContext } from "./keys-client.js";
+import { type TrackingContext } from "./keys-client.js";
+import { TregMeter } from "./treg-meter.js";
 import { errorMessage } from "./db-error.js";
 import { applyCompanyStock, loadCompanyStock } from "./company-stock.js";
 import { normalizeDomain } from "./email-finders.js";
@@ -27,7 +29,6 @@ import {
   type SourcePlan,
 } from "./free-people-sources.js";
 
-const TREG_CALL = "https://treg.to/call";
 // Dropleads answers a narrow query in ~12-15 s, a broad one in up to ~80 s (measured 2026-11-19).
 const SEARCH_TIMEOUT_MS = 60_000;
 /** Leadsforge restarts after an expired bookmark by excluding who it already returned; past this many, it is treated as walked out. */
@@ -56,16 +57,13 @@ interface Page {
 
 async function callSource(
   source: FreeSource,
-  token: string,
-  tregOrg: string,
+  meter: TregMeter,
   filters: Record<string, unknown>,
   position: { cursor: string | null; page: number; excludeIds?: string[] },
   bronze: { orgId: string; runId?: string; campaignId?: string; cursorId: string; apolloAudienceId: string | null }
 ): Promise<Page> {
-  const url =
-    source === "leadsforge"
-      ? `${TREG_CALL}/leadsforge.people.search${position.cursor ? `?cursor=${encodeURIComponent(position.cursor)}` : ""}`
-      : `${TREG_CALL}/dropleads.people.search`;
+  const endpoint = source === "leadsforge" ? "leadsforge.people.search" : "dropleads.people.search";
+  const query = source === "leadsforge" && position.cursor ? `cursor=${encodeURIComponent(position.cursor)}` : undefined;
   const body =
     source === "leadsforge"
       ? { ...filters, limit: LEADSFORGE_PAGE, ...(position.excludeIds?.length ? { leadIDs: { exclude: position.excludeIds } } : {}) }
@@ -77,24 +75,11 @@ async function callSource(
   let error: string | null = null;
   let page: Page | null = null;
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Treg-Token": token, "X-Treg-Org": tregOrg, "Cache-Control": "no-cache" },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
-    });
-    httpStatus = response.status;
-    const text = await response.text();
-    try {
-      responseBody = text ? JSON.parse(text) : null;
-    } catch {
-      responseBody = { _raw: text };
-    }
-    const costHeader = response.headers.get("x-treg-cost-micro");
-    chargedMicro = costHeader === null || costHeader.trim() === "" ? null : Number(costHeader);
-    if (response.status !== 200) throw new FreeSourceSearchError(source, `HTTP ${response.status} - ${JSON.stringify(responseBody).slice(0, 400)}`, response.status);
-    if (chargedMicro === null || !Number.isFinite(chargedMicro)) throw new FreeSourceSearchError(source, `treg reported no X-Treg-Cost-Micro (got ${JSON.stringify(costHeader)})`);
-    if (chargedMicro !== 0) throw new FreeSourceSearchError(source, `treg charged ${chargedMicro} micro-USD for a search that must be free`);
+    const answer = await meter.post(endpoint, body, { query, timeoutMs: SEARCH_TIMEOUT_MS });
+    httpStatus = answer.status;
+    responseBody = answer.body;
+    chargedMicro = answer.chargedMicro;
+    if (answer.status !== 200) throw new FreeSourceSearchError(source, `HTTP ${answer.status} - ${JSON.stringify(responseBody).slice(0, 400)}`, answer.status);
     const parsed = responseBody as Record<string, any>;
     if (source === "leadsforge") {
       const leads = Array.isArray(parsed?.leads) ? (parsed.leads as Array<Record<string, unknown>>) : null;
@@ -198,11 +183,17 @@ export async function serveFreePeoplePage(args: {
   const [cursor] = await db.select().from(apolloSearchCursors).where(eq(apolloSearchCursors.id, args.cursorId)).limit(1);
   if (!cursor) throw new Error(`search cursor ${args.cursorId} vanished`);
 
-  const caller = { callerMethod: "POST", callerPath: "/search/next" };
-  const { key: token } = await decryptKey(args.orgId, args.userId, "treg", caller, args.tracking);
-  const { key: tregOrg } = await decryptKey(args.orgId, args.userId, "treg-org", caller, args.tracking);
+  const meter = new TregMeter({
+    identity: { orgId: args.orgId, userId: args.userId, brandIds: args.tracking.brandIds, campaignId: args.campaignId, audienceId: args.tracking.audienceId, featureSlug: args.tracking.featureSlug, workflowSlug: args.tracking.workflowSlug },
+    userId: args.userId,
+    runId: args.runId,
+    tracking: args.tracking,
+    callerPath: "/search/next",
+    taskName: "free-people-source",
+  });
   const bronze = { orgId: args.orgId, runId: args.runId, campaignId: args.campaignId, cursorId: args.cursorId, apolloAudienceId: args.apolloAudienceId };
 
+  try {
   for (const plan of usable) {
     const isLf = plan.source === "leadsforge";
     let exhausted = isLf ? cursor.leadsforgeExhausted : cursor.dropleadsExhausted;
@@ -215,7 +206,7 @@ export async function serveFreePeoplePage(args: {
       for (let i = 0; i < FREE_SOURCE_MAX_PAGES_PER_CALL && !exhausted; i++) {
         let page: Page;
         try {
-          page = await callSource(plan.source, token, tregOrg, plan.filters, { cursor: lfCursor, page: pages + 1, excludeIds }, bronze);
+          page = await callSource(plan.source, meter, plan.filters, { cursor: lfCursor, page: pages + 1, excludeIds }, bronze);
         } catch (err) {
           // Leadsforge bookmarks expire within minutes (410 "cursor invalid or expired",
           // measured 2026-11-19 between serves ~10 min apart): restart from the top,
@@ -228,7 +219,7 @@ export async function serveFreePeoplePage(args: {
             await db.update(apolloSearchCursors).set({ leadsforgeCursor: null, leadsforgeExhausted: true, updatedAt: new Date() }).where(eq(apolloSearchCursors.id, args.cursorId));
             break;
           }
-          page = await callSource(plan.source, token, tregOrg, plan.filters, { cursor: null, page: pages + 1, excludeIds }, bronze);
+          page = await callSource(plan.source, meter, plan.filters, { cursor: null, page: pages + 1, excludeIds }, bronze);
         }
         result.pagesRead++;
         pages++;
@@ -263,6 +254,10 @@ export async function serveFreePeoplePage(args: {
     }
   }
   return result;
+  } finally {
+    // Close the child run the paid calls opened (none opened = nothing to close).
+    await meter.finish("completed");
+  }
 }
 
 /** Every Leadsforge person id already returned on this cursor (bronze). */
