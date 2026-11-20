@@ -4,6 +4,9 @@ import { beforeAll, afterAll } from "vitest";
 process.env.APOLLO_SERVICE_DATABASE_URL =
   process.env.APOLLO_SERVICE_DATABASE_URL || "postgresql://mock:mock@localhost:5432/mock";
 process.env.SERVICE_SECRET_KEY = "test-service-secret";
+// The service key every request must present (SEC-APOLLO-KEY-1120). A test that
+// needs another value sets it before importing the app.
+process.env.APOLLO_SERVICE_API_KEY = process.env.APOLLO_SERVICE_API_KEY || "test-service-secret";
 
 beforeAll(() => console.log("Test suite starting..."));
 afterAll(() => console.log("Test suite complete."));

@@ -59,6 +59,7 @@ describe("JSON body limits", () => {
   it("keeps the 100kb default on every other route (named 413)", async () => {
     const res = await request(app)
       .post("/internal/email-verifications")
+      .set("x-api-key", KEY)
       .set("content-type", "application/json")
       .send(JSON.stringify({ pad: "x".repeat(200 * 1024) }));
     expect(res.status).toBe(413);

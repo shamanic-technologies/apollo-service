@@ -1,5 +1,4 @@
-import { Router, type Request, type Response, type NextFunction } from "express";
-import { timingSafeEqual } from "node:crypto";
+import { Router } from "express";
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { TransferBrandRequestSchema } from "../schemas.js";
@@ -7,24 +6,12 @@ import { TransferBrandRequestSchema } from "../schemas.js";
 const router = Router();
 
 /**
- * Service api-key auth for the fleet transfer contract. brand-service calls
- * with `x-api-key: $APOLLO_SERVICE_API_KEY`. Fails closed: a missing key on
- * our side refuses every call rather than letting anyone move a brand.
+ * Service api-key auth (x-api-key compared timing-safe to APOLLO_SERVICE_API_KEY,
+ * fails closed). Re-exported from the one gate every route shares
+ * (src/middleware/service-key.ts, SEC-APOLLO-KEY-1120).
  */
-export function requireServiceApiKey(req: Request, res: Response, next: NextFunction) {
-  const expected = process.env.APOLLO_SERVICE_API_KEY;
-  if (!expected) {
-    console.error("[apollo-service] transfer-brand: APOLLO_SERVICE_API_KEY is not set, refusing");
-    return res.status(500).json({ type: "internal", error: "Service api key not configured" });
-  }
-  const given = String(req.headers["x-api-key"] ?? "");
-  const a = Buffer.from(given);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length || !timingSafeEqual(a, b)) {
-    return res.status(401).json({ type: "auth", error: "Invalid or missing x-api-key" });
-  }
-  next();
-}
+import { requireServiceKey } from "../middleware/service-key.js";
+export const requireServiceApiKey = requireServiceKey;
 
 interface TransferIds {
   sourceBrandId: string;
