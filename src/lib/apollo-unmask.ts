@@ -20,6 +20,7 @@ import { freeSourceSearches } from "../db/schema.js";
 import { normalizeEmployerName } from "./teaser-employer-domains.js";
 import { namePart } from "./email-pattern.js";
 import { errorMessage } from "./db-error.js";
+import type { TregMeter } from "./treg-meter.js";
 
 /** True when `lastName` fits Apollo's mask (prefix before the stars, suffix after). */
 export function maskMatches(mask: string | null | undefined, lastName: string | null | undefined): boolean {
@@ -79,7 +80,7 @@ export async function servedBySignal(orgId: string, apolloPersonId: string): Pro
 async function freeCall(
   endpoint: "leadsforge.people.search" | "dropleads.people.search",
   body: Record<string, unknown>,
-  creds: { token: string; tregOrg: string },
+  meter: TregMeter,
   bronze: { orgId: string; runId?: string; campaignId?: string }
 ): Promise<Record<string, any> | null> {
   const started = Date.now();
@@ -88,19 +89,12 @@ async function freeCall(
   let chargedMicro: number | null = null;
   let error: string | null = null;
   try {
-    const res = await fetch(`https://treg.to/call/${endpoint}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Treg-Token": creds.token, "X-Treg-Org": creds.tregOrg, "Cache-Control": "no-cache" },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30_000),
-    });
-    httpStatus = res.status;
-    const text = await res.text();
-    responseBody = text ? JSON.parse(text) : null;
-    const cost = res.headers.get("x-treg-cost-micro");
-    chargedMicro = cost === null || cost.trim() === "" ? null : Number(cost);
-    if (res.status !== 200) throw new Error(`HTTP ${res.status} - ${text.slice(0, 300)}`);
-    if (chargedMicro !== 0) throw new Error(`treg charged ${chargedMicro} micro-USD for a search that must be free`);
+    // Metered (src/lib/treg-meter.ts): Leadsforge bills $0.005 per search since 2026-11-20.
+    const answer = await meter.post(endpoint, body, { timeoutMs: 30_000 });
+    httpStatus = answer.status;
+    responseBody = answer.body;
+    chargedMicro = answer.chargedMicro;
+    if (answer.status !== 200) throw new Error(`HTTP ${answer.status} - ${JSON.stringify(answer.body).slice(0, 300)}`);
     return responseBody as Record<string, any>;
   } catch (err) {
     // A failed free source only means "not unmasked": the caller goes on to the next path.
@@ -137,17 +131,17 @@ export interface Unmasked {
 /** Leadsforge, then Dropleads, by the employer's domain; the ONE matching person, or null. */
 export async function unmaskApolloPerson(
   teaser: TeaserIdentity,
-  creds: { token: string; tregOrg: string },
+  meter: TregMeter,
   bronze: { orgId: string; runId?: string; campaignId?: string }
 ): Promise<Unmasked | null> {
-  const lf = await freeCall("leadsforge.people.search", { companyDomains: { include: [teaser.domain] }, limit: 100 }, creds, bronze);
+  const lf = await freeCall("leadsforge.people.search", { companyDomains: { include: [teaser.domain] }, limit: 100 }, meter, bronze);
   const lfRows: UnmaskCandidate[] = Array.isArray(lf?.leads)
     ? lf!.leads.map((l: any) => ({ firstName: l.firstName ?? null, lastName: l.lastName ?? null, linkedinUrl: l.linkedinUrl ?? null }))
     : [];
   let hit = pickUnmasked(lfRows, teaser.firstName, teaser.mask);
   let via: Unmasked["via"] = "leadsforge";
   if (!hit) {
-    const dl = await freeCall("dropleads.people.search", { filters: { companyDomains: [teaser.domain] }, pagination: { page: 1, limit: 50 } }, creds, bronze);
+    const dl = await freeCall("dropleads.people.search", { filters: { companyDomains: [teaser.domain] }, pagination: { page: 1, limit: 50 } }, meter, bronze);
     const dlRows: UnmaskCandidate[] = Array.isArray(dl?.data?.leads)
       ? dl!.data.leads.map((l: any) => ({ firstName: l.firstName ?? null, lastName: l.lastName ?? null, linkedinUrl: l.linkedinUrl ?? null }))
       : [];
