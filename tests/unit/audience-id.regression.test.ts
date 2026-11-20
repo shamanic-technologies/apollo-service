@@ -25,7 +25,7 @@ function mockRes(): ExpressResponse {
 describe("x-audience-id ingress (serviceAuth middleware)", () => {
   it("reads x-audience-id onto req.audienceId", async () => {
     const req = {
-      headers: { "x-org-id": "org-1", "x-user-id": "user-1", "x-audience-id": "audience-789" },
+      headers: { "x-api-key": "test-service-secret", "x-org-id": "org-1", "x-user-id": "user-1", "x-audience-id": "audience-789" },
     } as unknown as AuthenticatedRequest;
     const next = vi.fn();
 
@@ -37,7 +37,7 @@ describe("x-audience-id ingress (serviceAuth middleware)", () => {
 
   it("leaves req.audienceId undefined when header absent (no throw)", async () => {
     const req = {
-      headers: { "x-org-id": "org-1", "x-user-id": "user-1" },
+      headers: { "x-api-key": "test-service-secret", "x-org-id": "org-1", "x-user-id": "user-1" },
     } as unknown as AuthenticatedRequest;
     const next = vi.fn();
 

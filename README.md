@@ -25,6 +25,7 @@ cp .env.example .env
 ```
 
 Required variables:
+- `APOLLO_SERVICE_API_KEY` - this service's own key. Every request except `GET /health`, `GET /openapi.json` and the vendor webhooks must send `x-api-key` with this exact value: it is COMPARED (timing-safe), never just checked for presence. Unset = the server refuses to boot, and every authenticated request is refused.
 - `APOLLO_SERVICE_DATABASE_URL` - PostgreSQL connection string
 - `KEY_SERVICE_URL` - URL for key-service (BYOK key retrieval)
 - `KEY_SERVICE_API_KEY` - API key for key-service

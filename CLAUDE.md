@@ -2,6 +2,30 @@
 
 Apollo.io integration service for lead search, enrichment, and validation with cost tracking via runs-service.
 
+## Every caller presents OUR key: x-api-key is COMPARED, never just present (SEC-APOLLO-KEY-1120)
+
+apollo-service is PUBLICLY routed (`apollo.distribute.you` → Caddy → `apollo-service:8080`;
+Railway's private network is gone). Until 2026-11-20 `serviceAuth` / `orgAuth` checked only
+that `x-org-id` / `x-user-id` were present, so anyone on the internet could spend any org's
+Apollo credits and read its data by naming an org id.
+
+- `serviceKeyGate` (`src/middleware/service-key.ts`) is mounted in `src/index.ts` BEFORE the
+  body parsers and every router: `x-api-key` must equal `APOLLO_SERVICE_API_KEY`
+  (`timingSafeEqual`), else 401 before any DB or vendor call. Unknown paths 401 too.
+- Public allowlist, nothing else: `GET|HEAD /health`, `GET /openapi.json`,
+  `POST /webhook/phone-reveal` (its own `APOLLO_PHONE_REVEAL_WEBHOOK_SECRET`, timing-safe),
+  `POST /webhook/waterfall` (disabled no-op). `/health/debug` needs the key.
+- `serviceAuth` / `orgAuth` repeat the comparison (a router mounted without the gate is still
+  keyless-proof); `requireServiceApiKey` (transfer-brand.ts) is the same function.
+- Fail closed: key unset = refuse every authenticated request (500) AND refuse to boot.
+  No default value, no test-mode bypass: tests set the key (`tests/setup.ts`) and send it.
+- Callers (2026-11-20, all hold the same value, hash-checked on the box): api-service,
+  brand-service, client-service, dashboard-app, human-service, instantly-service, lead-service,
+  transactional-email-service, workflow-service (script vendors), windmill. A NEW caller sends
+  `x-api-key: $APOLLO_SERVICE_API_KEY`. Guard: `tests/unit/service-key.security.test.ts`
+  replays the attacker call on EVERY registered route (read from Express' stack). Never replace
+  the key with an IP allowlist or a presence check.
+
 ## apollo-service OWNS "an Apollo audience" — faithful Apollo vocabulary, single source
 
 This service is the single owner of the Apollo People-Search filter vocabulary
@@ -1672,7 +1696,8 @@ the wrap alive when a later `drizzle()` re-assigns the json serializers.
 - `src/routes/validate.ts` — Batch validation endpoint (POST /validate)
 - `src/routes/reference.ts` — Reference data endpoints (GET /reference/industries, GET /reference/employee-ranges)
 - `src/routes/health.ts` — Health check endpoints
-- `src/middleware/auth.ts` — Clerk org-id authentication middleware
+- `src/middleware/service-key.ts` — the service-key gate (x-api-key compared to APOLLO_SERVICE_API_KEY)
+- `src/middleware/auth.ts` — key comparison + identity headers (x-org-id / x-user-id …) onto the request
 - `src/lib/apollo-client.ts` — Apollo.io API client
 - `src/lib/keys-client.ts` — BYOK key retrieval via key-service
 - `src/lib/runs-client.ts` — Runs-service client for cost tracking

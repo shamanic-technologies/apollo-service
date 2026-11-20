@@ -29,6 +29,7 @@ import revealRecordsRoutes from "./routes/reveal-records.js";
 import { startHoldReconciler } from "./lib/hold-reconciler.js";
 import { startOutcomeDeclarer } from "./lib/outcome-declarations.js";
 import { stripNulReplacer } from "./lib/nul-strip.js";
+import { serviceKeyGate, SERVICE_KEY_ENV } from "./middleware/service-key.js";
 import {
   ACQUISITION_COSTS_PATH,
   acquisitionCostsJsonParser,
@@ -48,6 +49,10 @@ app.set("json replacer", stripNulReplacer);
 
 // Middleware
 app.use(cors());
+// SEC-APOLLO-KEY-1120: every route but /health, /openapi.json and the vendor
+// webhooks requires x-api-key == APOLLO_SERVICE_API_KEY (timing-safe compare),
+// BEFORE any body parsing, DB or vendor call.
+app.use(serviceKeyGate);
 app.use(ACQUISITION_COSTS_PATH, acquisitionCostsJsonParser);
 app.use(defaultJsonParser);
 
@@ -103,6 +108,10 @@ app.use((err: Error, req: express.Request, res: express.Response, next: express.
 
 // Only start server if not in test environment
 if (process.env.NODE_ENV !== "test") {
+  if (!process.env[SERVICE_KEY_ENV]) {
+    console.error(`[Apollo Service] ${SERVICE_KEY_ENV} is not set: refusing to boot (every caller must present it)`);
+    process.exit(1);
+  }
   const dbUrl = process.env.APOLLO_SERVICE_DATABASE_URL;
 
   const startServer = () => {

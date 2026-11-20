@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { errorMessage } from "../lib/db-error.js";
 import { Router, Request, Response } from "express";
 import { recordOutcomeDetached } from "../lib/outcome-declarations.js";
@@ -129,8 +130,10 @@ async function reconcileCost(row: ApolloPhoneReveal, creditsConsumed: number): P
  */
 router.post("/webhook/phone-reveal", async (req: Request, res: Response) => {
   const secret = process.env.APOLLO_PHONE_REVEAL_WEBHOOK_SECRET || "";
-  const provided = req.query.secret as string | undefined;
-  if (!secret || provided !== secret) {
+  const provided = typeof req.query.secret === "string" ? req.query.secret : "";
+  const a = Buffer.from(provided);
+  const b = Buffer.from(secret);
+  if (!secret || a.length !== b.length || !timingSafeEqual(a, b)) {
     console.warn("[Apollo Service][webhook/phone-reveal] rejected — bad or missing secret");
     return res.status(401).json({ type: "validation", error: "Invalid webhook secret" });
   }
