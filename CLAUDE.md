@@ -1004,8 +1004,13 @@ set's cursor row: **Leadsforge → Dropleads → QuickEnrich → Apollo** (searc
   returned on that cursor (read from bronze); past `LEADSFORGE_MAX_EXCLUDED` (2,000) the source is
   treated as walked out. Dropleads takes 12-15 s on a narrow query, up to ~80 s on a broad one:
   60 s timeout.
-- **Every call asserted free** (`X-Treg-Cost-Micro: 0`, else loud + bronze); a failing source is
-  skipped FOR THAT CALL (warn trace `free-source-page`), never stalls the serve.
+- **Every call METERED** (`src/lib/treg-meter.ts`, child run `free-people-source` /
+  `unmask-apollo-person`): hold $0.01 → authorize → call → treg's `X-Treg-Cost-Micro` declared as
+  `treg-micro-usd` → hold cancelled. Leadsforge was free until 2026-11-20 00:06 UTC, then billed
+  $0.005 per search (catalog still read "free"); the old free-only guard refused 26 of 32 calls
+  overnight and the serves fell to Apollo. $0.005 for up to 50 people stays ~270x cheaper per
+  person than a reveal. A failing source (vendor error, credit refused) is skipped FOR THAT CALL
+  (warn trace `free-source-page`), never stalls the serve.
 - **`/enrich lf:<id>` / `dl:<id>`** (and `qe:`): our stock (LinkedIn, else EXACT first + last name +
   domain), then a GUESS from the company's format, then treg find (LinkedIn or name + domain),
   verified like every reveal. Never Apollo.

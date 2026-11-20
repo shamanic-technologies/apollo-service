@@ -35,6 +35,7 @@ import { findGuessedEmail, findStockEmail, findStockEmailFor, verifyStockEmail }
 import { serveFreePeoplePage, loadFreeSourcePerson } from "../lib/free-people-serve.js";
 import { loadTeaserIdentity, servedBySignal, unmaskApolloPerson, unmaskedToPerson } from "../lib/apollo-unmask.js";
 import { freeEmailFor } from "../lib/free-email.js";
+import { TregMeter } from "../lib/treg-meter.js";
 import { parseFreeSourcePersonId, freeSourceToPerson } from "../lib/free-people-sources.js";
 import { applyCompanyStock, loadCompanyStock } from "../lib/company-stock.js";
 import { normalizeDomain } from "../lib/email-finders.js";
@@ -459,10 +460,8 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
     // (its evidence is read from the Apollo record).
     const teaser = await loadTeaserIdentity(apolloPersonId);
     if (teaser && !(await servedBySignal(req.orgId!, apolloPersonId))) {
-      const caller = { callerMethod: "POST", callerPath: "/enrich" };
-      const { key: tregToken } = await decryptKey(req.orgId!, req.userId!, "treg", caller, tracking);
-      const { key: tregOrg } = await decryptKey(req.orgId!, req.userId!, "treg-org", caller, tracking);
-      const un = await unmaskApolloPerson(teaser, { token: tregToken, tregOrg }, { orgId: req.orgId!, runId, campaignId });
+      const meter = new TregMeter({ identity, userId: req.userId!, runId, tracking, callerPath: "/enrich", taskName: "unmask-apollo-person" });
+      const un = await unmaskApolloPerson(teaser, meter, { orgId: req.orgId!, runId, campaignId }).finally(() => meter.finish("completed"));
       traceEvent(runId, { service: "apollo-service", event: "unmask", detail: un ? `unmasked via ${un.via}` : "not unmasked" }, req.headers).catch(() => {});
       if (un) {
         const free = await freeEmailFor(un, { identity, tracking, runId, source: `unmasked:${un.via}` }, {
