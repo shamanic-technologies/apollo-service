@@ -19,6 +19,7 @@ import emailFinderRoutes from "./routes/email-finder.js";
 import emailVerificationRoutes from "./routes/email-verifications.js";
 import emailVerifierCallRoutes from "./routes/email-verifier-calls.js";
 import verificationHistoryRoutes from "./routes/verification-history.js";
+import emailVerificationUnitRoutes from "./routes/email-verification-units.js";
 import emailSourcesDailyRoutes from "./routes/email-sources-daily.js";
 import acquisitionCostRoutes from "./routes/acquisition-costs.js";
 import webhookRoutes from "./routes/webhook.js";
@@ -78,6 +79,7 @@ app.use(matchRoutes);
 app.use(phoneRevealRoutes);
 app.use(emailFinderRoutes);
 app.use(emailVerificationRoutes);
+app.use(emailVerificationUnitRoutes); // ENGINE-GET-ASK-1123: provider:email_found read
 app.use(emailVerifierCallRoutes); // FACTORY-P3 next outcomes: the stored verification script's doors + recorded decisions
 app.use(verificationHistoryRoutes);
 app.use(emailSourcesDailyRoutes);

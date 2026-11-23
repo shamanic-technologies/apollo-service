@@ -154,6 +154,40 @@ describe("POST /email-verifications", () => {
     expect(mockAddCosts).not.toHaveBeenCalled();
   });
 
+  it("ENGINE-GET-ASK-1123: without maxVerdictAgeDays the held fresh verdict is reused exactly as before", async () => {
+    heldRows = [{ id: "00000000-0000-4000-8000-0000000000aa", email: "good@example.com", verifier: "bounceverify", verdict: "valid", verifiedAt: new Date("2026-09-20T00:00:00Z") }];
+    const app = await buildApp();
+    const res = await request(app).post("/email-verifications").set(HEADERS).send({ emails: ["good@example.com"] });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      results: [
+        { email: "good@example.com", verdict: "valid", deliverable: true, verifier: "bounceverify", verificationId: "00000000-0000-4000-8000-0000000000aa", verifiedAt: "2026-09-20T00:00:00.000Z", reused: true },
+      ],
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mockCreateRun).not.toHaveBeenCalled();
+  });
+
+  it("ENGINE-GET-ASK-1123: maxVerdictAgeDays 0 (verify now) ignores the held fresh verdict and verifies anew", async () => {
+    heldRows = [{ id: "00000000-0000-4000-8000-0000000000aa", email: "good@example.com", verifier: "bounceverify", verdict: "valid", verifiedAt: new Date() }];
+    const app = await buildApp();
+    const res = await request(app).post("/email-verifications").set(HEADERS).send({ emails: ["good@example.com"], maxVerdictAgeDays: 0 });
+    expect(res.status).toBe(200);
+    expect(res.body.results[0]).toMatchObject({ email: "good@example.com", verdict: "valid", deliverable: true, reused: false });
+    expect(res.body.results[0].verificationId).not.toBe("00000000-0000-4000-8000-0000000000aa");
+    expect(fetchMock.mock.calls.filter(([u]) => String(u).includes("api.apify.com"))).toHaveLength(1);
+    expect(inserted.length).toBeGreaterThan(0);
+  });
+
+  it("ENGINE-GET-ASK-1123: maxVerdictAgeDays is an integer 0..3650", async () => {
+    const app = await buildApp();
+    for (const bad of [-1, 3651, 1.5, "7"]) {
+      const res = await request(app).post("/email-verifications").set(HEADERS).send({ emails: ["good@example.com"], maxVerdictAgeDays: bad });
+      expect(res.status).toBe(400);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("is all or nothing: one address the verifier cannot answer fails the whole call with 502 and no verdicts", async () => {
     const app = await buildApp();
     const res = await request(app).post("/email-verifications").set(HEADERS).send({ emails: ["good@example.com", "down@example.com"] });

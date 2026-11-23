@@ -12,6 +12,8 @@ const router = Router();
 export const VerifyEmailsRequestSchema = z.object({
   emails: z.array(z.string().trim().min(1).max(320)).min(1).max(MAX_VERIFY_BATCH),
   source: z.string().trim().min(1).max(100).optional(),
+  // ENGINE-GET-ASK-1123: the oldest held verdict (days) the CALLER accepts; 0 = verify now. Absent = VERDICT_REUSE_DAYS.
+  maxVerdictAgeDays: z.number().int().min(0).max(3650).optional(),
   // COST-ACCOUNTING-1023: who each address IS for the cost ledger, when the caller
   // owns that subject (a mailing-list subscriber is not a lead). Absent = the
   // person's lead in lead-service, resolved later.
@@ -63,7 +65,7 @@ router.post("/email-verifications", serviceAuth, async (req: AuthenticatedReques
   }
 
   try {
-    const results = await verifyEmailBatch(parsed.data.emails, { identity, tracking, runId, source, subjects });
+    const results = await verifyEmailBatch(parsed.data.emails, { identity, tracking, runId, source, subjects, maxVerdictAgeDays: parsed.data.maxVerdictAgeDays });
     return res.json({ results });
   } catch (error) {
     console.error(`[Apollo Service][POST /email-verifications] org=${req.orgId} run=${runId} ERROR:`, error);

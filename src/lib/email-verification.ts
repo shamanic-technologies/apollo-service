@@ -173,6 +173,11 @@ export interface VerificationContext {
   source: string;
   /** The subject a caller named per (normalized) address; absent = the person's lead in lead-service. */
   subjects?: ReadonlyMap<string, NamedSubject>;
+  /**
+   * ENGINE-GET-ASK-1123: the oldest held verdict (days) the CALLER accepts for reuse; 0 = verify now (nothing held
+   * is reused). Absent = VERDICT_REUSE_DAYS, unchanged. Only POST /email-verifications sets it.
+   */
+  maxVerdictAgeDays?: number;
 }
 
 /** Same precedence human-service used: invalid is terminal, catch-all cannot confirm, a spam trap is never valid. */
@@ -245,8 +250,9 @@ export function needsSecondOpinion(row: Pick<EmailVerification, "verifier" | "ve
  * verifier. A final one is reused as-is; a step-1 catch_all / unknown is
  * reused as step 1 (no step-1 vendor re-asked) and only BounceBan runs.
  */
-async function latestHeldVerdict(email: string): Promise<EmailVerification | undefined> {
-  const since = new Date(Date.now() - VERDICT_REUSE_DAYS * 24 * 60 * 60 * 1000);
+async function latestHeldVerdict(email: string, maxAgeDays: number = VERDICT_REUSE_DAYS): Promise<EmailVerification | undefined> {
+  if (maxAgeDays <= 0) return undefined;
+  const since = new Date(Date.now() - maxAgeDays * 24 * 60 * 60 * 1000);
   const [row] = await db
     .select()
     .from(emailVerifications)
@@ -930,7 +936,7 @@ export async function verifyRevealedEmail(rawEmail: string, ctx: VerificationCon
   const email = normalizeEmail(rawEmail);
   if (!email) throw new EmailVerificationError("empty email");
 
-  let first = await latestHeldVerdict(email);
+  let first = await latestHeldVerdict(email, ctx.maxVerdictAgeDays);
   if (first) {
     // A row stored before decideVerdict existed (or while the domain had no
     // MX) carries the vendor's "no mail domain" invalid: re-check it now, free,
