@@ -42,7 +42,9 @@ vi.mock("../../src/lib/apollo-unmask.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/lib/apollo-unmask.js")>()),
   loadTeaserIdentity: (...a: unknown[]) => mockLoadTeaserIdentity(...a),
   unmaskApolloPerson: (...a: unknown[]) => mockUnmaskApolloPerson(...a),
-  servedBySignal: vi.fn().mockResolvedValue(false),
+  servedSignalType: vi.fn().mockResolvedValue(null),
+  freePathCarriesSignal: (t: string | null) => t === null || t === "hiring" || t === "funding",
+  companyEvidencePerson: vi.fn().mockResolvedValue(null),
 }));
 const mockFreeEmailFor = vi.fn();
 vi.mock("../../src/lib/free-email.js", () => ({ freeEmailFor: (...a: unknown[]) => mockFreeEmailFor(...a) }));
