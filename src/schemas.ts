@@ -2595,7 +2595,7 @@ registry.registerPath({
   path: "/email-verifications",
   summary: "Verify a batch of email addresses the caller already holds (billed to the caller's org)",
   description:
-    "Verdicts for up to 50 addresses, verified 10 at a time. Step 1 = ONE verdict from the cheapest verifier that ANSWERS: ContactOut (free) → BounceVerify (Apify) → TryKitt → MillionVerifier, the next asked only when one fails to answer. Step 2 = a step-1 catch_all or unknown goes to BounceBan, whose verdict decides. treg vendors are billed as treg-micro-usd at treg's own charge (BounceBan can take ~1 min). Same guarantees as the reveal paths: every call is recorded in email_verifications (bronze, raw actor row verbatim); a decisive verdict under 30 days old is reused (reused: true, nothing billed); each fresh verification is a child run of x-run-id with cost apify-bounceverify-email provisioned, authorized against the caller's org (platform key), actualized on a decisive verdict (unknown is free) and the hold cancelled. `deliverable` is true ONLY for verdict `valid`. Duplicates (case-insensitive) are verified once; results come back in first-seen order, one per distinct address. ALL OR NOTHING: if any address cannot be verified the whole call answers 502 {type: \"email_verification\"} and no verdict is returned — a retry reuses whatever was already decided.",
+    "Verdicts for up to 50 addresses, verified 10 at a time. Step 1 = ONE verdict from the cheapest verifier that ANSWERS: ContactOut (free) → BounceVerify (Apify) → TryKitt → MillionVerifier, the next asked only when one fails to answer. Step 2 = a step-1 catch_all or unknown goes to BounceBan, whose verdict decides. treg vendors are billed as treg-micro-usd at treg's own charge (BounceBan can take ~1 min). Same guarantees as the reveal paths: every call is recorded in email_verifications (bronze, raw actor row verbatim); a decisive verdict under 30 days old (or `maxVerdictAgeDays`, when given) is reused (reused: true, nothing billed); each fresh verification is a child run of x-run-id with cost apify-bounceverify-email provisioned, authorized against the caller's org (platform key), actualized on a decisive verdict (unknown is free) and the hold cancelled. `deliverable` is true ONLY for verdict `valid`. Duplicates (case-insensitive) are verified once; results come back in first-seen order, one per distinct address. ALL OR NOTHING: if any address cannot be verified the whole call answers 502 {type: \"email_verification\"} and no verdict is returned — a retry reuses whatever was already decided.",
   request: {
     headers: emailFindHeaders,
     body: {
@@ -2605,6 +2605,16 @@ registry.registerPath({
             .object({
               emails: z.array(z.string()).min(1).max(50).openapi({ description: "1 to 50 addresses." }),
               source: z.string().optional().openapi({ description: "Caller label stored on each bronze row as `verify:<source>`." }),
+              maxVerdictAgeDays: z
+                .number()
+                .int()
+                .min(0)
+                .max(3650)
+                .optional()
+                .openapi({
+                  description:
+                    "ENGINE-GET-ASK-1123: the oldest held verdict (in days) this call may reuse instead of verifying. 0 = verify now: no held verdict is reused (neither a final one nor a step-1 catch_all/unknown), the full two-step decision runs and is billed. Above 30 = older verdicts may be reused too (never spends more). Absent = 30 days, the default unchanged. A BounceBan task already paid and still running for the address is resumed, never paid twice. GET /email-verifications/units shows what is held and how old.",
+                }),
               subjects: z
                 .array(
                   z.object({
@@ -2635,6 +2645,106 @@ registry.registerPath({
       description: "At least one address could not be verified (verifier down, runs/billing unreachable, insufficient balance). Nothing is returned as deliverable.",
       content: { "application/json": { schema: z.object({ type: z.literal("email_verification"), source: z.string(), error: z.string() }) } },
     },
+  },
+});
+
+// ─── ENGINE-GET-ASK-1123: Provider read of the email_found Units ─────────
+
+const VERDICT_VALUES = ["valid", "invalid", "catch_all", "risky", "unknown"] as const;
+
+function csvList(value: unknown): unknown {
+  if (value === undefined) return undefined;
+  const parts = (Array.isArray(value) ? value : [value]).flatMap((v) => String(v).split(","));
+  return parts.map((p) => p.trim()).filter((p) => p.length > 0);
+}
+
+const boolFlag = z.enum(["true", "false"]).transform((v) => v === "true");
+
+export const EmailFoundUnitsQuerySchema = z
+  .object({
+    emails: z
+      .preprocess(csvList, z.array(z.string().max(320)).min(1).max(50))
+      .openapi({ type: "string", description: "1 to 50 addresses, comma-separated (or the parameter repeated). Case-insensitive." }),
+    since: z
+      .string()
+      .datetime({ offset: true })
+      .optional()
+      .openapi({ description: "ISO timestamp: only verdicts made at or after it. Absent = the whole history, however old." }),
+    decisive: boolFlag
+      .optional()
+      .openapi({ type: "string", enum: ["true", "false"], description: "true = only FINAL verdicts (a step-1 valid/invalid/risky, or any second-step BounceBan verdict). false = only UNDECIDED ones (a step-1 catch_all/unknown, which BounceBan normally decides seconds later). Absent = both." }),
+    verdicts: z
+      .preprocess(csvList, z.array(z.enum(VERDICT_VALUES)).min(1))
+      .optional()
+      .openapi({ type: "string", description: "Comma-separated subset of valid, invalid, catch_all, risky, unknown." }),
+    includeFailed: boolFlag
+      .optional()
+      .openapi({ type: "string", enum: ["true", "false"], description: "true = also return vendor calls that produced NO verdict (verdict null). Default false." }),
+    limit: z.coerce.number().int().min(1).max(500).optional().openapi({ description: "Units per page, 1-500 (default 100)." }),
+    before: z
+      .string()
+      .regex(/^\d{1,18}$/, "before must be a nextBefore returned by this route")
+      .optional()
+      .openapi({ description: "Paging cursor: the `nextBefore` of the previous page." }),
+  })
+  .openapi("EmailFoundUnitsQuery");
+
+const EmailFoundUnitSchema = z
+  .object({
+    verificationId: z.string().uuid().openapi({ description: "Stable id of this verification." }),
+    email: z.string().openapi({ description: "The address, lower-cased and trimmed." }),
+    verdict: z.enum(VERDICT_VALUES).nullable().openapi({ description: "What the verifier said. null only with includeFailed=true (the call returned no verdict)." }),
+    decisive: z.boolean().openapi({ description: "true = a FINAL verdict, usable on its own. false = a step-1 catch_all/unknown (BounceBan decides it) or a failed call." }),
+    deliverable: z.boolean().openapi({ description: "true only for a decisive `valid`: the one verdict our senders write to." }),
+    step: z.enum(["first", "second"]).openapi({ description: "first = the step-1 verifier that answered; second = BounceBan's decision on a step-1 catch_all/unknown." }),
+    verifier: z.string().openapi({ description: "contactout | bounceverify | trykitt | millionverifier | bounceban." }),
+    verifiedAt: z.string().openapi({ description: "ISO timestamp the verdict was made." }),
+    ageDays: z.number().openapi({ description: "Age of the verdict in days at read time (1 decimal)." }),
+    source: z.string().nullable().openapi({ description: "What asked for it: enrich, match, email-finder:<vendor>, verify:<caller>, pattern-guess:<source>, stock:<…>, reveal-domain-probe (an address nobody owns)." }),
+    subject: z
+      .object({
+        subjectService: z.string().openapi({ description: "Service holding the subject: lead-service (a lead) or the caller that named it (e.g. transactional-email-service)." }),
+        subjectId: z.string().openapi({ description: "The subject's id in that service." }),
+        declared: z.boolean().openapi({ description: "true = the produced email_checked is already on the ledger (runs-service); false = parked, declared within minutes." }),
+      })
+      .nullable()
+      .openapi({ description: "The subject this verdict's email_checked is produced on in the cost ledger. A Script that REUSES this Unit declares `email_checked` consumed on this subject. null = no email_checked produced (not a final kept verdict, a domain probe, a free reuse row) or its lead not resolved yet." }),
+  })
+  .openapi("EmailFoundUnit");
+
+registry.registerPath({
+  method: "get",
+  path: "/email-verifications/units",
+  operationId: "listEmailFoundUnits",
+  tags: ["provider:email_found"],
+  summary: "Email verification Units already held for one or several addresses (read only, never spends)",
+  description:
+    "The Provider read of outcome email_found (ENGINE-GET-ASK-1123): every verification verdict this service holds for the given addresses, newest first, old ones included, so a Script decides ITSELF whether a held verdict is fresh and decisive enough before paying for anything. Reads stored rows only: never calls a verifier, never opens a run, never spends. A verdict about an address is a fleet-wide fact (the 30-day reuse of POST /email-verifications already reuses any org's verdict), so the read is not limited to the caller's org; it never returns another org's ids, raw vendor answers or costs. An address never verified answers 200 with `units: []`, never 404. To get a NEW verdict, call POST /email-verifications with `maxVerdictAgeDays` (0 = verify now). Served from index idx_email_verifications_email_at (email, verified_at).",
+  request: {
+    headers: z.object({
+      "x-org-id": z.string(),
+      "x-user-id": z.string(),
+      "x-run-id": z.string().optional().openapi({ description: "The calling Script's run (not required: nothing is spent)." }),
+    }),
+    query: EmailFoundUnitsQuerySchema,
+  },
+  responses: {
+    200: {
+      description: "One page of Units, newest first",
+      content: {
+        "application/json": {
+          schema: z
+            .object({
+              units: z.array(EmailFoundUnitSchema),
+              nextBefore: z.string().nullable().openapi({ description: "Pass as `before` for the next page; null when there is none." }),
+              hasMore: z.boolean(),
+            })
+            .openapi("EmailFoundUnitsPage"),
+        },
+      },
+    },
+    400: { description: "Invalid query (emails missing or over 50, bad since/verdicts/limit/before) or x-org-id / x-user-id missing", content: { "application/json": { schema: ErrorResponseSchema } } },
+    500: { description: "Internal error", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
 
