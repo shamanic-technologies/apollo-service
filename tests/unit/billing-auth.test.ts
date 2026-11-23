@@ -6,7 +6,9 @@ import request from "supertest";
 // APOLLO-ZERO-COST-1119: no stored teaser = the Apollo reveal path, exactly as before.
 vi.mock("../../src/lib/apollo-unmask.js", () => ({
   loadTeaserIdentity: vi.fn().mockResolvedValue(null),
-  servedBySignal: vi.fn().mockResolvedValue(false),
+  servedSignalType: vi.fn().mockResolvedValue(null),
+  freePathCarriesSignal: (t: string | null) => t === null || t === "hiring" || t === "funding",
+  companyEvidencePerson: vi.fn().mockResolvedValue(null),
   unmaskApolloPerson: vi.fn(),
   unmaskedToPerson: vi.fn(),
 }));
@@ -270,10 +272,50 @@ describe("Billing credit authorization", () => {
     expect(mockEnrichPerson).toHaveBeenCalledTimes(1);
   });
 
-  it("a person a buying-signal cohort served stays on the Apollo reveal (evidence needs its record)", async () => {
+  // APOLLO-ETHAN-1123: a buying-signal person no longer skips the free path when its
+  // evidence is about the COMPANY (hiring, funding) and can be read without Apollo's
+  // person record. A job change (the person's own start date) stays on Apollo.
+  const TEASER = { firstName: "Michele", mask: "Ri***n", title: "Owner", organizationName: "Acme", domain: "acme.com", apolloOrganizationId: "org-acme" };
+  const UNMASKED = { firstName: "Michele", lastName: "Richardson", linkedinUrl: null, domain: "acme.com", title: "Owner", organizationName: "Acme", via: "leadsforge" as const };
+  const VERIFIED = { email: "michele@acme.com", verdict: "valid", deliverable: true, verifier: "trykitt", verificationId: "v3", verifiedAt: "2026-11-23T00:00:00.000Z", reused: false };
+
+  it("a JOB-CHANGE person stays on the Apollo reveal (only Apollo dates a new title): no unmask, no free evidence", async () => {
     const unmask = await import("../../src/lib/apollo-unmask.js");
-    vi.mocked(unmask.loadTeaserIdentity).mockResolvedValueOnce({ firstName: "Michele", mask: "Ri***n", title: "Owner", organizationName: "Acme", domain: "acme.com" });
-    vi.mocked(unmask.servedBySignal).mockResolvedValueOnce(true);
+    vi.mocked(unmask.unmaskApolloPerson).mockClear();
+    vi.mocked(unmask.companyEvidencePerson).mockClear();
+    vi.mocked(unmask.loadTeaserIdentity).mockResolvedValueOnce(TEASER);
+    vi.mocked(unmask.servedSignalType).mockResolvedValueOnce("job_change");
+    await request(app).post("/enrich").set(HEADERS).send({ apolloPersonId: "p-1" }).expect(200);
+    expect(unmask.companyEvidencePerson).not.toHaveBeenCalled();
+    expect(unmask.unmaskApolloPerson).not.toHaveBeenCalled();
+    expect(mockEnrichPerson).toHaveBeenCalledTimes(1);
+  });
+
+  it("a HIRING person whose evidence is read free is unmasked and served with that evidence, NO Apollo credit", async () => {
+    const unmask = await import("../../src/lib/apollo-unmask.js");
+    const freeEmail = await import("../../src/lib/free-email.js");
+    const signals = await import("../../src/lib/buying-signals.js");
+    const evidence = { type: "hiring", occurredOn: "2026-11-20", fact: "Acme posted a job for Sales Manager on November 20, 2026", source: "apollo:job_postings", sourceUrl: null };
+    vi.mocked(unmask.loadTeaserIdentity).mockResolvedValueOnce(TEASER);
+    vi.mocked(unmask.servedSignalType).mockResolvedValueOnce("hiring");
+    vi.mocked(unmask.companyEvidencePerson).mockResolvedValueOnce({ id: "p-1", organizationId: "org-acme", organizationName: "Acme" });
+    vi.mocked(signals.buyingSignalForEnrich).mockResolvedValueOnce(evidence as never);
+    vi.mocked(unmask.unmaskApolloPerson).mockResolvedValueOnce(UNMASKED);
+    vi.mocked(unmask.unmaskedToPerson).mockReturnValueOnce({ id: "p-1", name: "Michele Richardson", email: "michele@acme.com", organizationId: null } as never);
+    vi.mocked(freeEmail.freeEmailFor).mockResolvedValueOnce({ kind: "guess", email: "michele@acme.com", verification: VERIFIED } as never);
+    const res = await request(app).post("/enrich").set(HEADERS).send({ apolloPersonId: "p-1" }).expect(200);
+    expect(res.body).toMatchObject({ source: "unmasked", buyingSignal: evidence, person: { email: "michele@acme.com", organizationId: "org-acme" } });
+    expect(vi.mocked(signals.buyingSignalForEnrich).mock.calls.at(-1)![0].person).toMatchObject({ organizationId: "org-acme" });
+    expect(mockEnrichPerson).not.toHaveBeenCalled();
+    expect(mockAuthorizeCredit).not.toHaveBeenCalled();
+  });
+
+  it("a FUNDING person with no free evidence goes to the Apollo reveal WITHOUT paying an unmask first", async () => {
+    const unmask = await import("../../src/lib/apollo-unmask.js");
+    vi.mocked(unmask.unmaskApolloPerson).mockClear();
+    vi.mocked(unmask.loadTeaserIdentity).mockResolvedValueOnce(TEASER);
+    vi.mocked(unmask.servedSignalType).mockResolvedValueOnce("funding");
+    vi.mocked(unmask.companyEvidencePerson).mockResolvedValueOnce(null);
     await request(app).post("/enrich").set(HEADERS).send({ apolloPersonId: "p-1" }).expect(200);
     expect(unmask.unmaskApolloPerson).not.toHaveBeenCalled();
     expect(mockEnrichPerson).toHaveBeenCalledTimes(1);

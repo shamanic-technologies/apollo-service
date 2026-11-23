@@ -21,6 +21,8 @@ import { normalizeEmployerName } from "./teaser-employer-domains.js";
 import { namePart } from "./email-pattern.js";
 import { errorMessage } from "./db-error.js";
 import type { TregMeter } from "./treg-meter.js";
+import type { BuyingSignalType } from "./buying-signal-spec.js";
+import type { EnrichedPersonLike } from "./buying-signals.js";
 
 /** True when `lastName` fits Apollo's mask (prefix before the stars, suffix after). */
 export function maskMatches(mask: string | null | undefined, lastName: string | null | undefined): boolean {
@@ -54,6 +56,8 @@ export interface TeaserIdentity {
   title: string | null;
   organizationName: string;
   domain: string;
+  /** The employer's Apollo organization id, resolved free with its domain (exact single match), or null. */
+  apolloOrganizationId: string | null;
 }
 
 /** The stored teaser of an Apollo person + its employer's free domain, or null when anything is missing. */
@@ -66,15 +70,80 @@ export async function loadTeaserIdentity(apolloPersonId: string): Promise<Teaser
   const t = rows[0];
   if (!t?.first_name || !t.last_name_obfuscated || !t.organization_name) return null;
   const key = normalizeEmployerName(t.organization_name);
-  const dom = (await db.execute(sql`SELECT domain FROM apollo_employer_domains WHERE organization_name_key = ${key} AND domain IS NOT NULL LIMIT 1`)) as unknown as Array<{ domain: string }>;
+  const dom = (await db.execute(sql`SELECT domain, apollo_organization_id FROM apollo_employer_domains WHERE organization_name_key = ${key} AND domain IS NOT NULL LIMIT 1`)) as unknown as Array<{ domain: string; apollo_organization_id: string | null }>;
   if (!dom[0]?.domain) return null;
-  return { firstName: t.first_name, mask: t.last_name_obfuscated, title: t.title, organizationName: t.organization_name, domain: dom[0].domain };
+  return {
+    firstName: t.first_name,
+    mask: t.last_name_obfuscated,
+    title: t.title,
+    organizationName: t.organization_name,
+    domain: dom[0].domain,
+    apolloOrganizationId: dom[0].apollo_organization_id ?? null,
+  };
 }
 
-/** True when a buying-signal cohort served this person to this org: its evidence needs the Apollo record. */
-export async function servedBySignal(orgId: string, apolloPersonId: string): Promise<boolean> {
-  const rows = (await db.execute(sql`SELECT 1 FROM apollo_signal_serves WHERE org_id = ${orgId} AND apollo_person_id = ${apolloPersonId} LIMIT 1`)) as unknown as unknown[];
-  return rows.length > 0;
+/** The buying signal whose cohort served this person to this org (latest serve), or null. */
+export async function servedSignalType(orgId: string, apolloPersonId: string): Promise<BuyingSignalType | null> {
+  const rows = (await db.execute(sql`
+    SELECT signal->>'type' AS type FROM apollo_signal_serves
+     WHERE org_id = ${orgId} AND apollo_person_id = ${apolloPersonId}
+     ORDER BY served_at DESC LIMIT 1`)) as unknown as Array<{ type: string | null }>;
+  return rows.length > 0 ? ((rows[0].type ?? "unknown") as BuyingSignalType) : null;
+}
+
+/**
+ * Can the FREE unmask serve a person of this buying signal (APOLLO-ETHAN-1123)?
+ * The evidence of a COMPANY signal is about the employer, not the person, so it
+ * is read without Apollo's person record: hiring from the employer's job
+ * postings (its Apollo org id is resolved free with its domain), funding from
+ * the funding our earlier reveals stocked for that company. A job change is the
+ * start date of the person's current title, which only Apollo's person record
+ * holds: that person stays on the Apollo reveal. An unknown type stays there too.
+ */
+export function freePathCarriesSignal(type: BuyingSignalType | null): boolean {
+  return type === null || type === "hiring" || type === "funding";
+}
+
+/**
+ * The employer facts a company signal's evidence reads, without Apollo's person
+ * record: the org id (free, from the teaser's employer lookup, else from our
+ * stock) and the funding our latest reveal at that domain holds for THAT org.
+ * Null when no org id is known (no evidence can be dated, never invented).
+ */
+export async function companyEvidencePerson(apolloPersonId: string, teaser: TeaserIdentity): Promise<EnrichedPersonLike | null> {
+  const rows = (await db.execute(sql`
+    SELECT organization_id, organization_funding_events, organization_latest_funding_round_date, organization_latest_funding_stage
+      FROM apollo_people_enrichments
+     WHERE lower(organization_domain) = lower(${teaser.domain}) AND organization_id IS NOT NULL
+     ORDER BY (organization_id = ${teaser.apolloOrganizationId ?? ""}) DESC, created_at DESC
+     LIMIT 1`)) as unknown as Array<{
+    organization_id: string;
+    organization_funding_events: unknown;
+    organization_latest_funding_round_date: string | null;
+    organization_latest_funding_stage: string | null;
+  }>;
+  return evidencePersonFrom(apolloPersonId, teaser, rows[0] ?? null);
+}
+
+/** Pure half of `companyEvidencePerson`: stocked funding is used only when it belongs to the chosen org. */
+export function evidencePersonFrom(
+  apolloPersonId: string,
+  teaser: Pick<TeaserIdentity, "organizationName" | "title" | "apolloOrganizationId">,
+  stock: { organization_id: string; organization_funding_events: unknown; organization_latest_funding_round_date: string | null; organization_latest_funding_stage: string | null } | null
+): EnrichedPersonLike | null {
+  const orgId = teaser.apolloOrganizationId ?? stock?.organization_id ?? null;
+  if (!orgId) return null;
+  const funding = stock && stock.organization_id === orgId ? stock : null;
+  return {
+    id: apolloPersonId,
+    organizationId: orgId,
+    organizationName: teaser.organizationName,
+    title: teaser.title,
+    employmentHistory: null,
+    organizationFundingEvents: funding?.organization_funding_events ?? null,
+    organizationLatestFundingRoundDate: funding?.organization_latest_funding_round_date ?? null,
+    organizationLatestFundingStage: funding?.organization_latest_funding_stage ?? null,
+  };
 }
 
 async function freeCall(

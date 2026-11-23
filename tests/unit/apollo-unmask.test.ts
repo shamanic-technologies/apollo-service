@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { maskMatches, pickUnmasked } from "../../src/lib/apollo-unmask.js";
+import { evidencePersonFrom, freePathCarriesSignal, maskMatches, pickUnmasked } from "../../src/lib/apollo-unmask.js";
 
 // Real teaser masks (prod 2026-11-19): two first letters + *** + last letter.
 describe("maskMatches", () => {
@@ -33,5 +33,33 @@ describe("pickUnmasked — exactly one person, never a guess between two", () =>
   });
   it("nobody fits → null", () => {
     expect(pickUnmasked(rows, "Anna", "Ri***n")).toBeNull();
+  });
+});
+
+// APOLLO-ETHAN-1123: which buying-signal people the free unmask may serve, and the
+// employer facts their evidence reads without Apollo's person record.
+describe("freePathCarriesSignal", () => {
+  it("no signal, hiring and funding → free path; job change and unknown → Apollo", () => {
+    expect(freePathCarriesSignal(null)).toBe(true);
+    expect(freePathCarriesSignal("hiring")).toBe(true);
+    expect(freePathCarriesSignal("funding")).toBe(true);
+    expect(freePathCarriesSignal("job_change")).toBe(false);
+    expect(freePathCarriesSignal("linkedin_engagement")).toBe(false);
+  });
+});
+
+describe("evidencePersonFrom", () => {
+  const teaser = { organizationName: "Acme", title: "Owner", apolloOrganizationId: "org-acme" };
+  const stock = { organization_id: "org-acme", organization_funding_events: [{ date: "2026-10-01", type: "Series A" }], organization_latest_funding_round_date: "2026-10-01", organization_latest_funding_stage: "Series A" };
+  it("org id from the teaser's free lookup, funding from stock of the SAME org", () => {
+    expect(evidencePersonFrom("p-1", teaser, stock)).toMatchObject({ id: "p-1", organizationId: "org-acme", organizationLatestFundingRoundDate: "2026-10-01", employmentHistory: null });
+  });
+  it("stock of ANOTHER org at that domain lends its org id only when the teaser has none, never its funding to a different org", () => {
+    const other = { ...stock, organization_id: "org-homonym" };
+    expect(evidencePersonFrom("p-1", teaser, other)).toMatchObject({ organizationId: "org-acme", organizationFundingEvents: null, organizationLatestFundingRoundDate: null });
+    expect(evidencePersonFrom("p-1", { ...teaser, apolloOrganizationId: null }, other)).toMatchObject({ organizationId: "org-homonym", organizationLatestFundingRoundDate: "2026-10-01" });
+  });
+  it("no org id anywhere → null (no evidence can be dated)", () => {
+    expect(evidencePersonFrom("p-1", { ...teaser, apolloOrganizationId: null }, null)).toBeNull();
   });
 });
