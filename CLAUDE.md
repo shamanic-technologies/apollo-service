@@ -1065,8 +1065,14 @@ list the company's people by domain (free), and the person is unmasked only when
 distinct last name fits the first name + mask (`src/lib/apollo-unmask.ts`); then our stock → a
 format guess → treg (`src/lib/free-email.ts`). Only a DELIVERABLE address is served this way
 (`source: "unmasked"`, the Apollo id kept, fields we do not have null); anything else goes on to
-the Apollo reveal, unchanged. A person served by a buying-signal cohort stays on Apollo (its
-evidence reads the Apollo record). Measured on 60 people Apollo had revealed (truth known): 32
+the Apollo reveal, unchanged. **A buying-signal person takes this path too when its evidence is
+about the COMPANY (APOLLO-ETHAN-1123: 75 of one client's 85 Apollo reveals on 2026-11-23 were
+signal people skipped here)**: hiring reads the employer's job postings by the Apollo org id
+`apollo_employer_domains` already resolved free; funding reads the funding our reveals stocked for
+that org (`companyEvidencePerson`). Evidence is computed BEFORE any unmask spend; none = Apollo
+reveal as before (a signal lead is never served without its evidence). A job change (the person's
+own title start date) stays on Apollo: no free source dates it (Leadsforge/Dropleads rows carry no
+dates). Measured on 60 people Apollo had revealed (truth known): 32
 unmasked, 32 correct, 0 wrong. This supersedes the « needs an owner decision » line below for the
 unmask path: the owner asked for it. Teasers stored before 2026-11-19 carry no mask (Apollo path).
 

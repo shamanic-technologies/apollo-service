@@ -6,7 +6,9 @@ import request from "supertest";
 // APOLLO-ZERO-COST-1119: no stored teaser = the Apollo reveal path, exactly as before.
 vi.mock("../../src/lib/apollo-unmask.js", () => ({
   loadTeaserIdentity: vi.fn().mockResolvedValue(null),
-  servedBySignal: vi.fn().mockResolvedValue(false),
+  servedSignalType: vi.fn().mockResolvedValue(null),
+  freePathCarriesSignal: (t: string | null) => t === null || t === "hiring" || t === "funding",
+  companyEvidencePerson: vi.fn().mockResolvedValue(null),
   unmaskApolloPerson: vi.fn(),
   unmaskedToPerson: vi.fn(),
 }));

@@ -33,7 +33,7 @@ import { findQuickenrichAudience, serveQuickenrichPage, loadQuickenrichPerson, Q
 import { executeEmailFind } from "../lib/email-find-run.js";
 import { findGuessedEmail, findStockEmail, findStockEmailFor, verifyStockEmail } from "../lib/email-stock.js";
 import { serveFreePeoplePage, loadFreeSourcePerson } from "../lib/free-people-serve.js";
-import { loadTeaserIdentity, servedBySignal, unmaskApolloPerson, unmaskedToPerson } from "../lib/apollo-unmask.js";
+import { companyEvidencePerson, freePathCarriesSignal, loadTeaserIdentity, servedSignalType, unmaskApolloPerson, unmaskedToPerson } from "../lib/apollo-unmask.js";
 import { freeEmailFor } from "../lib/free-email.js";
 import { TregMeter } from "../lib/treg-meter.js";
 import { parseFreeSourcePersonId, freeSourceToPerson } from "../lib/free-people-sources.js";
@@ -456,10 +456,23 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
     // Apollo LAST (APOLLO-ZERO-COST-1119): unmask the free teaser ("Ri***n" + title +
     // employer) through Leadsforge / Dropleads, then our stock, a format guess, treg.
     // Only a DELIVERABLE address is served this way; anything else goes on to the
-    // Apollo reveal below. A person served by a buying-signal cohort stays on Apollo
-    // (its evidence is read from the Apollo record).
+    // Apollo reveal below. A person served by a buying-signal cohort takes this path
+    // too when its evidence is about the COMPANY (hiring, funding), read without
+    // Apollo's person record and BEFORE any unmask spend; no evidence = Apollo, as
+    // before. A job change (the person's own start date) stays on Apollo
+    // (APOLLO-ETHAN-1123: 75 of one client's 85 Apollo reveals were signal people).
     const teaser = await loadTeaserIdentity(apolloPersonId);
-    if (teaser && !(await servedBySignal(req.orgId!, apolloPersonId))) {
+    const signalType = teaser ? await servedSignalType(req.orgId!, apolloPersonId) : null;
+    let freeSignal: { evidence: Awaited<ReturnType<typeof buyingSignalForEnrich>>; organizationId: string | null } | null = null;
+    if (teaser && signalType && freePathCarriesSignal(signalType)) {
+      const evidencePerson = await companyEvidencePerson(apolloPersonId, teaser);
+      const evidence = evidencePerson
+        ? await buyingSignalForEnrich({ apolloPersonId, person: evidencePerson, ctx: { identity, runId, alertIdentity: toCreditAlertIdentity(req) } })
+        : null;
+      traceEvent(runId, { service: "apollo-service", event: "signal-evidence-free", detail: `type=${signalType}, ${evidence ? `found ${evidence.occurredOn}` : "none → Apollo reveal"}` }, req.headers).catch(() => {});
+      freeSignal = { evidence, organizationId: evidencePerson?.organizationId ?? null };
+    }
+    if (teaser && freePathCarriesSignal(signalType) && (!signalType || freeSignal?.evidence)) {
       const meter = new TregMeter({ identity, userId: req.userId!, runId, tracking, callerPath: "/enrich", taskName: "unmask-apollo-person" });
       const un = await unmaskApolloPerson(teaser, meter, { orgId: req.orgId!, runId, campaignId }).finally(() => meter.finish("completed"));
       traceEvent(runId, { service: "apollo-service", event: "unmask", detail: un ? `unmasked via ${un.via}` : "not unmasked" }, req.headers).catch(() => {});
@@ -472,10 +485,13 @@ router.post("/enrich", serviceAuth, async (req: AuthenticatedRequest, res) => {
           traceEvent(runId, { service: "apollo-service", event: "enrich-done", detail: `source=unmasked:${un.via}, via=${free.kind}, verdict=${free.verification.verdict}` }, req.headers).catch(() => {});
           return res.json({
             enrichmentId: null,
-            person: applyCompanyStock(unmaskedToPerson(apolloPersonId, un, { email: free.email, emailStatus: free.verification.verdict }), companyStock),
+            person: applyCompanyStock(
+              { ...unmaskedToPerson(apolloPersonId, un, { email: free.email, emailStatus: free.verification.verdict }), organizationId: freeSignal?.organizationId ?? null },
+              companyStock
+            ),
             cached: free.kind === "stock",
             emailVerification: free.verification,
-            buyingSignal: null,
+            buyingSignal: freeSignal?.evidence ?? null,
             source: "unmasked",
             ...(free.kind === "treg" ? { findingId: free.findingId } : { stock: free.kind === "stock" ? free.stockSource : "pattern-guess" }),
           });
