@@ -8,8 +8,9 @@ import { readEmailFoundUnits, UNITS_DEFAULT_LIMIT } from "../lib/email-verificat
 const router = Router();
 
 /**
- * GET /email-verifications/units — the Provider read of outcome email_found
- * (ENGINE-GET-ASK-1123, OpenAPI tag `provider:email_found`, operationId
+ * GET /email-verifications/units — the Provider read of outcomes email_checked
+ * and email_found (ENGINE-GET-ASK-1123, OpenAPI tags `provider:email_checked` +
+ * `provider:email_found`, operationId
  * listEmailFoundUnits). Every verdict held for the addresses, newest first, old
  * ones included. Read-only: never calls a verifier, never spends.
  */

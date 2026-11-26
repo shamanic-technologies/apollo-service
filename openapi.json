@@ -10226,10 +10226,11 @@
       "get": {
         "operationId": "listEmailFoundUnits",
         "tags": [
-          "provider:email_found"
+          "provider:email_found",
+          "provider:email_checked"
         ],
         "summary": "Email verification Units already held for one or several addresses (read only, never spends)",
-        "description": "The Provider read of outcome email_found (ENGINE-GET-ASK-1123): every verification verdict this service holds for the given addresses, newest first, old ones included, so a Script decides ITSELF whether a held verdict is fresh and decisive enough before paying for anything. Reads stored rows only: never calls a verifier, never opens a run, never spends. A verdict about an address is a fleet-wide fact (the 30-day reuse of POST /email-verifications already reuses any org's verdict), so the read is not limited to the caller's org; it never returns another org's ids, raw vendor answers or costs. An address never verified answers 200 with `units: []`, never 404. To get a NEW verdict, call POST /email-verifications with `maxVerdictAgeDays` (0 = verify now). Served from index idx_email_verifications_email_at (email, verified_at).",
+        "description": "The Provider read of outcomes email_checked and email_found (ENGINE-GET-ASK-1123, ENGINE-GET-ASK-1123-CHECKED). One email_checked Unit = one verdict a verifier gave on whether one address can receive email (valid / invalid / catch_all / risky / unknown), with who gave it and when; `decisive` + `deliverable` say whether it settles the question on its own. The same rows answer email_found readers: the held verdict on an address already found. Every verification verdict this service holds for the given addresses, newest first, old ones included, so a Script decides ITSELF whether a held verdict is fresh and decisive enough before paying for anything. Reads stored rows only: never calls a verifier, never opens a run, never spends. A verdict about an address is a fleet-wide fact (the 30-day reuse of POST /email-verifications already reuses any org's verdict), so the read is not limited to the caller's org; it never returns another org's ids, raw vendor answers or costs. An address never verified answers 200 with `units: []`, never 404. To get a NEW verdict, call POST /email-verifications with `maxVerdictAgeDays` (0 = verify now). Served from index idx_email_verifications_email_at (email, verified_at).",
         "parameters": [
           {
             "schema": {
