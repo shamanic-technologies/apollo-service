@@ -319,6 +319,18 @@ id (a pointer); they must NOT hold or reinvent Apollo's filter vocabulary.
   break boot or any existing endpoint — only `/audiences/suggest-from-segment`
   would 500 until they are set.
 
+## `organization_industries` = Apollo's OWN spelling, every value pinned by a live count (APOLLO-INDUSTRIES-ZERO-1126)
+
+Apollo matches the industry NAME verbatim. The enum (`INDUSTRY_NAMES`, `src/lib/reference-cache.ts`) used
+LinkedIn's spellings: 19 of 147 counted 0 people (measured 2026-11-26, free teaser, each value alone):
+every `X and Y` (Apollo: `X & Y`, e.g. `marketing & advertising` 2,463,094) and `non-profit organization
+management` (Apollo: `nonprofit organization management`, 2,082,769). The other 128 all count > 0.
+- Published enum (openapi, `/search/filters-prompt`, `/reference/industries`) = Apollo's spelling only.
+- `LEGACY_INDUSTRY_ALIASES` keeps the 19 old spellings ACCEPTED (stored in ~480 audiences) and translated
+  to Apollo's spelling, in the schema (`z.preprocess`) and in `toApolloSearchParams`: same industry, never
+  a rewrite into keywords. Guard: `tests/unit/industry-values.regression.test.ts`.
+- A new industry value ships only with a free dry-run count > 0 for it alone.
+
 ## `POST /enrich` works OUTSIDE a campaign (x-campaign-id optional there only)
 
 A reveal can precede any campaign: signed-out onboarding reveals a few preview

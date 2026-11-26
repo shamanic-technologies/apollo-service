@@ -42,7 +42,10 @@ function describeFieldShape(fieldName: string, node: any): FieldShape {
   }
 
   if (innerType === "array") {
-    const element = inner.def.element;
+    let element = inner.def.element;
+    // A preprocessed element (input normalised before validation, e.g. legacy
+    // industry spellings) publishes its OUTPUT schema: the canonical enum.
+    if (element?.def?.type === "pipe") element = element.def.out;
     const elementType = element?.def?.type;
     if (elementType === "enum") {
       const entries = element.def.entries as Record<string, string>;

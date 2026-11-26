@@ -15,8 +15,12 @@ export interface ApolloEmployeeRange {
 }
 
 /**
- * Standard LinkedIn/Apollo industries list.
- * Apollo uses LinkedIn's standardized 148 industries.
+ * Apollo's industry names, spelled EXACTLY as Apollo's `organization_industries`
+ * filter matches them. Apollo matches the name verbatim: LinkedIn's
+ * "Marketing and Advertising" counts 0 people while Apollo's own
+ * "Marketing & Advertising" counts 2,463,094 (APOLLO-INDUSTRIES-ZERO-1126).
+ * Every value is pinned by a live count > 0 (see the regression test); never
+ * add a name without a free dry-run count delta.
  */
 const INDUSTRY_NAMES = [
   "Accounting",
@@ -26,14 +30,14 @@ const INDUSTRY_NAMES = [
   "Animation",
   "Apparel & Fashion",
   "Architecture & Planning",
-  "Arts and Crafts",
+  "Arts & Crafts",
   "Automotive",
   "Aviation & Aerospace",
   "Banking",
   "Biotechnology",
   "Broadcast Media",
   "Building Materials",
-  "Business Supplies and Equipment",
+  "Business Supplies & Equipment",
   "Capital Markets",
   "Chemicals",
   "Civic & Social Organization",
@@ -73,19 +77,19 @@ const INDUSTRY_NAMES = [
   "Government Administration",
   "Government Relations",
   "Graphic Design",
-  "Health, Wellness and Fitness",
+  "Health, Wellness & Fitness",
   "Higher Education",
   "Hospital & Health Care",
   "Hospitality",
   "Human Resources",
-  "Import and Export",
+  "Import & Export",
   "Individual & Family Services",
   "Industrial Automation",
   "Information Services",
-  "Information Technology and Services",
+  "Information Technology & Services",
   "Insurance",
   "International Affairs",
-  "International Trade and Development",
+  "International Trade & Development",
   "Internet",
   "Investment Banking",
   "Investment Management",
@@ -96,13 +100,13 @@ const INDUSTRY_NAMES = [
   "Legislative Office",
   "Leisure, Travel & Tourism",
   "Libraries",
-  "Logistics and Supply Chain",
+  "Logistics & Supply Chain",
   "Luxury Goods & Jewelry",
   "Machinery",
   "Management Consulting",
   "Maritime",
   "Market Research",
-  "Marketing and Advertising",
+  "Marketing & Advertising",
   "Mechanical or Industrial Engineering",
   "Media Production",
   "Medical Devices",
@@ -110,17 +114,17 @@ const INDUSTRY_NAMES = [
   "Mental Health Care",
   "Military",
   "Mining & Metals",
-  "Motion Pictures and Film",
-  "Museums and Institutions",
+  "Motion Pictures & Film",
+  "Museums & Institutions",
   "Music",
   "Nanotechnology",
   "Newspapers",
-  "Non-Profit Organization Management",
+  "Nonprofit Organization Management",
   "Oil & Energy",
   "Online Media",
   "Outsourcing/Offshoring",
   "Package/Freight Delivery",
-  "Packaging and Containers",
+  "Packaging & Containers",
   "Paper & Forest Products",
   "Performing Arts",
   "Pharmaceuticals",
@@ -133,45 +137,79 @@ const INDUSTRY_NAMES = [
   "Professional Training & Coaching",
   "Program Development",
   "Public Policy",
-  "Public Relations and Communications",
+  "Public Relations & Communications",
   "Public Safety",
   "Publishing",
   "Railroad Manufacture",
   "Ranching",
   "Real Estate",
-  "Recreational Facilities and Services",
+  "Recreational Facilities & Services",
   "Religious Institutions",
   "Renewables & Environment",
   "Research",
   "Restaurants",
   "Retail",
-  "Security and Investigations",
+  "Security & Investigations",
   "Semiconductors",
   "Shipbuilding",
   "Sporting Goods",
   "Sports",
-  "Staffing and Recruiting",
+  "Staffing & Recruiting",
   "Supermarkets",
   "Telecommunications",
   "Textiles",
   "Think Tanks",
   "Tobacco",
-  "Translation and Localization",
+  "Translation & Localization",
   "Transportation/Trucking/Railroad",
   "Utilities",
   "Venture Capital & Private Equity",
   "Veterinary",
   "Warehousing",
   "Wholesale",
-  "Wine and Spirits",
+  "Wine & Spirits",
   "Wireless",
-  "Writing and Editing",
+  "Writing & Editing",
 ] as const;
 
 export const APOLLO_INDUSTRY_VALUES = INDUSTRY_NAMES.map((name) => name.toLowerCase()) as [
   string,
   ...string[],
 ];
+
+/**
+ * The LinkedIn spellings this enum published until 2026-11-26. Apollo matched
+ * none of them (0 people), but audiences and callers stored them verbatim, so
+ * they are still ACCEPTED and translated to Apollo's spelling: same industry,
+ * same filter, never a rewrite into another field. Never published.
+ */
+export const LEGACY_INDUSTRY_ALIASES: Readonly<Record<string, string>> = Object.freeze({
+  "arts and crafts": "arts & crafts",
+  "business supplies and equipment": "business supplies & equipment",
+  "health, wellness and fitness": "health, wellness & fitness",
+  "import and export": "import & export",
+  "information technology and services": "information technology & services",
+  "international trade and development": "international trade & development",
+  "logistics and supply chain": "logistics & supply chain",
+  "marketing and advertising": "marketing & advertising",
+  "motion pictures and film": "motion pictures & film",
+  "museums and institutions": "museums & institutions",
+  "non-profit organization management": "nonprofit organization management",
+  "packaging and containers": "packaging & containers",
+  "public relations and communications": "public relations & communications",
+  "recreational facilities and services": "recreational facilities & services",
+  "security and investigations": "security & investigations",
+  "staffing and recruiting": "staffing & recruiting",
+  "translation and localization": "translation & localization",
+  "wine and spirits": "wine & spirits",
+  "writing and editing": "writing & editing",
+});
+
+/** Apollo's spelling of an industry value (lower-cased; legacy LinkedIn spellings translated). */
+export function canonicalApolloIndustry(value: string): string {
+  const lower = value.toLowerCase();
+  return LEGACY_INDUSTRY_ALIASES[lower] ?? lower;
+}
 
 const INDUSTRIES: ApolloIndustry[] = INDUSTRY_NAMES.map((name) => ({
   name,
