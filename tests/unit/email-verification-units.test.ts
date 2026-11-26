@@ -145,11 +145,12 @@ describe("GET /email-verifications/units", () => {
 });
 
 describe("served OpenAPI", () => {
-  it("tags the read provider:email_found with a stable operationId, and documents the ask input", () => {
+  it("tags the read provider:email_found AND provider:email_checked with a stable operationId, and documents the ask input", () => {
     const spec = JSON.parse(readFileSync(new URL("../../openapi.json", import.meta.url), "utf8"));
     const op = spec.paths["/email-verifications/units"].get;
     expect(op.operationId).toBe("listEmailFoundUnits");
-    expect(op.tags).toEqual(["provider:email_found"]);
+    expect(op.tags).toEqual(["provider:email_found", "provider:email_checked"]);
+    expect(op.description).toContain("One email_checked Unit = one verdict");
     const names = op.parameters.map((p: { name: string }) => p.name);
     for (const n of ["emails", "since", "decisive", "verdicts", "includeFailed", "limit", "before"]) expect(names).toContain(n);
     const body = spec.paths["/email-verifications"].post.requestBody.content["application/json"].schema;
