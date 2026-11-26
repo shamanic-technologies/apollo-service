@@ -3,7 +3,7 @@ import {
   extendZodWithOpenApi,
   OpenAPIRegistry,
 } from "@asteasolutions/zod-to-openapi";
-import { APOLLO_INDUSTRY_VALUES } from "./lib/reference-cache.js";
+import { APOLLO_INDUSTRY_VALUES, canonicalApolloIndustry } from "./lib/reference-cache.js";
 
 extendZodWithOpenApi(z);
 
@@ -70,6 +70,13 @@ const VALID_SENIORITIES = [
 ] as const;
 
 const ApolloIndustryValueSchema = z.enum(APOLLO_INDUSTRY_VALUES);
+// Input form: a legacy LinkedIn spelling ("marketing and advertising", stored
+// in audiences before APOLLO-INDUSTRIES-ZERO-1126) is accepted and translated
+// to Apollo's spelling; the published enum lists Apollo's spellings only.
+const ApolloIndustryInputSchema = z.preprocess(
+  (value) => (typeof value === "string" ? canonicalApolloIndustry(value) : value),
+  ApolloIndustryValueSchema,
+);
 
 // Apollo people-search range params are `{min, max}` objects with integer
 // bounds (see CLAUDE.md "Apollo range filters are {min,max} objects"). Both
@@ -400,7 +407,7 @@ export const ApolloNativeSearchFiltersSchema = z
       description: "Filter by where the EMPLOYER is headquartered. This answers 'companies based in X', not 'people in X' — for the latter use person_locations. A multi-site employer is matched on its HQ only, so this silently drops that employer's staff everywhere else.",
       example: ["United States", "California, US"],
     }),
-    organization_industries: z.array(ApolloIndustryValueSchema).optional().openapi({
+    organization_industries: z.array(ApolloIndustryInputSchema).optional().openapi({
       description:
         "Filter by Apollo's native employer industry taxonomy. Use lowercase values from this enum when the user's industry maps cleanly to Apollo; for niche sectors with no enum value, use q_organization_keyword_tags instead.",
       example: ["pharmaceuticals", "biotechnology", "medical devices"],

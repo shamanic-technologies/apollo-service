@@ -1,5 +1,6 @@
 import type { ApolloPerson, ApolloSearchParams } from "./apollo-client.js";
 import type { ApolloPeopleEnrichment } from "../db/schema.js";
+import { canonicalApolloIndustry } from "./reference-cache.js";
 import { BuyingSignalConflictError, materializeBuyingSignal, readSignalSpec, signalConflicts } from "./buying-signal-spec.js";
 
 /**
@@ -99,7 +100,7 @@ function toApolloFilterParams(sp: Record<string, unknown>): ApolloSearchParams {
     q_organization_keyword_tags: sp.q_organization_keyword_tags as string[] | undefined,
     organization_locations: pick<string[]>("organization_locations", "organizationLocations"),
     organization_num_employees_ranges: pick<string[]>("organization_num_employees_ranges", "organizationNumEmployeesRanges"),
-    organization_industries: lowerStringArray(sp.organization_industries),
+    organization_industries: lowerStringArray(sp.organization_industries)?.map(canonicalApolloIndustry),
     organization_industry_tag_ids:
       pick<string[]>("organization_industry_tag_ids", "qOrganizationIndustryTagIds"),
     q_keywords: pick<string>("q_keywords", "qKeywords"),
