@@ -102,7 +102,10 @@ beforeEach(async () => {
     if (q.length === 0) throw new Error(`no answer queued for ${url}`);
     return (q.length > 1 ? q.shift()! : q[0])();
   });
-  (await import("../../src/lib/email-verification.js")).resetApifyFallback();
+  const ev = await import("../../src/lib/email-verification.js");
+  ev.resetApifyFallback();
+  ev.resetUnavailableVerifiers();
+  ev.resetTregBalance();
   selectQueue = [];
   inserted.length = 0;
   mockCreateRun.mockResolvedValue({ id: "verify-run-1" });
@@ -531,5 +534,71 @@ describe("vendor 'Domain does not exist' is checked against our own DNS (DNE-FAL
     expect(r).toMatchObject({ verdict: "valid", verifier: "bounceban", reused: false });
     expect(callsTo("apify")).toHaveLength(0);
     expect(mockDomainHasMx).not.toHaveBeenCalled();
+  });
+});
+
+describe("MON-TREG-EMPTY-1127: a verifier we cannot use is skipped, an empty treg balance is named first", () => {
+  /** treg 404 as live since 2026-11-25: ContactOut became a bring-your-own-key endpoint. */
+  const noCredential = () =>
+    treg({ detail: "no contactout credential in this org — contactout.people.email.verify is a marketplace endpoint\n  connect one:  treg connections connect --provider contactout" }, 404, "0");
+  /** Apify as live since 2026-11-15: our token refused. */
+  const apifyTokenRefused = () => actor({ error: { type: "user-or-token-not-found", message: "User was not found or authentication token is not valid" } }, 401);
+  /** treg 402 as live on 2026-11-27. */
+  const noBalance = (provider: string) =>
+    treg({ detail: { error: "insufficient_balance", message: `${provider}.people.email.verify would cost ~$0.0015 on treg's ${provider} key and this team's balance is $9.5e-05.`, provider, balance_micro: 95, autotopup_enabled: false, estimated_cost_micro: 1500 } }, 402, "0");
+
+  it("ContactOut's 'no credential in this org' and Apify's 401 are each asked once, then skipped for an hour", async () => {
+    answers.contactout = [noCredential];
+    answers.apify = [apifyTokenRefused];
+    answers.trykitt = [() => treg({ validity: "valid" }, 200, "1500")];
+    const ev = await import("../../src/lib/email-verification.js");
+    await ev.verifyRevealedEmail("ada@example.com", CTX);
+    expect(callsTo("contactout")).toHaveLength(1);
+    expect(callsTo("apify").length).toBeGreaterThan(0);
+    expect(ev.verifierUnavailable("contactout")).toMatch(/no contactout credential in our treg org/);
+    expect(ev.verifierUnavailable("bounceverify")).toMatch(/Apify refused our token \(401\)/);
+
+    fetchMock.mockClear();
+    const r = await ev.verifyRevealedEmail("bob@example.com", CTX);
+    expect(r).toMatchObject({ verdict: "valid", verifier: "trykitt" });
+    expect(callsTo("contactout")).toHaveLength(0);
+    expect(callsTo("apify")).toHaveLength(0);
+    // An hour later both are asked again (a key connected meanwhile is used at once).
+    expect(ev.verifierUnavailable("contactout", Date.now() + ev.UNAVAILABLE_RETRY_MS + 1)).toBeNull();
+  });
+
+  it("a plain 429 / outage never marks a verifier unavailable", async () => {
+    answers.apify = [() => actor([{ email: "ada@example.com", status: "valid", is_catch_all: false }])];
+    const ev = await import("../../src/lib/email-verification.js");
+    await ev.verifyRevealedEmail("ada@example.com", CTX);
+    expect(ev.verifierUnavailable("contactout")).toBeNull();
+    expect(ev.verifierUnavailable("bounceverify")).toBeNull();
+  });
+
+  it("every verifier failing on an empty treg balance reads as that balance FIRST, with a treg providerError", async () => {
+    answers.contactout = [noCredential];
+    answers.apify = [apifyTokenRefused];
+    answers.trykitt = [() => noBalance("trykitt")];
+    answers.millionverifier = [() => noBalance("millionverifier")];
+    const ev = await import("../../src/lib/email-verification.js");
+    const err = await ev.verifyRevealedEmail("ada@example.com", CTX).catch((e) => e);
+    expect(err).toBeInstanceOf(ev.EmailVerificationError);
+    expect(err.message.startsWith("email verification failed: our treg balance is empty ($0.000095 left): TryKitt, MillionVerifier and BounceBan are refused (402 insufficient_balance) until it is topped up — every step-1 verifier failed")).toBe(true);
+    expect(err.providerError).toMatchObject({ provider: "treg", code: "provider_credits_exhausted", retryable: false });
+    expect(ev.tregBalanceEmpty()).not.toBeNull();
+
+    // The next treg call that succeeds (a top-up) clears it at once.
+    answers.trykitt = [() => treg({ validity: "valid" }, 200, "1500")];
+    const r = await ev.verifyRevealedEmail("bob@example.com", CTX);
+    expect(r).toMatchObject({ verdict: "valid", verifier: "trykitt" });
+    expect(ev.tregBalanceEmpty()).toBeNull();
+  });
+
+  it("verifiers failing for another reason keep the plain message (no treg providerError)", async () => {
+    const ev = await import("../../src/lib/email-verification.js");
+    answers.apify = [() => actor({ error: "boom" }, 500)];
+    const err = await ev.verifyRevealedEmail("ada@example.com", CTX).catch((e) => e);
+    expect(err.message.startsWith("email verification failed: every step-1 verifier failed — contactout:")).toBe(true);
+    expect(err.providerError).toBeUndefined();
   });
 });

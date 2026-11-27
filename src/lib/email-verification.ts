@@ -43,7 +43,7 @@ import { decryptKey, type TrackingContext } from "./keys-client.js";
 import { createRun, updateRun, addCosts, updateCostStatus, type IdentityHeaders } from "./runs-client.js";
 import { authorizeCredit, type AuthorizeCreditResult } from "./billing-client.js";
 import { describeCreditRefusal } from "./credit-refusal.js";
-import { apifyCreditsExhausted, type ProviderErrorDetail } from "./provider-error.js";
+import { apifyCreditsExhausted, tregBalanceExhausted, type ProviderErrorDetail } from "./provider-error.js";
 import { reportProviderCreditsExhausted } from "./credit-alert.js";
 import { domainHasMx, MailDomainLookupError } from "./mail-domain.js";
 import { TREG_COST_NAME } from "./email-finders.js";
@@ -72,6 +72,14 @@ export { TREG_COST_NAME };
 const TREG_CALL_BASE = "https://treg.to/call/";
 /** After an Apify exhaustion answer, Apify is asked again only after this long. */
 export const APIFY_OUT_RETRY_MS = 60 * 60 * 1000;
+/**
+ * A step-1 verifier our ACCOUNT cannot use (no credential for it in our treg org, our token refused) is skipped,
+ * then asked again after this long (MON-TREG-EMPTY-1127). Measured in prod: ContactOut 404 "no contactout credential
+ * in this org — a marketplace endpoint" on every call since 2026-11-25 (treg made it bring-your-own-key), BounceVerify
+ * Apify 401 "user-or-token-not-found" on every call since at least 2026-11-15: two calls per address that could never
+ * answer, and their errors led every "every step-1 verifier failed" message, hiding the real cause behind them.
+ */
+export const UNAVAILABLE_RETRY_MS = 60 * 60 * 1000;
 
 export const BOUNCEBAN_ENDPOINT = "bounceban.people.email.verify";
 export const BOUNCEBAN_STATUS_ENDPOINT = "bounceban.people.email.verify.status";
@@ -403,6 +411,7 @@ async function tregCall(
   } catch {
     body = { _raw: text.slice(0, 2000) };
   }
+  noteTregBalance(res.status, body);
   const header = res.headers.get("x-treg-cost-micro");
   const charged = header === null || header.trim() === "" ? null : Number(header);
   const chargedMicro = charged !== null && Number.isFinite(charged) && charged >= 0 ? charged : null;
@@ -801,6 +810,79 @@ async function bounceBanPass(email: string, ctx: VerificationContext, resumeId: 
   );
 }
 
+// ─── Our treg balance cannot pay → every paid verifier refuses (named, never generic) ──
+
+/**
+ * treg answered 402 `insufficient_balance`: OUR treg balance cannot pay the call (TryKitt, MillionVerifier and
+ * BounceBan all bill it). Set by the refusal, cleared by the next treg call that succeeds, so a top-up is seen at once.
+ * A step 1 that fails while it is set says so FIRST (MON-TREG-EMPTY-1127: 2026-11-26 21:00 UTC the balance hit
+ * $0.000095 and every failure read "contactout: 404 …" then a 502 in lead-service, the 402 cut off behind it).
+ */
+let tregBalanceOut: { since: number; balanceMicro: number | null } | null = null;
+
+function noteTregBalance(status: number, body: Record<string, unknown> | null): void {
+  const detail = body?.detail as { error?: unknown; balance_micro?: unknown } | undefined;
+  if (status === 402 && detail && typeof detail === "object" && detail.error === "insufficient_balance") {
+    const balanceMicro = typeof detail.balance_micro === "number" ? detail.balance_micro : null;
+    if (!tregBalanceOut) console.error(`[Apollo Service] treg balance cannot pay: insufficient_balance (balance ${balanceMicro ?? "?"} micro-USD)`);
+    tregBalanceOut = { since: tregBalanceOut?.since ?? Date.now(), balanceMicro };
+    return;
+  }
+  if (status >= 200 && status < 300 && tregBalanceOut) {
+    console.warn("[Apollo Service] treg balance pays again");
+    tregBalanceOut = null;
+  }
+}
+
+/** The sentence naming the empty treg balance, or null while treg pays. */
+export function tregBalanceEmpty(): string | null {
+  if (!tregBalanceOut) return null;
+  const left = tregBalanceOut.balanceMicro === null ? "" : ` ($${(tregBalanceOut.balanceMicro / 1_000_000).toFixed(6)} left)`;
+  return `our treg balance is empty${left}: TryKitt, MillionVerifier and BounceBan are refused (402 insufficient_balance) until it is topped up`;
+}
+
+/** Tests only. */
+export function resetTregBalance(): void {
+  tregBalanceOut = null;
+}
+
+/** The error of a step 1 where no verifier answered: the empty treg balance named first, else Apify's exhaustion. */
+function stepOneFailed(detail: string): EmailVerificationError {
+  const treg = tregBalanceEmpty();
+  if (treg) return new EmailVerificationError(`${treg} — ${detail}`, tregBalanceExhausted(treg));
+  return new EmailVerificationError(detail, apifyOut() ? apifyCreditsExhausted() : undefined);
+}
+
+// ─── A verifier our account cannot use → skipped for a while ─────────────────
+
+const unavailable = new Map<string, { until: number; reason: string }>();
+
+/** Why a step-1 verifier is skipped now, or null when it is asked. */
+export function verifierUnavailable(verifier: string, now: number = Date.now()): string | null {
+  const u = unavailable.get(verifier);
+  if (!u) return null;
+  if (now >= u.until) {
+    unavailable.delete(verifier);
+    return null;
+  }
+  return u.reason;
+}
+
+function markUnavailable(verifier: string, reason: string): void {
+  if (!unavailable.has(verifier)) console.warn(`[Apollo Service] verify_email.unavailable verifier=${verifier} skipped for ${UNAVAILABLE_RETRY_MS / 60000}min: ${reason}`);
+  unavailable.set(verifier, { until: Date.now() + UNAVAILABLE_RETRY_MS, reason });
+}
+
+/** A skipped verifier's answer, as the script reads a call (no vendor call, no row, nothing billed). */
+function skippedAnswer(verifier: string, reason: string): Record<string, unknown> {
+  return { verificationId: null, verifier, verdict: null, error: `skipped, ${reason}` };
+}
+
+/** Tests only. */
+export function resetUnavailableVerifiers(): void {
+  unavailable.clear();
+}
+
 // ─── Apify out of usage → skipped for a while ────────────────────────────────
 
 let apifyOutUntil = 0;
@@ -837,6 +919,8 @@ async function bounceVerifyStep(email: string, ctx: VerificationContext): Promis
     });
     apifyOutUntil = Date.now() + APIFY_OUT_RETRY_MS;
     console.warn(`[Apollo Service] verify_email.apify_out skipped for ${APIFY_OUT_RETRY_MS / 60000}min`);
+  } else if (row.httpStatus === 401) {
+    markUnavailable(VERIFIER, "Apify refused our token (401): BounceVerify cannot run until the Apify key is replaced");
   }
   return row;
 }
@@ -846,7 +930,12 @@ export async function stepOneCall(verifier: string, email: string, ctx: Verifica
   if (verifier === "bounceverify") return bounceVerifyStep(email, ctx);
   const step = verifier === "contactout" ? CONTACTOUT_STEP : verifier === "trykitt" ? TRYKITT_STEP : verifier === "millionverifier" ? MILLIONVERIFIER_STEP : null;
   if (!step) throw new EmailVerificationError(`no step-1 verifier named ${verifier}`);
-  return tregVerifierPass(email, ctx, step);
+  const row = await tregVerifierPass(email, ctx, step);
+  // treg 404 "no <vendor> credential in this org": a bring-your-own-key endpoint we hold no key for (never answers).
+  if (row.httpStatus === 404 && /credential in this org/i.test(row.error ?? "")) {
+    markUnavailable(verifier, `no ${verifier} credential in our treg org (treg serves it only with our own ${verifier} key)`);
+  }
+  return row;
 }
 
 /**
@@ -891,12 +980,17 @@ async function stepOne(email: string, ctx: VerificationContext, calls: DecisionC
         continue;
       }
     }
+    const skipped = verifierUnavailable(verifier);
+    if (skipped) {
+      failures.push(`${verifier}: skipped, ${skipped}`);
+      continue;
+    }
     const row = await recordedCall(calls, verifier, email, () => stepOneCall(verifier, email, ctx));
     if (!row.error && row.verdict !== null) return row;
     failures.push(`${row.verifier}: ${row.error ?? "no verdict"}`);
     console.warn(`[Apollo Service] verify_email.step1_failed verifier=${row.verifier} next=${STEP_ONE_ORDER[STEP_ONE_ORDER.indexOf(verifier) + 1] ?? "none"} error=${(row.error ?? "").slice(0, 200)}`);
   }
-  throw new EmailVerificationError(`every step-1 verifier failed — ${failures.join("; ")}`, apifyOut() ? apifyCreditsExhausted() : undefined);
+  throw stepOneFailed(`every step-1 verifier failed — ${failures.join("; ")}`);
 }
 
 /** One verifier call, recorded as the script's door answers it: its row, or the refusal (re-thrown). */
@@ -1014,7 +1108,7 @@ async function decideByScript(dynasty: string, email: string, held: DecisionHeld
     if (err instanceof EmailVerificationError) throw err;
     // Every step-1 verifier silent: our waterfall's own error, Apify's exhaustion named as it always was.
     if (err instanceof VerifyScriptError && err.unmade && /every step-1 verifier failed/.test(err.message)) {
-      throw new EmailVerificationError(err.message, apifyOut() ? apifyCreditsExhausted() : undefined);
+      throw stepOneFailed(err.message);
     }
     throw new EmailVerificationError(errorMessage(err));
   } finally {
@@ -1074,6 +1168,12 @@ export async function doorVerifierCall(input: { callerRunId: string; scriptRunId
       return { status: 200, body: data };
     }
     if (!(STEP_ONE_ORDER as readonly string[]).includes(input.verifier)) return { status: 400, body: { error: `no verifier named ${input.verifier}` } };
+    const skipped = verifierUnavailable(input.verifier);
+    if (skipped) {
+      const data = skippedAnswer(input.verifier, skipped);
+      entry.calls.push({ name: VERIFY_CALL, args, answer: { ok: true, data } });
+      return { status: 200, body: data };
+    }
     const row = await stepOneCall(input.verifier, email, ctx);
     const data = verifierAnswer(row);
     entry.calls.push({ name: VERIFY_CALL, args, answer: { ok: true, data } });
