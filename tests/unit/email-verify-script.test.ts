@@ -101,6 +101,8 @@ beforeEach(async () => {
   decisions.length = 0;
   const ev = await import("../../src/lib/email-verification.js");
   ev.resetApifyFallback();
+  ev.resetUnavailableVerifiers();
+  ev.resetTregBalance();
   mockSwitch.mockResolvedValue({ switched: true, dynasty: "dy_verify_waterfall" });
   mockCreateRun.mockImplementation(async (p: { taskName: string }) => ({ id: `run-${p.taskName}` }));
   mockUpdateRun.mockResolvedValue({});
@@ -207,5 +209,46 @@ describe("a decision the world left without a verdict (`unmade`)", () => {
     expect(err).toBeInstanceOf(ev.EmailVerificationError);
     expect((err as Error).message).toBe("email verification failed: every step-1 verifier failed — contactout: 429; bounceverify: skipped, Apify out of usage");
     expect(decisions[0]).toMatchObject({ path: "script", runId: "script-run-1", result: null });
+  });
+});
+
+describe("MON-TREG-EMPTY-1127: through the doors too", () => {
+  const noCredential = () => treg({ detail: "no contactout credential in this org — contactout.people.email.verify is a marketplace endpoint" }, 404, "0");
+  const noBalance = () => treg({ detail: { error: "insufficient_balance", message: "this team's balance is $9.5e-05", balance_micro: 95 } }, 402, "0");
+
+  it("a verifier marked unavailable answers 'skipped' at its door, with no vendor call and no row", async () => {
+    fetchMock.mockImplementation(async (url: string) =>
+      String(url).includes("contactout") ? noCredential() : new Response(JSON.stringify([{ email: "ada@example.com", status: "valid", is_catch_all: false }]), { status: 200 }),
+    );
+    mockDecide.mockImplementation(async (input: { dynasty: string; email: string }) => {
+      const row = await scriptLike(input.dynasty, input.email);
+      return { runId: "script-run-1", scriptSlug: "email_found/dy_verify_waterfall/v3", verificationId: row.verificationId };
+    });
+    const ev = await import("../../src/lib/email-verification.js");
+    await ev.verifyRevealedEmail("ada@example.com", CTX);
+    const contactoutCalls = () => fetchMock.mock.calls.filter(([u]) => String(u).includes("contactout")).length;
+    expect(contactoutCalls()).toBe(1);
+    const rowsBefore = inserted.length;
+    await ev.verifyRevealedEmail("bob@example.com", CTX);
+    expect(contactoutCalls()).toBe(1);
+    expect(inserted.filter((r) => r.verifier === "contactout")).toHaveLength(1);
+    expect(inserted.length).toBe(rowsBefore + 1);
+    expect(decisions[1].calls[0]).toMatchObject({ name: "apollo.email.verify", args: { verifier: "contactout" }, answer: { ok: true, data: { verificationId: null, verifier: "contactout", verdict: null, error: expect.stringMatching(/^skipped, no contactout credential in our treg org/) } } });
+  });
+
+  it("the script's 'every step-1 verifier failed' on an empty treg balance reaches the caller with the balance named first", async () => {
+    fetchMock.mockImplementation(async (url: string) =>
+      String(url).includes("contactout") ? noCredential() : String(url).includes("apify") ? new Response("{}", { status: 401 }) : noBalance(),
+    );
+    const { VerifyScriptError } = await import("../../src/lib/email-verify-script.js");
+    mockDecide.mockImplementation(async (input: { dynasty: string; email: string }) => {
+      await scriptLike(input.dynasty, input.email).catch(() => undefined);
+      throw new VerifyScriptError("every step-1 verifier failed — contactout: 404; bounceverify: 401; trykitt: 402; millionverifier: 402", "script-run-1", true);
+    });
+    const ev = await import("../../src/lib/email-verification.js");
+    const err = (await ev.verifyRevealedEmail("ada@example.com", CTX).catch((e: unknown) => e)) as InstanceType<typeof ev.EmailVerificationError>;
+    expect(err).toBeInstanceOf(ev.EmailVerificationError);
+    expect(err.message).toMatch(/^email verification failed: our treg balance is empty \(\$0\.000095 left\).* — every step-1 verifier failed — contactout: 404/);
+    expect(err.providerError).toMatchObject({ provider: "treg", code: "provider_credits_exhausted" });
   });
 });

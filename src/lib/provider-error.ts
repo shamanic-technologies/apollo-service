@@ -37,7 +37,7 @@
  */
 
 /** Paid providers whose exhaustion this service detects. */
-export type CreditProvider = "apollo" | "apify";
+export type CreditProvider = "apollo" | "apify" | "treg";
 
 /** Stable code: the provider cannot serve us because its credits are exhausted. */
 export const PROVIDER_CREDITS_EXHAUSTED = "provider_credits_exhausted" as const;
@@ -71,6 +71,15 @@ export function apifyCreditsExhausted(): ProviderErrorDetail {
     message:
       "Apify cannot verify emails: the account's monthly usage limit is reached. Retrying will keep failing until the Apify limit is raised.",
   };
+}
+
+/**
+ * Our treg balance cannot pay the call (treg 402 `insufficient_balance`, MON-TREG-EMPTY-1127): TryKitt,
+ * MillionVerifier and BounceBan are all paid through treg, so no address is verified until the balance is topped up.
+ * `message` carries the balance treg stated.
+ */
+export function tregBalanceExhausted(message: string): ProviderErrorDetail {
+  return { provider: "treg", code: PROVIDER_CREDITS_EXHAUSTED, retryable: false, message };
 }
 
 /**

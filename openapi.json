@@ -232,9 +232,10 @@
             "type": "string",
             "enum": [
               "apollo",
-              "apify"
+              "apify",
+              "treg"
             ],
-            "description": "Upstream provider that could not serve the request: apollo (lead credits) or apify (BounceVerify email verification, monthly usage limit)"
+            "description": "Upstream provider that could not serve the request: apollo (lead credits), apify (BounceVerify email verification, monthly usage limit) or treg (our treg balance cannot pay TryKitt / MillionVerifier / BounceBan)"
           },
           "code": {
             "type": "string",

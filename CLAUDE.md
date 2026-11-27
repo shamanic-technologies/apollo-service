@@ -623,6 +623,19 @@ pre-serve verification moved here from human-service. `/enrich`, `/match` and
     before, then BounceVerify is SKIPPED for `APIFY_OUT_RETRY_MS` (1h, in
     memory) and step 1 goes on to TryKitt; asked again after, so recovery is
     automatic. 2026-10-16 15:12 UTC: 431 verifications failed on the 403.
+  - **A verifier OUR ACCOUNT cannot use is skipped 1h, then asked again**
+    (`verifierUnavailable`, `UNAVAILABLE_RETRY_MS`, MON-TREG-EMPTY-1127): treg
+    404 "no <vendor> credential in this org" (ContactOut became bring-your-own-key
+    on 2026-11-25) and Apify 401 (token refused since >= 2026-11-15). Our own
+    step 1 skips it, the script's door answers `{verificationId: null, error:
+    "skipped, …"}` with no vendor call, no row (the stored script reads it as a
+    verifier that did not answer, so dy_verify_waterfall needs no new version).
+    A 429/5xx/timeout never marks a verifier unavailable. No staff email.
+  - **Our treg balance empty** (treg 402 `insufficient_balance`, set by the
+    refusal, cleared by the next treg 2xx): a failed step 1 names it FIRST
+    (`our treg balance is empty ($… left): …`) with `providerError.provider:
+    "treg"`, so lead-service's 502 (which keeps ~200 chars) reads the cause. The
+    balance itself is watched on Monitoring by the box watchdog `treg-balance`.
   - **Spend per vendor call**: each call is its own child run
     (`verify-email` for BounceVerify, `verify-email-<vendor>` for treg ones)
     with PROVISION → AUTHORIZE (platform key, skipped for a zero hold:
